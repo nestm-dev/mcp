@@ -1,0 +1,39 @@
+export type McpGatewayErrorCode =
+	| "CAPABILITY_CONFLICT"
+	| "DISCOVERY_TIMEOUT"
+	| "DISCOVERY_OVERLOADED"
+	| "DUPLICATE_PROMPT"
+	| "DUPLICATE_RESOURCE"
+	| "DUPLICATE_RESOURCE_TEMPLATE"
+	| "DUPLICATE_TOOL"
+	| "DUPLICATE_UPSTREAM"
+	| "INVALID_DISCOVERY"
+	| "INVALID_COMPLETION_REQUEST"
+	| "INVALID_COMPLETION_RESULT"
+	| "INVALID_INVOCATION_RESULT"
+	| "INVALID_OPTIONS"
+	| "INVALID_PROMPT_RESULT"
+	| "INVALID_PROJECTED_NAME"
+	| "INVALID_PROJECTED_URI"
+	| "INVALID_PROJECTED_TEMPLATE_URI"
+	| "INVALID_RESOURCE_RESULT"
+	| "UNKNOWN_PROMPT"
+	| "UNKNOWN_RESOURCE"
+	| "UNKNOWN_RESOURCE_TEMPLATE"
+	| "UNLISTED_RESOURCE_LINK"
+	| "UNSUPPORTED_UPSTREAM_CAPABILITY"
+	| "UPSTREAM_INPUT_REQUIRED"
+	| "UNKNOWN_TOOL"
+	| "UNKNOWN_UPSTREAM";
+
+/** Stable operational error raised by gateway routing and discovery validation. */
+export class McpGatewayError extends Error {
+	constructor(
+		readonly code: McpGatewayErrorCode,
+		message: string,
+		options?: ErrorOptions,
+	) {
+		super(message, options);
+		this.name = "McpGatewayError";
+	}
+}

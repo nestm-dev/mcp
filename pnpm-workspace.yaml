@@ -1,0 +1,16 @@
+packages:
+  - "packages/*"
+  - "examples/*"
+
+peerDependencyRules:
+  allowedVersions:
+    "@nestjs/common": ">=12.0.0-alpha.0 <13.0.0"
+    "@nestjs/core": ">=12.0.0-alpha.0 <13.0.0"
+    "@nestjs/platform-express": ">=12.0.0-alpha.0 <13.0.0"
+    "@nestjs/platform-fastify": ">=12.0.0-alpha.0 <13.0.0"
+
+allowBuilds:
+  "@nestjs/core": false
+  esbuild: false
+
+provenance: true

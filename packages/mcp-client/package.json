@@ -1,0 +1,75 @@
+{
+	"name": "@nestm/mcp-client",
+	"version": "0.1.0-alpha.0",
+	"description": "Multi-server MCP v2 client runtime with transport, middleware, lifecycle, and discovery support.",
+	"license": "BSD-3-Clause",
+	"author": "nestm",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nestm-dev/mcp.git",
+		"directory": "packages/mcp-client"
+	},
+	"homepage": "https://github.com/nestm-dev/mcp#readme",
+	"bugs": {
+		"url": "https://github.com/nestm-dev/mcp/issues"
+	},
+	"keywords": [
+		"mcp",
+		"model-context-protocol",
+		"client",
+		"runtime",
+		"gateway",
+		"oauth",
+		"observability",
+		"nestm"
+	],
+	"type": "module",
+	"sideEffects": false,
+	"engines": {
+		"node": ">=22.13.0"
+	},
+	"packageManager": "pnpm@11.20.0",
+	"types": "./dist/index.d.mts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs",
+			"default": "./dist/index.mjs"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist",
+		"README.md",
+		"CHANGELOG.md",
+		"LICENSE"
+	],
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"scripts": {
+		"build": "tsdown",
+		"build:watch": "tsdown --watch src",
+		"typecheck": "tsc -b",
+		"lint": "oxlint --type-aware .",
+		"lint:fix": "oxlint --type-aware --fix .",
+		"format": "prettier --write . --ignore-unknown",
+		"format:check": "prettier --check . --ignore-unknown",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage",
+		"verify:pack": "pnpm run build && publint --strict",
+		"prepack": "pnpm run build"
+	},
+	"dependencies": {
+		"@nestm/mcp-core": "workspace:^"
+	},
+	"peerDependencies": {
+		"@modelcontextprotocol/client": ">=2.0.0 <3.0.0"
+	},
+	"devDependencies": {
+		"@modelcontextprotocol/client": "2.0.0",
+		"@modelcontextprotocol/server": "2.0.0"
+	}
+}

@@ -1,0 +1,11 @@
+{
+	"files": [],
+	"references": [
+		{ "path": "./packages/mcp-core" },
+		{ "path": "./packages/mcp-client" },
+		{ "path": "./packages/mcp-server" },
+		{ "path": "./packages/mcp-observability" },
+		{ "path": "./packages/mcp-gateway" },
+		{ "path": "./packages/mcp" }
+	]
+}

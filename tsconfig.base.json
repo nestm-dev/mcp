@@ -1,0 +1,41 @@
+{
+	"compilerOptions": {
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"target": "es2023",
+		"lib": ["es2023", "dom", "dom.iterable"],
+		"types": ["node", "vitest/globals"],
+		"experimentalDecorators": true,
+		"emitDecoratorMetadata": true,
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"exactOptionalPropertyTypes": true,
+		"noImplicitOverride": true,
+		"noFallthroughCasesInSwitch": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"forceConsistentCasingInFileNames": true,
+		"verbatimModuleSyntax": false,
+		"isolatedModules": true,
+		"skipLibCheck": true,
+		"allowImportingTsExtensions": true,
+		"rewriteRelativeImportExtensions": true,
+		"declaration": true,
+		"declarationMap": true,
+		"sourceMap": true,
+		"removeComments": false,
+		"paths": {
+			"@nestm/mcp-core": ["./packages/mcp-core/src/index.ts"],
+			"@nestm/mcp-client": ["./packages/mcp-client/src/index.ts"],
+			"@nestm/mcp-server": ["./packages/mcp-server/src/index.ts"],
+			"@nestm/mcp-server/auth": ["./packages/mcp-server/src/auth/index.ts"],
+			"@nestm/mcp-server/security": ["./packages/mcp-server/src/security/index.ts"],
+			"@nestm/mcp-server/testing": ["./packages/mcp-server/src/testing/index.ts"],
+			"@nestm/mcp-observability": ["./packages/mcp-observability/src/index.ts"],
+			"@nestm/mcp-gateway": ["./packages/mcp-gateway/src/index.ts"],
+			"@nestm/mcp-gateway/testing": ["./packages/mcp-gateway/src/testing/index.ts"],
+			"@nestm/mcp": ["./packages/mcp/src/index.ts"],
+			"@nestm/mcp/testing": ["./packages/mcp/src/testing/index.ts"]
+		}
+	}
+}

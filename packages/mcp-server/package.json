@@ -1,0 +1,83 @@
+{
+	"name": "@nestm/mcp-server",
+	"version": "0.1.0-alpha.0",
+	"description": "Framework-neutral MCP v2 server runtime and OAuth resource-server composition for NestM.",
+	"type": "module",
+	"sideEffects": false,
+	"author": "nestm",
+	"license": "BSD-3-Clause",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nestm-dev/mcp.git",
+		"directory": "packages/mcp-server"
+	},
+	"homepage": "https://github.com/nestm-dev/mcp/tree/main/packages/mcp-server#readme",
+	"bugs": {
+		"url": "https://github.com/nestm-dev/mcp/issues"
+	},
+	"keywords": [
+		"mcp",
+		"model-context-protocol",
+		"mcp-v2",
+		"server",
+		"oauth",
+		"agents",
+		"esm",
+		"nestm"
+	],
+	"engines": {
+		"node": ">=22.13.0"
+	},
+	"types": "./dist/index.d.mts",
+	"files": [
+		"dist",
+		"README.md",
+		"CHANGELOG.md",
+		"LICENSE"
+	],
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs",
+			"default": "./dist/index.mjs"
+		},
+		"./auth": {
+			"types": "./dist/auth/index.d.mts",
+			"import": "./dist/auth/index.mjs",
+			"default": "./dist/auth/index.mjs"
+		},
+		"./security": {
+			"types": "./dist/security/index.d.mts",
+			"import": "./dist/security/index.mjs",
+			"default": "./dist/security/index.mjs"
+		},
+		"./testing": {
+			"types": "./dist/testing/index.d.mts",
+			"import": "./dist/testing/index.mjs",
+			"default": "./dist/testing/index.mjs"
+		},
+		"./package.json": "./package.json"
+	},
+	"dependencies": {
+		"@nestm/mcp-core": "workspace:^"
+	},
+	"peerDependencies": {
+		"@modelcontextprotocol/node": ">=2.0.0 <3.0.0",
+		"@modelcontextprotocol/server": ">=2.0.0 <3.0.0"
+	},
+	"scripts": {
+		"build": "tsdown",
+		"build:watch": "tsdown --watch src",
+		"typecheck": "tsc -b",
+		"lint": "oxlint --type-aware .",
+		"format": "prettier --write . --ignore-unknown",
+		"format:check": "prettier --check . --ignore-unknown",
+		"test": "vitest run",
+		"verify:pack": "pnpm run build && publint --strict",
+		"prepack": "pnpm run build"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
+}

@@ -1,0 +1,83 @@
+{
+	"name": "@nestm/mcp",
+	"version": "0.1.0-alpha.0",
+	"description": "NestJS 12 module for the NestM Model Context Protocol v2 runtime.",
+	"type": "module",
+	"sideEffects": false,
+	"author": "nestm",
+	"license": "BSD-3-Clause",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nestm-dev/mcp.git",
+		"directory": "packages/mcp"
+	},
+	"homepage": "https://github.com/nestm-dev/mcp/tree/main/packages/mcp#readme",
+	"bugs": {
+		"url": "https://github.com/nestm-dev/mcp/issues"
+	},
+	"keywords": [
+		"nestjs",
+		"nestjs-12",
+		"mcp",
+		"model-context-protocol",
+		"mcp-v2",
+		"agents",
+		"oauth",
+		"esm",
+		"nestm"
+	],
+	"engines": {
+		"node": ">=22.13.0"
+	},
+	"types": "./dist/index.d.mts",
+	"files": [
+		"dist",
+		"README.md",
+		"CHANGELOG.md",
+		"LICENSE"
+	],
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs",
+			"default": "./dist/index.mjs"
+		},
+		"./testing": {
+			"types": "./dist/testing/index.d.mts",
+			"import": "./dist/testing/index.mjs",
+			"default": "./dist/testing/index.mjs"
+		},
+		"./package.json": "./package.json"
+	},
+	"dependencies": {
+		"@nestm/mcp-client": "workspace:^",
+		"@nestm/mcp-core": "workspace:^",
+		"@nestm/mcp-gateway": "workspace:^",
+		"@nestm/mcp-observability": "workspace:^",
+		"@nestm/mcp-server": "workspace:^"
+	},
+	"peerDependencies": {
+		"@modelcontextprotocol/client": ">=2.0.0 <3.0.0",
+		"@modelcontextprotocol/node": ">=2.0.0 <3.0.0",
+		"@modelcontextprotocol/server": ">=2.0.0 <3.0.0",
+		"@nestjs/common": "^12.0.0-alpha.5",
+		"@nestjs/core": "^12.0.0-alpha.5",
+		"reflect-metadata": "^0.2.2",
+		"rxjs": "^7.8.0"
+	},
+	"scripts": {
+		"build": "tsdown",
+		"build:watch": "tsdown --watch src",
+		"typecheck": "tsc -b",
+		"lint": "oxlint --type-aware .",
+		"format": "prettier --write . --ignore-unknown",
+		"format:check": "prettier --check . --ignore-unknown",
+		"test": "vitest run",
+		"verify:pack": "pnpm run build && publint --strict",
+		"prepack": "pnpm run build"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
+}

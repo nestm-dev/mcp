@@ -1,0 +1,77 @@
+{
+	"name": "@nestm/mcp-gateway",
+	"version": "0.1.0-alpha.0",
+	"description": "Policy-enforced MCP v2 gateway composition for aggregating upstream MCP clients.",
+	"type": "module",
+	"sideEffects": false,
+	"author": "nestm",
+	"license": "BSD-3-Clause",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nestm-dev/mcp.git",
+		"directory": "packages/mcp-gateway"
+	},
+	"homepage": "https://github.com/nestm-dev/mcp/tree/main/packages/mcp-gateway#readme",
+	"bugs": {
+		"url": "https://github.com/nestm-dev/mcp/issues"
+	},
+	"keywords": [
+		"mcp",
+		"model-context-protocol",
+		"mcp-v2",
+		"gateway",
+		"agents",
+		"authorization",
+		"esm",
+		"nestm"
+	],
+	"engines": {
+		"node": ">=22.13.0"
+	},
+	"types": "./dist/index.d.mts",
+	"files": [
+		"dist",
+		"README.md",
+		"CHANGELOG.md",
+		"LICENSE"
+	],
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs",
+			"default": "./dist/index.mjs"
+		},
+		"./testing": {
+			"types": "./dist/testing/index.d.mts",
+			"import": "./dist/testing/index.mjs",
+			"default": "./dist/testing/index.mjs"
+		},
+		"./package.json": "./package.json"
+	},
+	"dependencies": {
+		"@nestm/mcp-client": "workspace:^",
+		"@nestm/mcp-core": "workspace:^",
+		"@nestm/mcp-server": "workspace:^"
+	},
+	"peerDependencies": {
+		"@modelcontextprotocol/server": ">=2.0.0 <3.0.0"
+	},
+	"scripts": {
+		"build": "tsdown",
+		"build:watch": "tsdown --watch src",
+		"typecheck": "tsc -b",
+		"lint": "oxlint --type-aware .",
+		"lint:fix": "oxlint --type-aware --fix .",
+		"format": "prettier --write . --ignore-unknown",
+		"format:check": "prettier --check . --ignore-unknown",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage",
+		"verify:pack": "pnpm run build && publint --strict",
+		"prepack": "pnpm run build"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
+}
