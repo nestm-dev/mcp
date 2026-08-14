@@ -95,7 +95,7 @@ export type { McpClientRuntimeErrorCode } from "./errors.ts";
 
 export { McpClientRuntime } from "./runtime.ts";
 
-export { createMcpClientPassthroughMiddleware } from "./middleware.ts";
+export { createMcpClientPassthroughMiddleware, defineMcpClientTransform } from "./middleware.ts";
 
 export {
 	composeMcpFetchMiddleware,
@@ -129,9 +129,15 @@ export type {
 	McpClientPassthroughMiddleware,
 	McpClientPrincipalResolver,
 	McpClientProtocolRequest,
+	McpClientReadonly,
+	McpClientRequestMethod,
 	McpClientRuntimeOptions,
 	McpClientServerDefinition,
 	McpClientSubscription,
+	McpClientTransform,
+	McpClientTransformInput,
+	McpClientTransformOptions,
+	McpClientTransformResult,
 	McpSdkClientFactory,
 	McpSdkClientFactoryContext,
 } from "./types.ts";

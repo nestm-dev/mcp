@@ -90,9 +90,26 @@ The execution order is:
 
 Custom handler middleware cannot short-circuit around `handlerAuthorization`. The same callback pipeline runs for HTTP and stdio, so it is the correct per-tool/resource/prompt authorization seam. Stdio does not create an OAuth principal automatically; authenticate and isolate the process boundary or provide an application identity policy appropriate to that transport.
 
+Catalog exposure runs only after the visibility wave has completed successfully. Search metadata
+is opt-in, and lazy list/search or schema-fetch tools receive a frozen projection containing only
+the tools visible in that build. Resolver and selector inputs omit handlers, visibility providers,
+raw requests, bearer tokens, and provider-specific authentication data. Treat lazy discovery as a
+usability optimization only: deferred tools and both lazy meta-tools still enter the ordinary
+`handlerAuthorization` pipeline when called. Catalog mode rejects gateway composition and arbitrary
+custom server features because those features have no public enumeration seam from which a complete
+safe projection could be built.
+
 Policies and handler middleware can inspect validated callback arguments because domain authorization may depend on ownership or requested action. Treat that input as sensitive: do not copy it into lifecycle attributes, metric labels, or ordinary logs.
 
 `McpServerDefinition.middleware` has a narrower purpose: it surrounds an HTTP exchange before official MCP parsing and does not run for stdio. Use it for coarse HTTP concerns, not as the sole authorization boundary for a capability. Likewise, a separately mounted raw Node handler does not automatically pass through Nest guards or interceptors.
+
+Gateway transforms run after the gateway's mandatory call-time policy. Client transforms have no
+implicit authorization policy because the client runtime cannot infer an application's outbound
+authorization rules. Exact client transforms are partitioned downstream of every configured general
+middleware, so an outbound authorization middleware always precedes them even if listed later.
+General transforming middleware remains caller-ordered; place authorization before any such
+middleware that may short-circuit. Neither transform layer substitutes for authorization on the
+target server.
 
 ## Multi-round input and request state
 

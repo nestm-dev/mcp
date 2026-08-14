@@ -1,7 +1,17 @@
 import { fromJsonSchema } from "@nestm/mcp-server";
-import { Prompt, Resource, Tool, createMcpHandlerPassthroughMiddleware } from "../src/index.ts";
+import {
+	Prompt,
+	Resource,
+	Tool,
+	createMcpHandlerPassthroughMiddleware,
+	defineMcpClientTransform,
+	defineMcpGatewayTransform,
+} from "../src/index.ts";
 import type {
+	CallToolResult,
 	HandlerDefinition,
+	McpClientTransformResult,
+	McpGatewayOperationOutputForKind,
 	McpHandlerInvocationInput,
 	McpHandlerInvocationOutputFor,
 	PromptHandlerDefinition,
@@ -38,6 +48,16 @@ export type CapabilityDecoratorApi = {
 		| ResourceMethodDecorator<string>
 		| TypedMethodDecorator<(...arguments_: unknown[]) => unknown>;
 };
+
+/** Proves the facade retains both operation-specific transform maps. */
+export type FacadeInvocationTransformResults = [
+	McpClientTransformResult<"tools/call">,
+	McpGatewayOperationOutputForKind<"gateway.invocation">,
+	CallToolResult,
+];
+
+defineMcpClientTransform("tools/call", async (_operation, next) => next());
+defineMcpGatewayTransform("gateway.invocation", async (_operation, next) => next());
 
 /** Prevents the removed prefixed decorator values from returning to the public API. */
 export type LegacyCapabilityDecoratorNamesAreAbsent = [

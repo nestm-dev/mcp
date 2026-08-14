@@ -38,6 +38,7 @@ import { GatewayPromptNameCodec } from "./gateway-prompt-name-codec.ts";
 import { GatewayLifecycle } from "./gateway-lifecycle.ts";
 import { GatewayResourceTemplateUriCodec } from "./gateway-resource-template-uri-codec.ts";
 import { GatewayResourceUriCodec } from "./gateway-resource-uri-codec.ts";
+import { isExactMcpGatewayTransform } from "./gateway-middleware.ts";
 import {
 	createGatewayOperationContext,
 	createGatewayPolicyContext,
@@ -130,6 +131,7 @@ export class McpGateway implements AsyncDisposable {
 	readonly #discoveryCacheQueues = new Map<string, Promise<void>>();
 	readonly #resolveAuthorizationContext: McpGatewayAuthorizationContextResolver;
 	readonly #middleware: readonly McpGatewayMiddleware[];
+	readonly #transforms: readonly McpGatewayMiddleware[];
 	readonly #lifecycleObserver: McpGatewayLifecycleObserver | undefined;
 	readonly #onObserverError: ((error: unknown) => MaybePromise<void>) | undefined;
 	readonly #feature: McpServerFeature;
@@ -202,7 +204,11 @@ export class McpGateway implements AsyncDisposable {
 		);
 		this.#resolveAuthorizationContext =
 			options.authorizationContextResolver ?? defaultMcpGatewayAuthorizationContext;
-		this.#middleware = snapshotMiddleware(options.middleware ?? []);
+		const middleware = snapshotMiddleware(options.middleware ?? []);
+		this.#middleware = Object.freeze(
+			middleware.filter((entry) => !isExactMcpGatewayTransform(entry)),
+		);
+		this.#transforms = Object.freeze(middleware.filter(isExactMcpGatewayTransform));
 		this.#lifecycleObserver = options.lifecycleObserver;
 		this.#onObserverError = options.onObserverError;
 		this.#lifecycle = new GatewayLifecycle({
@@ -673,10 +679,13 @@ export class McpGateway implements AsyncDisposable {
 		const safeParams = snapshotCompletionParams(params);
 		const resolved = await this.#resolveContext(context);
 		if (safeParams.ref.type === "ref/prompt") {
-			return this.#completePrompt({ ...safeParams, ref: safeParams.ref }, resolved);
+			return this.#completePrompt(Object.freeze({ ...safeParams, ref: safeParams.ref }), resolved);
 		}
 		if (safeParams.ref.type === "ref/resource") {
-			return this.#completeResourceTemplate({ ...safeParams, ref: safeParams.ref }, resolved);
+			return this.#completeResourceTemplate(
+				Object.freeze({ ...safeParams, ref: safeParams.ref }),
+				resolved,
+			);
 		}
 		return assertNever(safeParams.ref);
 	}
@@ -1124,13 +1133,48 @@ export class McpGateway implements AsyncDisposable {
 		};
 
 		const result = await this.#runOperation(operation, terminal);
-		if (!isDiscoverySnapshot(result)) {
+		let detached: McpGatewayOperationOutput;
+		try {
+			detached = structuredClone(result);
+		} catch (cause) {
+			throw invalidDiscoveryWithCause(
+				upstream.name,
+				"returned a discovery middleware result that could not be detached",
+				cause,
+			);
+		}
+		if (!isDiscoverySnapshot(detached)) {
 			throw new McpGatewayError(
 				"INVALID_DISCOVERY",
 				`Gateway middleware returned an invalid discovery snapshot for "${upstream.name}".`,
 			);
 		}
-		return result;
+		const pages = [
+			detached.tools,
+			detached.prompts ?? [],
+			detached.resources ?? [],
+			detached.resourceTemplates ?? [],
+		];
+		if (pages.some((items) => items.length > this.#discoveryMaxItems)) {
+			throw invalidDiscovery(
+				upstream.name,
+				`exceeded the ${String(this.#discoveryMaxItems)} discovery-item limit for one capability after middleware`,
+			);
+		}
+		return validateDiscovery(
+			upstream.name,
+			detached.tools,
+			detached.prompts ?? [],
+			detached.resources ?? [],
+			detached.resourceTemplates ?? [],
+			{
+				maxItemBytes: this.#discoveryMaxItemBytes,
+				maxSnapshotBytes: this.#discoveryMaxSnapshotBytes,
+				maxDepth: this.#discoveryMaxDepth,
+				maxStringBytes: this.#discoveryMaxStringBytes,
+			},
+			detached.discoveredAt,
+		);
 	}
 
 	#createDiscoveryFlight(
@@ -1408,7 +1452,7 @@ export class McpGateway implements AsyncDisposable {
 			return result;
 		};
 		const securedWork = composeMcpMiddleware(
-			[...mandatoryMiddleware, ...this.#middleware],
+			[...mandatoryMiddleware, ...this.#middleware, ...this.#transforms],
 			guardedTerminal,
 		);
 		if (this.#lifecycleObserver === undefined) {
@@ -1817,6 +1861,7 @@ function validateDiscovery(
 	resources: readonly Resource[],
 	resourceTemplates: readonly McpGatewayResourceTemplateDefinition[],
 	limits: DiscoveryStructuralLimits,
+	discoveredAt = Date.now(),
 ): McpGatewayDiscoverySnapshot {
 	validateDiscoveryStructure(
 		upstreamName,
@@ -1871,7 +1916,7 @@ function validateDiscovery(
 		prompts: Object.freeze([...prompts]),
 		resources: Object.freeze([...resources]),
 		resourceTemplates: Object.freeze([...resourceTemplates]),
-		discoveredAt: Date.now(),
+		discoveredAt,
 	});
 }
 
@@ -2581,14 +2626,17 @@ function isReadResourceResult(value: unknown): value is ReadResourceResult {
 	);
 }
 
-function isDiscoverySnapshot(
-	value: McpGatewayOperationOutput,
-): value is McpGatewayDiscoverySnapshot {
+function isDiscoverySnapshot(value: unknown): value is McpGatewayDiscoverySnapshot {
 	return (
 		typeof value === "object" &&
 		value !== null &&
 		"tools" in value &&
 		Array.isArray(value.tools) &&
+		(!("prompts" in value) || value.prompts === undefined || Array.isArray(value.prompts)) &&
+		(!("resources" in value) || value.resources === undefined || Array.isArray(value.resources)) &&
+		(!("resourceTemplates" in value) ||
+			value.resourceTemplates === undefined ||
+			Array.isArray(value.resourceTemplates)) &&
 		"discoveredAt" in value &&
 		Number.isFinite(value.discoveredAt)
 	);

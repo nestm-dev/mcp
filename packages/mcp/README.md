@@ -150,6 +150,48 @@ fail-closed. The visibility wave defaults to 30 seconds and is configured per se
 Always use `handlerAuthorization` independently for call-time access decisions. Hiding a tool,
 prompt, or resource from discovery is not an authorization boundary.
 
+## Authorization-safe tool catalogs
+
+`McpNestServerDefinition.catalogExposure` is an opt-in projection applied after the complete
+per-request visibility wave:
+
+- `eager` lists every currently visible tool normally.
+- `search` keeps selected tools eager and merges application-supplied deferred metadata into the
+  other visible definitions. No vendor metadata is added unless this strategy is configured.
+- `lazy` keeps selected tools eager and adds the bounded `nestm.catalog.search` and
+  `nestm.catalog.schemas` tools. Search results are cursor-paginated against the exact ordered
+  visible snapshot; schema fetches accept a bounded name batch and return official MCP `Tool`
+  definitions.
+
+Eager selectors can match an exact name, a normalized `ToolOptions.tags` value, or a readonly
+predicate. Dynamic strategy selection uses `defineMcpCatalogExposureResolver()`; const inference
+preserves the exact discriminated strategy or strategy union returned by the resolver. Resolver and
+selector inputs are frozen public tool projections plus the token-free principal, runtime name,
+protocol era, and abort signal. They never expose decorated callbacks, visibility providers, raw
+requests, or bearer credentials.
+
+```ts
+const catalogExposure = {
+	resolver: defineMcpCatalogExposureResolver((input) =>
+		input.principal?.scopes.includes("tools:discover-all")
+			? { kind: "eager" }
+			: {
+					kind: "lazy",
+					eager: [{ kind: "tag", tag: "essential" }],
+				},
+	),
+};
+```
+
+Each lazy meta-tool closes over the exact visible snapshot belonging to that fresh server build.
+Unknown and hidden names are indistinguishable to schema fetches, concurrent builds do not share
+catalog state, and list/search cursors are rejected if reused after the ordered visible snapshot
+changes. Deferred tools plus both meta-tools still enter the normal
+`handlerAuthorization` pipeline when called. Lazy meta-tool names are reserved on every
+catalog-enabled runtime. Catalog exposure cannot share a runtime with a gateway or arbitrary custom
+`features`: the SDK exposes no public tool-enumeration seam for safely projecting those registrations,
+so bootstrap rejects that composition instead of silently dropping tools.
+
 ## Live capability registration
 
 After application bootstrap, the same registry is available as `runtime.capabilities`:

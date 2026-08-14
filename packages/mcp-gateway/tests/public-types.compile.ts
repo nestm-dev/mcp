@@ -2,6 +2,7 @@ import type { CallToolResult } from "@nestm/mcp-server";
 
 import {
 	createMcpGatewayPassthroughMiddleware,
+	defineMcpGatewayTransform,
 	type McpGatewayDiscoverySnapshot,
 	type McpGatewayInvocationOperationInput,
 	type McpGatewayOperationOutputFor,
@@ -29,3 +30,38 @@ createMcpGatewayPassthroughMiddleware(async (_operation, next) => {
 
 // @ts-expect-error Passthrough middleware cannot replace a discriminator-specific result.
 createMcpGatewayPassthroughMiddleware(async () => ({ content: [] }));
+
+defineMcpGatewayTransform("gateway.invocation", async (operation, next) => {
+	const toolName: string = operation.input.toolName;
+	// @ts-expect-error Detached tool definitions are deeply readonly.
+	operation.input.tool.inputSchema.type = "string";
+	if (operation.input.arguments !== undefined) {
+		// @ts-expect-error Detached invocation arguments are deeply readonly.
+		operation.input.arguments.tenant = "mutated";
+	}
+	const result: CallToolResult = await next();
+	void toolName;
+	void result.content;
+	void result.structuredContent;
+	void result["_meta"];
+	return result;
+});
+
+defineMcpGatewayTransform("gateway.invocation", async (operation, next) => {
+	// @ts-expect-error Invocation input does not expose completion params.
+	void operation.input.params;
+	return next();
+});
+
+// @ts-expect-error A discovery snapshot cannot replace a gateway invocation result.
+defineMcpGatewayTransform("gateway.invocation", async () => ({
+	tools: [],
+	prompts: [],
+	resources: [],
+	resourceTemplates: [],
+}));
+
+declare const dynamicGatewayKind: "gateway.discovery" | "gateway.invocation";
+
+// @ts-expect-error A union-valued runtime kind cannot preserve one exact input/result correlation.
+defineMcpGatewayTransform(dynamicGatewayKind, async (_operation, next) => next());

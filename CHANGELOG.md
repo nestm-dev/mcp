@@ -18,6 +18,9 @@ All notable changes to this project will be documented in this file. The format 
 - Async injected Nest module configuration, local-module mode, and rollback of partially initialized runtimes after bootstrap failure.
 - Architecture, security/OAuth, observability, contribution, and repository security documentation.
 - Node 22/24 CI for checks, tests, builds, and package publication validation.
+- Authorization-safe eager, search, and lazy Nest tool catalog exposure over per-request visible
+  snapshots, including bounded discovery meta-tools and live-registry compatibility.
+- Method- and operation-specific typed transform helpers for client and gateway middleware.
 
 ### Changed
 

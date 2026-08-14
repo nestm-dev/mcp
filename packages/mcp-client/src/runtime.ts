@@ -33,6 +33,7 @@ import {
 	type ReadResourceRequest,
 	type ReadResourceResult,
 	type Request,
+	type RequestMethod,
 	type RequestOptions,
 	type ResultTypeMap,
 	type StandardSchemaV1,
@@ -58,6 +59,8 @@ import {
 	serverNotFoundError,
 	shutdownTimeoutError,
 } from "./errors.ts";
+import { markExactMcpClientResult } from "./exact-result-profile.ts";
+import { isExactMcpClientTransform } from "./middleware.ts";
 import { defaultMcpClientTransportFactory } from "./transport.ts";
 import type {
 	McpClientConnectionSnapshot,
@@ -143,6 +146,8 @@ interface ConnectAttemptResult {
 
 interface OperationDescriptor {
 	readonly method: string;
+	/** Runtime-owned proof that the ordinary ResultTypeMap entry is returned. */
+	readonly exactResultMethod?: RequestMethod;
 	readonly kind?: "request" | "notification";
 	readonly capability?: string;
 	readonly params?: unknown;
@@ -172,6 +177,7 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 	readonly #clientFactory: McpSdkClientFactory;
 	readonly #transportFactory: NonNullable<McpClientRuntimeOptions["transportFactory"]>;
 	readonly #middleware: readonly McpClientMiddleware<Principal>[];
+	readonly #transforms: readonly McpClientMiddleware<Principal>[];
 	readonly #lifecycleMiddleware: McpClientMiddleware<Principal> | undefined;
 	readonly #principal: Principal | undefined;
 	readonly #resolvePrincipal: McpClientRuntimeOptions<Principal>["resolvePrincipal"];
@@ -200,7 +206,13 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		this.#shutdownTimeoutMs = options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
 		this.#now = options.now ?? Date.now;
 
-		this.#middleware = Object.freeze([...(options.middleware ?? [])]);
+		const middleware = [...(options.middleware ?? [])];
+		this.#middleware = Object.freeze(
+			middleware.filter((entry) => !isExactMcpClientTransform(entry)),
+		);
+		this.#transforms = Object.freeze(
+			middleware.filter((entry) => isExactMcpClientTransform(entry)),
+		);
 		this.#lifecycleMiddleware =
 			options.observer === undefined
 				? undefined
@@ -399,10 +411,16 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 	}
 
 	async discover(serverName: string, options?: RequestOptions): Promise<DiscoverResult> {
+		const stableOptions = snapshotRequestOptions(options);
 		const result = await this.#delegate<DiscoverResult>(
 			serverName,
-			{ method: "server/discover", options, signal: options?.signal },
-			(client) => client.discover(options),
+			{
+				method: "server/discover",
+				exactResultMethod: "server/discover",
+				options: stableOptions,
+				signal: stableOptions?.signal,
+			},
+			(client) => client.discover(stableOptions),
 		);
 		this.#refreshMetadata(this.#entry(serverName));
 		return result;
@@ -410,10 +428,16 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 
 	/** Checks that a connected server is responsive. */
 	ping(serverName: string, options?: RequestOptions): Promise<EmptyResult> {
+		const stableOptions = snapshotRequestOptions(options);
 		return this.#delegate(
 			serverName,
-			{ method: "ping", options, signal: options?.signal },
-			(client) => client.ping(options),
+			{
+				method: "ping",
+				exactResultMethod: "ping",
+				options: stableOptions,
+				signal: stableOptions?.signal,
+			},
+			(client) => client.ping(stableOptions),
 		);
 	}
 
@@ -421,17 +445,39 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 	request<const RequestValue extends McpClientProtocolRequest>(
 		serverName: string,
 		request: RequestValue,
+		options: RequestOptions & { readonly allowInputRequired: true },
+	): Promise<
+		ResultTypeMap[RequestValue["method"]] | InputRequiredResultForMethod<RequestValue["method"]>
+	>;
+	request<const RequestValue extends McpClientProtocolRequest>(
+		serverName: string,
+		request: RequestValue,
+		options?: RequestOptions & { readonly allowInputRequired?: false | undefined },
+	): Promise<ResultTypeMap[RequestValue["method"]]>;
+	request<const RequestValue extends McpClientProtocolRequest>(
+		serverName: string,
+		request: RequestValue,
 		options?: RequestOptions,
-	): Promise<ResultTypeMap[RequestValue["method"]]> {
+	): Promise<
+		ResultTypeMap[RequestValue["method"]] | InputRequiredResultForMethod<RequestValue["method"]>
+	>;
+	request<const RequestValue extends McpClientProtocolRequest>(
+		serverName: string,
+		request: RequestValue,
+		options?: RequestOptions,
+	): Promise<ResultTypeMap[RequestValue["method"]] | InputRequiredResult> {
+		const stableRequest = snapshotProtocolValue(request, "MCP client request");
+		const stableOptions = snapshotRequestOptions(options);
 		return this.#delegate(
 			serverName,
 			{
-				method: request.method,
-				params: request.params,
-				options,
-				signal: options?.signal,
+				method: stableRequest.method,
+				exactResultMethod: stableRequest.method,
+				params: stableRequest.params,
+				options: stableOptions,
+				signal: stableOptions?.signal,
 			},
-			(client) => client.request(toOfficialProtocolRequest(request), options),
+			(client) => client.request(toOfficialProtocolRequest(stableRequest), stableOptions),
 		);
 	}
 
@@ -442,15 +488,17 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		resultSchema: Schema,
 		options?: RequestOptions,
 	): Promise<StandardSchemaV1.InferOutput<Schema>> {
+		const stableRequest = snapshotProtocolValue(request, "MCP client extension request");
+		const stableOptions = snapshotRequestOptions(options);
 		return this.#delegate(
 			serverName,
 			{
-				method: request.method,
-				params: request.params,
-				options,
-				signal: options?.signal,
+				method: stableRequest.method,
+				params: stableRequest.params,
+				options: stableOptions,
+				signal: stableOptions?.signal,
 			},
-			(client) => client.request(request, resultSchema, options),
+			(client) => client.request(stableRequest, resultSchema, stableOptions),
 		);
 	}
 
@@ -482,18 +530,28 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		resultSchema: Schema,
 		options?: McpClientMrtrRequestOptions,
 	): Promise<McpClientMrtrResult<Schema>> {
-		const params: Record<string, unknown> = { ...originalRequest.params };
+		const stableOriginalRequest = snapshotProtocolValue(
+			originalRequest,
+			"MCP input-required original request",
+		);
+		const stableInputResponses = snapshotProtocolValue(
+			inputResponses,
+			"MCP input-required responses",
+		);
+		const params: Record<string, unknown> = { ...stableOriginalRequest.params };
 		// A caller may retain the immutable original across rounds. Never carry
 		// continuation material from an earlier round into the next one.
 		Reflect.deleteProperty(params, "inputResponses");
 		Reflect.deleteProperty(params, "requestState");
-		if (Object.keys(inputResponses).length > 0) params.inputResponses = inputResponses;
+		if (Object.keys(stableInputResponses).length > 0) {
+			params.inputResponses = stableInputResponses;
+		}
 		if (inputRequired.requestState !== undefined) {
 			params.requestState = inputRequired.requestState;
 		}
 		return this.#requestWithInputRequired(
 			serverName,
-			{ method: originalRequest.method, params },
+			{ method: stableOriginalRequest.method, params },
 			resultSchema,
 			options,
 		);
@@ -505,15 +563,17 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		notification: Notification,
 		options?: NotificationOptions,
 	): Promise<void> {
+		const stableNotification = snapshotProtocolValue(notification, "MCP client notification");
+		const stableOptions = snapshotProtocolValue(options, "MCP notification options");
 		return this.#delegate(
 			serverName,
 			{
-				method: notification.method,
+				method: stableNotification.method,
 				kind: "notification",
-				params: notification.params,
-				options,
+				params: stableNotification.params,
+				options: stableOptions,
 			},
-			(client) => client.notification(notification, options),
+			(client) => client.notification(stableNotification, stableOptions),
 		);
 	}
 
@@ -523,16 +583,19 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		params: CompleteRequest["params"],
 		options?: RequestOptions,
 	): Promise<CompleteResult> {
+		const stableParams = snapshotProtocolValue(params, "MCP completion parameters");
+		const stableOptions = snapshotRequestOptions(options);
 		return this.#delegate(
 			serverName,
 			{
 				method: "completion/complete",
+				exactResultMethod: "completion/complete",
 				capability: "completions",
-				params,
-				options,
-				signal: options?.signal,
+				params: stableParams,
+				options: stableOptions,
+				signal: stableOptions?.signal,
 			},
-			(client) => client.complete(params, options),
+			(client) => client.complete(stableParams, stableOptions),
 		);
 	}
 
@@ -546,16 +609,19 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		level: LoggingLevel,
 		options?: RequestOptions,
 	): Promise<EmptyResult> {
+		const stableParams = snapshotProtocolValue({ level }, "MCP logging/setLevel parameters");
+		const stableOptions = snapshotRequestOptions(options);
 		return this.#delegate(
 			serverName,
 			{
 				method: "logging/setLevel",
+				exactResultMethod: "logging/setLevel",
 				capability: "logging",
-				params: { level },
-				options,
-				signal: options?.signal,
+				params: stableParams,
+				options: stableOptions,
+				signal: stableOptions?.signal,
 			},
-			(client) => client.setLoggingLevel(level, options),
+			(client) => client.setLoggingLevel(stableParams.level, stableOptions),
 		);
 	}
 
@@ -564,10 +630,19 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		params?: ListToolsRequest["params"],
 		options?: CacheableRequestOptions,
 	): Promise<ListToolsResult> {
+		const stableParams = snapshotProtocolValue(params, "MCP tools/list parameters");
+		const stableOptions = snapshotRequestOptions(options);
 		return this.#delegate(
 			serverName,
-			{ method: "tools/list", capability: "tools", params, options, signal: options?.signal },
-			(client) => client.listTools(params, options),
+			{
+				method: "tools/list",
+				exactResultMethod: "tools/list",
+				capability: "tools",
+				params: stableParams,
+				options: stableOptions,
+				signal: stableOptions?.signal,
+			},
+			(client) => client.listTools(stableParams, stableOptions),
 		);
 	}
 
@@ -593,10 +668,19 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		params: CallToolRequest["params"],
 		options?: CallToolRequestOptions,
 	): Promise<CallToolResult | InputRequiredResult> {
+		const stableParams = snapshotProtocolValue(params, "MCP tools/call parameters");
+		const stableOptions = snapshotRequestOptions(options);
 		return this.#delegate(
 			serverName,
-			{ method: "tools/call", capability: "tools", params, options, signal: options?.signal },
-			(client) => client.callTool(params, options),
+			{
+				method: "tools/call",
+				exactResultMethod: "tools/call",
+				capability: "tools",
+				params: stableParams,
+				options: stableOptions,
+				signal: stableOptions?.signal,
+			},
+			(client) => client.callTool(stableParams, stableOptions),
 		);
 	}
 
@@ -605,16 +689,19 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		params?: ListResourcesRequest["params"],
 		options?: CacheableRequestOptions,
 	): Promise<ListResourcesResult> {
+		const stableParams = snapshotProtocolValue(params, "MCP resources/list parameters");
+		const stableOptions = snapshotRequestOptions(options);
 		return this.#delegate(
 			serverName,
 			{
 				method: "resources/list",
+				exactResultMethod: "resources/list",
 				capability: "resources",
-				params,
-				options,
-				signal: options?.signal,
+				params: stableParams,
+				options: stableOptions,
+				signal: stableOptions?.signal,
 			},
-			(client) => client.listResources(params, options),
+			(client) => client.listResources(stableParams, stableOptions),
 		);
 	}
 
@@ -623,34 +710,57 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		params?: ListResourceTemplatesRequest["params"],
 		options?: CacheableRequestOptions,
 	): Promise<ListResourceTemplatesResult> {
+		const stableParams = snapshotProtocolValue(params, "MCP resources/templates/list parameters");
+		const stableOptions = snapshotRequestOptions(options);
 		return this.#delegate(
 			serverName,
 			{
 				method: "resources/templates/list",
+				exactResultMethod: "resources/templates/list",
 				capability: "resources",
-				params,
-				options,
-				signal: options?.signal,
+				params: stableParams,
+				options: stableOptions,
+				signal: stableOptions?.signal,
 			},
-			(client) => client.listResourceTemplates(params, options),
+			(client) => client.listResourceTemplates(stableParams, stableOptions),
 		);
 	}
 
 	readResource(
 		serverName: string,
 		params: ReadResourceRequest["params"],
+		options: CacheableRequestOptions & { readonly allowInputRequired: true },
+	): Promise<ReadResourceResult | InputRequiredResult>;
+	readResource(
+		serverName: string,
+		params: ReadResourceRequest["params"],
+		options?: CacheableRequestOptions & {
+			readonly allowInputRequired?: false | undefined;
+		},
+	): Promise<ReadResourceResult>;
+	readResource(
+		serverName: string,
+		params: ReadResourceRequest["params"],
+		options: CacheableRequestOptions,
+	): Promise<ReadResourceResult | InputRequiredResult>;
+	readResource(
+		serverName: string,
+		params: ReadResourceRequest["params"],
 		options?: CacheableRequestOptions,
-	): Promise<ReadResourceResult> {
+	): Promise<ReadResourceResult | InputRequiredResult> {
+		const stableParams = snapshotProtocolValue(params, "MCP resources/read parameters");
+		const stableOptions = snapshotRequestOptions(options);
 		return this.#delegate(
 			serverName,
 			{
 				method: "resources/read",
+				exactResultMethod: "resources/read",
 				capability: "resources",
-				params,
-				options,
-				signal: options?.signal,
+				params: stableParams,
+				options: stableOptions,
+				signal: stableOptions?.signal,
 			},
-			(client) => client.readResource(params, options),
+			(client) => client.readResource(stableParams, stableOptions),
 		);
 	}
 
@@ -660,16 +770,19 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		params: SubscribeRequest["params"],
 		options?: RequestOptions,
 	): Promise<EmptyResult> {
+		const stableParams = snapshotProtocolValue(params, "MCP resources/subscribe parameters");
+		const stableOptions = snapshotRequestOptions(options);
 		return this.#delegate(
 			serverName,
 			{
 				method: "resources/subscribe",
+				exactResultMethod: "resources/subscribe",
 				capability: "resources",
-				params,
-				options,
-				signal: options?.signal,
+				params: stableParams,
+				options: stableOptions,
+				signal: stableOptions?.signal,
 			},
-			(client) => client.subscribeResource(params, options),
+			(client) => client.subscribeResource(stableParams, stableOptions),
 		);
 	}
 
@@ -679,16 +792,19 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		params: UnsubscribeRequest["params"],
 		options?: RequestOptions,
 	): Promise<EmptyResult> {
+		const stableParams = snapshotProtocolValue(params, "MCP resources/unsubscribe parameters");
+		const stableOptions = snapshotRequestOptions(options);
 		return this.#delegate(
 			serverName,
 			{
 				method: "resources/unsubscribe",
+				exactResultMethod: "resources/unsubscribe",
 				capability: "resources",
-				params,
-				options,
-				signal: options?.signal,
+				params: stableParams,
+				options: stableOptions,
+				signal: stableOptions?.signal,
 			},
-			(client) => client.unsubscribeResource(params, options),
+			(client) => client.unsubscribeResource(stableParams, stableOptions),
 		);
 	}
 
@@ -702,6 +818,8 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		filter: SubscriptionFilter,
 		options?: RequestOptions,
 	): Promise<McpClientSubscription> {
+		const stableFilter = snapshotProtocolValue(filter, "MCP subscription filter");
+		const stableOptions = snapshotRequestOptions(options);
 		const lifecycleEpoch = this.#lifecycleEpoch;
 		const entry = this.#entry(serverName);
 		return this.#delegate(
@@ -709,12 +827,12 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 			{
 				method: "subscriptions/listen",
 				capability: "subscriptions",
-				params: filter,
-				options,
-				signal: options?.signal,
+				params: stableFilter,
+				options: stableOptions,
+				signal: stableOptions?.signal,
 			},
 			async (client) => {
-				const subscription = await client.listen(filter, options);
+				const subscription = await client.listen(stableFilter, stableOptions);
 				try {
 					this.#assertOperationCurrent(entry, lifecycleEpoch);
 				} catch (entryError) {
@@ -742,28 +860,57 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		params?: ListPromptsRequest["params"],
 		options?: CacheableRequestOptions,
 	): Promise<ListPromptsResult> {
+		const stableParams = snapshotProtocolValue(params, "MCP prompts/list parameters");
+		const stableOptions = snapshotRequestOptions(options);
 		return this.#delegate(
 			serverName,
 			{
 				method: "prompts/list",
+				exactResultMethod: "prompts/list",
 				capability: "prompts",
-				params,
-				options,
-				signal: options?.signal,
+				params: stableParams,
+				options: stableOptions,
+				signal: stableOptions?.signal,
 			},
-			(client) => client.listPrompts(params, options),
+			(client) => client.listPrompts(stableParams, stableOptions),
 		);
 	}
 
 	getPrompt(
 		serverName: string,
 		params: GetPromptRequest["params"],
+		options: RequestOptions & { readonly allowInputRequired: true },
+	): Promise<GetPromptResult | InputRequiredResult>;
+	getPrompt(
+		serverName: string,
+		params: GetPromptRequest["params"],
+		options?: RequestOptions & {
+			readonly allowInputRequired?: false | undefined;
+		},
+	): Promise<GetPromptResult>;
+	getPrompt(
+		serverName: string,
+		params: GetPromptRequest["params"],
+		options: RequestOptions,
+	): Promise<GetPromptResult | InputRequiredResult>;
+	getPrompt(
+		serverName: string,
+		params: GetPromptRequest["params"],
 		options?: RequestOptions,
-	): Promise<GetPromptResult> {
+	): Promise<GetPromptResult | InputRequiredResult> {
+		const stableParams = snapshotProtocolValue(params, "MCP prompts/get parameters");
+		const stableOptions = snapshotRequestOptions(options);
 		return this.#delegate(
 			serverName,
-			{ method: "prompts/get", capability: "prompts", params, options, signal: options?.signal },
-			(client) => client.getPrompt(params, options),
+			{
+				method: "prompts/get",
+				exactResultMethod: "prompts/get",
+				capability: "prompts",
+				params: stableParams,
+				options: stableOptions,
+				signal: stableOptions?.signal,
+			},
+			(client) => client.getPrompt(stableParams, stableOptions),
 		);
 	}
 
@@ -833,17 +980,18 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 		resultSchema: Schema,
 		options?: McpClientMrtrRequestOptions,
 	): Promise<McpClientMrtrResult<Schema>> {
-		const requestOptions: RequestOptions = { ...options, allowInputRequired: true };
+		const stableRequest = snapshotProtocolValue(request, "MCP input-required request");
+		const requestOptions = snapshotRequestOptions({ ...options, allowInputRequired: true });
 		return this.#delegate(
 			serverName,
 			{
-				method: request.method,
-				capability: MRTR_CAPABILITY[request.method],
-				params: request.params,
+				method: stableRequest.method,
+				capability: MRTR_CAPABILITY[stableRequest.method],
+				params: stableRequest.params,
 				options: requestOptions,
 				signal: requestOptions.signal,
 			},
-			(client) => client.request(request, withInputRequired(resultSchema), requestOptions),
+			(client) => client.request(stableRequest, withInputRequired(resultSchema), requestOptions),
 		);
 	}
 
@@ -914,6 +1062,12 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 
 		try {
 			const operationInput = freezeOperationInput(entry.definition.name, descriptor);
+			if (
+				descriptor.exactResultMethod !== undefined &&
+				!canReturnInputRequired(descriptor.exactResultMethod, descriptor.options)
+			) {
+				markExactMcpClientResult(operationInput, descriptor.exactResultMethod);
+			}
 			const resolvedPrincipal =
 				this.#resolvePrincipal === undefined
 					? this.#principal
@@ -954,7 +1108,7 @@ export class McpClientRuntime<Principal = unknown> implements AsyncDisposable {
 					return invokeTerminal();
 				});
 			}
-			middleware.push(...this.#middleware);
+			middleware.push(...this.#middleware, ...this.#transforms);
 			const pipeline = composeMcpMiddleware<
 				McpClientOperationInput,
 				unknown,
@@ -1650,6 +1804,89 @@ function freezeOperationInput(
 		...(descriptor.options === undefined ? {} : { options: descriptor.options }),
 	});
 }
+
+function snapshotRequestOptions<Options extends RequestOptions | undefined>(
+	options: Options,
+): Options {
+	if (options === undefined) return options;
+	const toolDefinition =
+		"toolDefinition" in options ? Reflect.get(options, "toolDefinition") : undefined;
+	const snapshot = Object.freeze({
+		...options,
+		...(options.headers === undefined ? {} : { headers: Object.freeze({ ...options.headers }) }),
+		...(toolDefinition === undefined
+			? {}
+			: {
+					toolDefinition: snapshotProtocolValue(toolDefinition, "MCP call tool definition"),
+				}),
+	});
+	// A shallow option snapshot preserves callback/signal identities and every
+	// subtype field while making result-affecting flags immutable for this call.
+	return snapshot;
+}
+
+function snapshotProtocolValue<Value>(value: Value, label: string): Value {
+	let snapshot: Value;
+	try {
+		snapshot = structuredClone(value);
+	} catch (cause) {
+		throw new TypeError(`${label} must be structured-cloneable JSON.`, { cause });
+	}
+	freezeProtocolValue(snapshot, label, new Set(), new Set());
+	return snapshot;
+}
+
+function freezeProtocolValue(
+	value: unknown,
+	label: string,
+	ancestors: Set<object>,
+	visited: Set<object>,
+): void {
+	if (
+		value === undefined ||
+		value === null ||
+		typeof value === "string" ||
+		typeof value === "boolean"
+	) {
+		return;
+	}
+	if (typeof value === "number") {
+		if (Number.isFinite(value)) return;
+		throw new TypeError(`${label} must not contain non-finite numbers.`);
+	}
+	if (typeof value !== "object") {
+		throw new TypeError(`${label} must contain only JSON-compatible values.`);
+	}
+	if (visited.has(value)) return;
+	if (ancestors.has(value)) throw new TypeError(`${label} must not contain cycles.`);
+	if (!Array.isArray(value)) {
+		const prototype = Object.getPrototypeOf(value) as unknown;
+		if (prototype !== Object.prototype && prototype !== null) {
+			throw new TypeError(`${label} must contain only JSON arrays and objects.`);
+		}
+	}
+	ancestors.add(value);
+	for (const entry of Array.isArray(value) ? value : Object.values(value)) {
+		freezeProtocolValue(entry, label, ancestors, visited);
+	}
+	ancestors.delete(value);
+	visited.add(value);
+	Object.freeze(value);
+}
+
+function canReturnInputRequired(method: RequestMethod, options: unknown): boolean {
+	return (
+		(method === "tools/call" || method === "prompts/get" || method === "resources/read") &&
+		typeof options === "object" &&
+		options !== null &&
+		"allowInputRequired" in options &&
+		options.allowInputRequired === true
+	);
+}
+
+type InputRequiredResultForMethod<Method extends RequestMethod> = Method extends McpClientMrtrMethod
+	? InputRequiredResult
+	: never;
 
 async function closeAfterFailedConnect(
 	client: Client,

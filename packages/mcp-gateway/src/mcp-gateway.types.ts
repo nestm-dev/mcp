@@ -8,7 +8,9 @@ import type {
 	ListResourcesResult,
 	Prompt,
 	ReadResourceResult,
+	RequestTypeMap,
 	Resource,
+	ResultTypeMap,
 	ServerCapabilities,
 	Tool,
 	Variables,
@@ -384,26 +386,26 @@ export interface McpGatewayDiscoveryOperationInput {
 export interface McpGatewayInvocationOperationInput {
 	readonly type: "gateway.invocation";
 	readonly upstreamName: string;
-	readonly toolName: string;
+	readonly toolName: RequestTypeMap["tools/call"]["params"]["name"];
 	readonly projectedName: string;
 	readonly tool: Tool;
-	readonly arguments?: Readonly<Record<string, unknown>>;
+	readonly arguments?: RequestTypeMap["tools/call"]["params"]["arguments"];
 }
 
 export interface McpGatewayPromptGetOperationInput {
 	readonly type: "gateway.prompt.get";
 	readonly upstreamName: string;
-	readonly promptName: string;
+	readonly promptName: RequestTypeMap["prompts/get"]["params"]["name"];
 	readonly projectedName: string;
 	readonly prompt: Prompt;
-	readonly arguments?: Readonly<Record<string, string>>;
+	readonly arguments?: RequestTypeMap["prompts/get"]["params"]["arguments"];
 }
 
 export interface McpGatewayResourceReadOperationInput {
 	readonly type: "gateway.resource.read";
 	readonly upstreamName: string;
 	readonly projectedName: string;
-	readonly projectedUri: string;
+	readonly projectedUri: RequestTypeMap["resources/read"]["params"]["uri"];
 	/** Contains only the projected URI and reversible projected name. */
 	readonly resource: Resource;
 }
@@ -421,7 +423,7 @@ export interface McpGatewayCompletionOperationInput {
 	readonly type: "gateway.completion";
 	readonly upstreamName: string;
 	readonly projectedIdentifier: string;
-	readonly params: CompleteRequest["params"];
+	readonly params: RequestTypeMap["completion/complete"]["params"];
 }
 
 export type McpGatewayOperationInput =
@@ -432,15 +434,36 @@ export type McpGatewayOperationInput =
 	| McpGatewayResourceTemplateReadOperationInput
 	| McpGatewayCompletionOperationInput;
 
+/** Public gateway operation discriminators eligible for exact transforms. */
+export type McpGatewayOperationKind = McpGatewayOperationInput["type"];
+
+/** Recursive readonly view for detached gateway transform input. */
+export type McpGatewayReadonly<Value> = Value extends (...arguments_: never[]) => unknown
+	? Value
+	: Value extends readonly unknown[]
+		? { readonly [Index in keyof Value]: McpGatewayReadonly<Value[Index]> }
+		: Value extends object
+			? { readonly [Key in keyof Value]: McpGatewayReadonly<Value[Key]> }
+			: Value;
+
+/** Exact gateway input selected by one operation discriminator. */
+export type McpGatewayOperationInputFor<Kind extends McpGatewayOperationKind> = McpGatewayReadonly<
+	Extract<McpGatewayOperationInput, { readonly type: Kind }>
+>;
+
 /** Exact result contract for every gateway operation discriminator. */
 export type McpGatewayOperationOutputMap = Readonly<{
 	"gateway.discovery": McpGatewayDiscoverySnapshot;
-	"gateway.invocation": CallToolResult;
-	"gateway.prompt.get": GetPromptResult;
-	"gateway.resource.read": ReadResourceResult;
-	"gateway.resource-template.read": ReadResourceResult;
-	"gateway.completion": CompleteResult;
+	"gateway.invocation": ResultTypeMap["tools/call"];
+	"gateway.prompt.get": ResultTypeMap["prompts/get"];
+	"gateway.resource.read": ResultTypeMap["resources/read"];
+	"gateway.resource-template.read": ResultTypeMap["resources/read"];
+	"gateway.completion": ResultTypeMap["completion/complete"];
 }>;
+
+/** Exact gateway result selected by one operation discriminator. */
+export type McpGatewayOperationOutputForKind<Kind extends McpGatewayOperationKind> =
+	McpGatewayOperationOutputMap[Kind];
 
 /** Result corresponding to one gateway operation input (or input union). */
 export type McpGatewayOperationOutputFor<Input extends McpGatewayOperationInput> =
@@ -455,6 +478,13 @@ export type McpGatewayOperationOutput = McpGatewayOperationOutputFor<McpGatewayO
 export type McpGatewayMiddleware = McpOperationMiddleware<
 	McpGatewayOperationInput,
 	McpGatewayOperationOutput,
+	McpGatewayOperationContext
+>;
+
+/** Transforming middleware scoped to one exact gateway input/result pair. */
+export type McpGatewayTransform<Kind extends McpGatewayOperationKind> = McpOperationMiddleware<
+	McpGatewayOperationInputFor<Kind>,
+	McpGatewayOperationOutputForKind<Kind>,
 	McpGatewayOperationContext
 >;
 

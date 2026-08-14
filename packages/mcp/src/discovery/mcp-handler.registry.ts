@@ -16,6 +16,7 @@ import type {
 	PromptCallback,
 	ReadResourceCallback,
 	ReadResourceTemplateCallback,
+	RegisteredTool,
 	ResourceTemplate,
 	ServerContext,
 	StandardSchemaWithJSON,
@@ -28,6 +29,17 @@ import type {
 	McpDynamicHandlerRegistration,
 } from "../mcp-capability.types.ts";
 import { McpModuleError } from "../mcp.errors.ts";
+import {
+	MCP_CATALOG_SCHEMAS_TOOL_NAME,
+	MCP_CATALOG_SEARCH_TOOL_NAME,
+} from "../mcp-catalog-exposure.ts";
+import type { McpCatalogExposureOptions } from "../mcp-catalog-exposure.ts";
+import {
+	applyMcpCatalogExposure,
+	MCP_CATALOG_TOOL_NAME_LENGTH_LIMIT,
+	type McpCatalogMetaToolDefinition,
+	type McpCatalogRegisteredTool,
+} from "../mcp-catalog.runtime.ts";
 import type {
 	McpHandlerAuthorizationPolicy,
 	McpHandlerInvocationInput,
@@ -66,6 +78,7 @@ interface McpHandlerPipelineOptions {
 	readonly middleware?: readonly McpHandlerMiddleware[];
 	readonly lifecycleObserver?: McpHandlerLifecycleObserver;
 	readonly visibilityTimeoutMs?: number;
+	readonly catalogExposure?: McpCatalogExposureOptions;
 }
 
 @Injectable()
@@ -73,6 +86,7 @@ export class McpHandlerRegistry {
 	#handlers: readonly RegisteredHandler[] = Object.freeze([]);
 	#serverNames: readonly string[] | undefined;
 	#gatewayNames = new Set<string>();
+	#catalogRuntimeNames = new Set<string>();
 	readonly #mutationObservers = new Set<McpCapabilityMutationObserver>();
 
 	constructor(private readonly moduleRef: ModuleRef) {}
@@ -129,17 +143,22 @@ export class McpHandlerRegistry {
 	}
 
 	/** Locks target validation to the runtimes declared by the root module. */
-	configureRuntimes(serverNames: readonly string[], gatewayNames: readonly string[] = []): void {
+	configureRuntimes(
+		serverNames: readonly string[],
+		gatewayNames: readonly string[] = [],
+		catalogRuntimeNames: readonly string[] = [],
+	): void {
 		if (this.#serverNames !== undefined) {
 			throw new McpModuleError("INVALID_OPTIONS", "MCP handler runtimes are already configured.");
 		}
 		this.#serverNames = normalizeRuntimeNames(serverNames);
 		this.#gatewayNames = new Set(normalizeRuntimeNames(gatewayNames));
-		for (const gatewayName of this.#gatewayNames) {
-			if (!this.#serverNames.includes(gatewayName)) {
+		this.#catalogRuntimeNames = new Set(normalizeRuntimeNames(catalogRuntimeNames));
+		for (const runtimeName of new Set([...this.#gatewayNames, ...this.#catalogRuntimeNames])) {
+			if (!this.#serverNames.includes(runtimeName)) {
 				throw new McpModuleError(
 					"INVALID_OPTIONS",
-					`MCP gateway target "${gatewayName}" is not a configured server.`,
+					`MCP specialized runtime "${runtimeName}" is not a configured server.`,
 				);
 			}
 		}
@@ -162,6 +181,7 @@ export class McpHandlerRegistry {
 		const seen = new Map<string, string>();
 		for (const entry of this.#handlers) {
 			if (!targetsRuntime(entry.definition.options.servers, runtimeName)) continue;
+			this.#assertCatalogToolCompatibility(entry.definition, entry.source, runtimeName);
 			const key = registrationKey(entry.definition);
 			const previous = seen.get(key);
 			if (previous !== undefined) {
@@ -189,7 +209,29 @@ export class McpHandlerRegistry {
 				targetsRuntime(entry.definition.options.servers, context.runtimeName),
 			);
 			const visible = await selectVisibleHandlers(snapshot, context, visibilityTimeoutMs);
-			for (const entry of visible) registerHandler(server, entry, options, context.principal);
+			const catalogRegistrations: McpCatalogRegisteredTool[] = [];
+			for (const entry of visible) {
+				const registration = registerHandler(server, entry, options, context.principal);
+				if (registration !== undefined && entry.definition.kind === "tool") {
+					catalogRegistrations.push(
+						Object.freeze({
+							name: entry.definition.options.name,
+							registration,
+							tags: entry.definition.options.tags ?? Object.freeze([]),
+						}),
+					);
+				}
+			}
+			if (options.catalogExposure !== undefined) {
+				await applyMcpCatalogExposure(
+					server,
+					context,
+					Object.freeze(catalogRegistrations),
+					options.catalogExposure,
+					visibilityTimeoutMs,
+					(definition) => registerCatalogMetaTool(server, definition, options, context.principal),
+				);
+			}
 		};
 	}
 
@@ -320,6 +362,9 @@ export class McpHandlerRegistry {
 				);
 			}
 		}
+		for (const runtimeName of candidateTargets) {
+			this.#assertCatalogToolCompatibility(candidate.definition, candidate.source, runtimeName);
+		}
 		const key = registrationKey(candidate.definition);
 		for (const entry of this.#handlers) {
 			if (registrationKey(entry.definition) !== key) continue;
@@ -355,6 +400,30 @@ export class McpHandlerRegistry {
 				// Observation must not make an already-committed mutation appear to fail.
 			}
 		}
+	}
+
+	#assertCatalogToolCompatibility(
+		definition: HandlerDefinition,
+		source: string,
+		runtimeName: string,
+	): void {
+		if (definition.kind !== "tool" || !this.#catalogRuntimeNames.has(runtimeName)) return;
+		if (definition.options.name.length > MCP_CATALOG_TOOL_NAME_LENGTH_LIMIT) {
+			throw new McpModuleError(
+				"INVALID_CATALOG_EXPOSURE",
+				`MCP tool "${definition.options.name}" from ${source} exceeds the ${String(MCP_CATALOG_TOOL_NAME_LENGTH_LIMIT)} character catalog name limit on server "${runtimeName}".`,
+			);
+		}
+		if (
+			definition.options.name !== MCP_CATALOG_SEARCH_TOOL_NAME &&
+			definition.options.name !== MCP_CATALOG_SCHEMAS_TOOL_NAME
+		) {
+			return;
+		}
+		throw new McpModuleError(
+			"DUPLICATE_HANDLER",
+			`MCP tool "${definition.options.name}" from ${source} collides with a reserved catalog meta-tool on server "${runtimeName}".`,
+		);
 	}
 }
 
@@ -514,9 +583,39 @@ function freezeDefinition(definition: HandlerDefinition): HandlerDefinition {
 	const targets = definition.options.servers;
 	const frozenTargets = targets === undefined ? {} : { servers: normalizeHandlerTargets(targets) };
 	if (definition.kind === "tool") {
+		const { tags, annotations, icons, _meta: meta, ...sdkOptions } = definition.options;
+		const normalizedTags = normalizeToolTags(tags);
 		return Object.freeze({
 			kind: "tool",
-			options: Object.freeze({ ...definition.options, ...frozenTargets }),
+			options: Object.freeze({
+				...sdkOptions,
+				...frozenTargets,
+				...(annotations === undefined
+					? {}
+					: {
+							annotations: snapshotDefinitionMetadata(
+								annotations,
+								`MCP tool "${definition.options.name}" annotations`,
+							),
+						}),
+				...(icons === undefined
+					? {}
+					: {
+							icons: snapshotDefinitionMetadata(
+								icons,
+								`MCP tool "${definition.options.name}" icons`,
+							),
+						}),
+				...(meta === undefined
+					? {}
+					: {
+							_meta: snapshotDefinitionMetadata(
+								meta,
+								`MCP tool "${definition.options.name}" metadata`,
+							),
+						}),
+				...(normalizedTags === undefined ? {} : { tags: normalizedTags }),
+			}),
 		});
 	}
 	if (definition.kind === "prompt") {
@@ -529,6 +628,42 @@ function freezeDefinition(definition: HandlerDefinition): HandlerDefinition {
 		kind: "resource",
 		options: Object.freeze({ ...definition.options, ...frozenTargets }),
 	});
+}
+
+function normalizeToolTags(tags: readonly string[] | undefined): readonly string[] | undefined {
+	if (tags === undefined) return undefined;
+	if (!Array.isArray(tags) || tags.length > 32) {
+		throw new McpModuleError(
+			"INVALID_OPTIONS",
+			"MCP tool tags must be an array containing at most 32 entries.",
+		);
+	}
+	const normalized = tags.map((tag, index) => {
+		if (typeof tag !== "string" || tag.trim().length === 0 || tag.trim().length > 64) {
+			throw new McpModuleError(
+				"INVALID_OPTIONS",
+				`MCP tool tag at index ${String(index)} must contain between 1 and 64 characters.`,
+			);
+		}
+		return tag.trim();
+	});
+	if (new Set(normalized).size !== normalized.length) {
+		throw new McpModuleError("INVALID_OPTIONS", "MCP tool tags must not contain duplicates.");
+	}
+	return Object.freeze(normalized);
+}
+
+function snapshotDefinitionMetadata<Value>(value: Value, label: string): Value {
+	let snapshot: Value;
+	try {
+		snapshot = structuredClone(value);
+	} catch (cause) {
+		throw new McpModuleError("INVALID_OPTIONS", `${label} must be safely detachable.`, {
+			cause,
+		});
+	}
+	freezePolicyValue(snapshot);
+	return snapshot;
 }
 
 function normalizeHandlerTargets(targets: string | readonly string[]): string | readonly string[] {
@@ -566,7 +701,7 @@ function registerHandler(
 	entry: RegisteredHandler,
 	options: McpHandlerPipelineOptions,
 	principal: McpServerPrincipal | undefined,
-): void {
+): RegisteredTool | undefined {
 	const callback = (...arguments_: unknown[]): Promise<McpHandlerInvocationOutput> =>
 		invokeHandler(entry, arguments_, options, principal);
 	if (entry.definition.kind === "tool") {
@@ -574,11 +709,18 @@ function registerHandler(
 			name,
 			servers: _servers,
 			visibility: _visibility,
+			tags: _tags,
 			...config
 		} = entry.definition.options;
 		const registerTool = server.registerTool.bind(server);
-		Reflect.apply(registerTool, undefined, [name, config, callback]);
-		return;
+		const registration: unknown = Reflect.apply(registerTool, undefined, [name, config, callback]);
+		if (!isRegisteredTool(registration)) {
+			throw new McpModuleError(
+				"INVALID_HANDLER",
+				`MCP tool ${entry.source} did not produce an official registration handle.`,
+			);
+		}
+		return registration;
 	}
 	if (entry.definition.kind === "prompt") {
 		const {
@@ -589,7 +731,7 @@ function registerHandler(
 		} = entry.definition.options;
 		const registerPrompt = server.registerPrompt.bind(server);
 		Reflect.apply(registerPrompt, undefined, [name, config, callback]);
-		return;
+		return undefined;
 	}
 	const {
 		name,
@@ -600,6 +742,55 @@ function registerHandler(
 	} = entry.definition.options;
 	const registerResource = server.registerResource.bind(server);
 	Reflect.apply(registerResource, undefined, [name, uri, config, callback]);
+	return undefined;
+}
+
+function isRegisteredTool(value: unknown): value is RegisteredTool {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"enabled" in value &&
+		typeof value.enabled === "boolean" &&
+		"update" in value &&
+		typeof value.update === "function" &&
+		"enable" in value &&
+		typeof value.enable === "function" &&
+		"disable" in value &&
+		typeof value.disable === "function"
+	);
+}
+
+function registerCatalogMetaTool(
+	server: McpServer,
+	definition: McpCatalogMetaToolDefinition,
+	options: McpHandlerPipelineOptions,
+	principal: McpServerPrincipal | undefined,
+): RegisteredTool {
+	const source = `catalog meta-tool "${definition.name}"`;
+	const entry = Object.freeze({
+		id: Symbol(source),
+		definition: freezeDefinition({
+			kind: "tool",
+			options: {
+				name: definition.name,
+				title: definition.title,
+				description: definition.description,
+				inputSchema: definition.inputSchema,
+				outputSchema: definition.outputSchema,
+			},
+		}),
+		handler: eraseHandler(definition.handler),
+		source,
+		visibility: true,
+	}) satisfies RegisteredHandler;
+	const registration = registerHandler(server, entry, options, principal);
+	if (registration === undefined) {
+		throw new McpModuleError(
+			"INVALID_CATALOG_EXPOSURE",
+			`MCP catalog meta-tool "${definition.name}" did not produce a tool registration.`,
+		);
+	}
+	return registration;
 }
 
 async function invokeHandler(

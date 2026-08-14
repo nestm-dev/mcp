@@ -32,6 +32,8 @@ export interface ToolOptions<
 	readonly annotations?: ToolAnnotations;
 	readonly icons?: Icon[];
 	readonly _meta?: Record<string, unknown>;
+	/** Searchable application labels used only by NestM catalog selectors. */
+	readonly tags?: readonly string[];
 }
 
 export interface ResourceOptions<
@@ -129,7 +131,15 @@ function typedMetadataDecorator<Handler>(
 }
 
 function freezeToolDefinition(options: ToolOptions): ToolHandlerDefinition {
-	return Object.freeze({ kind: "tool", options: freezeOptions(options) });
+	const { tags, ...sdkOptions } = options;
+	const normalizedTags = normalizeTags(tags);
+	return Object.freeze({
+		kind: "tool",
+		options: freezeOptions({
+			...sdkOptions,
+			...(normalizedTags === undefined ? {} : { tags: normalizedTags }),
+		}),
+	});
 }
 
 function freezeResourceDefinition(options: ResourceOptions): ResourceHandlerDefinition {
@@ -166,6 +176,25 @@ function normalizeTargets(serverNames: readonly string[]): readonly string[] {
 	});
 	if (new Set(normalized).size !== normalized.length) {
 		throw new TypeError("MCP class-level targets must not contain duplicates.");
+	}
+	return Object.freeze(normalized);
+}
+
+function normalizeTags(tags: readonly string[] | undefined): readonly string[] | undefined {
+	if (tags === undefined) return undefined;
+	if (!Array.isArray(tags) || tags.length > 32) {
+		throw new TypeError("MCP tool tags must be an array containing at most 32 entries.");
+	}
+	const normalized = tags.map((tag, index) => {
+		if (typeof tag !== "string" || tag.trim().length === 0 || tag.trim().length > 64) {
+			throw new TypeError(
+				`MCP tool tag at index ${String(index)} must contain between 1 and 64 characters.`,
+			);
+		}
+		return tag.trim();
+	});
+	if (new Set(normalized).size !== normalized.length) {
+		throw new TypeError("MCP tool tags must not contain duplicates.");
 	}
 	return Object.freeze(normalized);
 }

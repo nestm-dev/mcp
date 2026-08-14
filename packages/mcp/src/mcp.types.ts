@@ -15,6 +15,7 @@ import type {
 } from "@nestm/mcp-server";
 import type { McpClientRuntimeOptions, McpClientServerDefinition } from "@nestm/mcp-client";
 import type { McpGatewayOptions, McpGatewayUpstream } from "@nestm/mcp-gateway";
+import type { McpCatalogExposureOptions } from "./mcp-catalog-exposure.ts";
 
 export interface McpHandlerInvocationInput {
 	readonly kind: "tool" | "resource" | "prompt";
@@ -79,6 +80,8 @@ export interface McpNestServerDefinition extends McpServerDefinition {
 	readonly handlerLifecycleObserver?: McpHandlerLifecycleObserver;
 	/** Maximum duration of one per-request capability visibility wave. Defaults to 30 seconds. */
 	readonly handlerVisibilityTimeoutMs?: number;
+	/** Optional authorization-safe projection of the post-visibility tool catalog. */
+	readonly catalogExposure?: McpCatalogExposureOptions;
 	/** Optional aggregate gateway backed by clients owned by this Nest module. */
 	readonly gateway?: McpNestGatewayOptions;
 }

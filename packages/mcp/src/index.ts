@@ -1,5 +1,29 @@
 export { McpModuleError } from "./mcp.errors.ts";
 export type { McpModuleErrorCode } from "./mcp.errors.ts";
+export {
+	MCP_CATALOG_SCHEMAS_TOOL_NAME,
+	MCP_CATALOG_SEARCH_TOOL_NAME,
+	defineMcpCatalogExposureResolver,
+} from "./mcp-catalog-exposure.ts";
+export type {
+	McpCatalogEagerExposure,
+	McpCatalogExposureKind,
+	McpCatalogExposureOptions,
+	McpCatalogExposureResolver,
+	McpCatalogExposureResolverInput,
+	McpCatalogExposureStrategy,
+	McpCatalogLazyExposure,
+	McpCatalogNameSelector,
+	McpCatalogPredicateSelector,
+	McpCatalogReadonly,
+	McpCatalogSchemasResult,
+	McpCatalogSearchExposure,
+	McpCatalogSearchResult,
+	McpCatalogSearchResultTool,
+	McpCatalogTagSelector,
+	McpCatalogTool,
+	McpCatalogToolSelector,
+} from "./mcp-catalog-exposure.ts";
 export { Prompt, Resource, Targets, Tool } from "./decorators/mcp-handler.decorators.ts";
 export type {
 	HandlerDefinition,
@@ -115,6 +139,7 @@ export {
 	createMcpClientPassthroughMiddleware,
 	createMcpClientTransport,
 	createMcpHttpClientTransport,
+	defineMcpClientTransform,
 	createPrivateKeyJwtAuth,
 	createMcpStdioClientTransport,
 	createMiddleware,
@@ -189,6 +214,8 @@ export type {
 	McpClientPassthroughMiddleware,
 	McpClientPrincipalResolver,
 	McpClientProtocolRequest,
+	McpClientReadonly,
+	McpClientRequestMethod,
 	McpClientRuntimeOptions,
 	McpClientRuntimeErrorCode,
 	McpClientServerDefinition,
@@ -196,6 +223,10 @@ export type {
 	McpClientTransportDefinition,
 	McpClientTransportFactory,
 	McpClientTransportFactoryContext,
+	McpClientTransform,
+	McpClientTransformInput,
+	McpClientTransformOptions,
+	McpClientTransformResult,
 	McpHttpClientTransportDefinition,
 	McpSdkClientFactory,
 	McpSdkClientFactoryContext,
@@ -268,6 +299,7 @@ export {
 	createMcpGatewayFeature,
 	createMcpGatewayPassthroughMiddleware,
 	defaultMcpGatewayAuthorizationContext,
+	defineMcpGatewayTransform,
 } from "@nestm/mcp-gateway";
 export type {
 	GatewayResourceTemplateUriCodecOptions,
@@ -298,14 +330,18 @@ export type {
 	McpGatewayNameCodec,
 	McpGatewayOperationContext,
 	McpGatewayOperationInput,
+	McpGatewayOperationInputFor,
+	McpGatewayOperationKind,
 	McpGatewayOperationOutput,
 	McpGatewayOperationOutputFor,
+	McpGatewayOperationOutputForKind,
 	McpGatewayOperationOutputMap,
 	McpGatewayOptions,
 	McpGatewayPassthroughMiddleware,
 	McpGatewayPolicy,
 	McpGatewayPolicyInput,
 	McpGatewayPrincipal,
+	McpGatewayReadonly,
 	McpGatewayPromptNameCodec,
 	McpGatewayPromptGetOperationInput,
 	McpGatewayPromptPolicy,
@@ -326,6 +362,7 @@ export type {
 	McpGatewayResourceTemplateUriCodec,
 	McpGatewayResourceUriCodec,
 	McpGatewayToolClient,
+	McpGatewayTransform,
 	McpGatewayUpstream,
 	McpGatewayErrorCode,
 } from "@nestm/mcp-gateway";

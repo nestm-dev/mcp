@@ -21,6 +21,7 @@ import {
 	GatewayResourceTemplateUriCodec,
 	McpGateway,
 	allowAllMcpGatewayPolicy,
+	defineMcpGatewayTransform,
 } from "../src/index.ts";
 import type { McpGatewayMiddleware, McpGatewayPolicy, McpGatewayToolClient } from "../src/index.ts";
 
@@ -204,6 +205,89 @@ describe("gateway resource templates and completion", () => {
 			await server.close();
 			await runtime.close();
 		}
+	});
+
+	it("keeps prompt and template completion parameters frozen after authorization", async () => {
+		const terminalValues: string[] = [];
+		const authorizedValues: string[] = [];
+		const exactValues: string[] = [];
+		const complete = vi.fn((params: CompleteRequest["params"]): CompleteResult => {
+			terminalValues.push(params.argument.value);
+			return { completion: { values: [params.argument.value] } };
+		});
+		const gateway = new McpGateway({
+			upstreams: [
+				{
+					name: "primary",
+					client: {
+						listTools: () => ({ tools: [] }),
+						callTool: () => ({ content: [] }),
+						listPrompts: () => ({
+							prompts: [{ name: "review", arguments: [{ name: "language" }] }],
+						}),
+						getPrompt: () => ({ messages: [] }),
+						listResourceTemplates: () => ({
+							resourceTemplates: [{ name: "guide", uriTemplate: "docs://guide/{section}" }],
+						}),
+						readResource: () => ({ contents: [] }),
+						complete,
+					},
+				},
+			],
+			policy: {
+				authorize: () => allowMcpOperation(),
+				authorizePrompt(operation) {
+					if (operation.input.action === "complete") {
+						authorizedValues.push(`prompt:${operation.input.completion?.argument.value}`);
+					}
+					return allowMcpOperation();
+				},
+				authorizeResourceTemplate(operation) {
+					if (operation.input.action === "complete") {
+						authorizedValues.push(`template:${operation.input.completion?.argument.value}`);
+					}
+					return allowMcpOperation();
+				},
+			},
+			middleware: [
+				defineMcpGatewayTransform("gateway.completion", async (operation, next) => {
+					exactValues.push(operation.input.params.argument.value);
+					expect(Object.isFrozen(operation.input.params)).toBe(true);
+					expect(Object.isFrozen(operation.input.params.argument)).toBe(true);
+					return next();
+				}),
+				async (operation, next) => {
+					if (operation.input.type === "gateway.completion") {
+						expect(Reflect.set(operation.input.params, "argument", {})).toBe(false);
+						expect(Reflect.set(operation.input.params.argument, "value", "mutated")).toBe(false);
+					}
+					return next();
+				},
+			],
+			authorizationContextResolver: () => "principal-a",
+		});
+		const promptName = new GatewayPromptNameCodec().encode("primary", "review");
+		const templateUri = new GatewayResourceTemplateUriCodec().encode(
+			"primary",
+			"docs://guide/{section}",
+		);
+
+		await expect(
+			gateway.complete({
+				ref: { type: "ref/prompt", name: promptName },
+				argument: { name: "language", value: "t" },
+			}),
+		).resolves.toEqual({ completion: { values: ["t"] } });
+		await expect(
+			gateway.complete({
+				ref: { type: "ref/resource", uri: templateUri },
+				argument: { name: "section", value: "in" },
+			}),
+		).resolves.toEqual({ completion: { values: ["in"] } });
+
+		expect(authorizedValues).toEqual(["prompt:t", "template:in"]);
+		expect(exactValues).toEqual(["t", "in"]);
+		expect(terminalValues).toEqual(["t", "in"]);
 	});
 
 	it("filters discovery and authorizes template read/completion before middleware", async () => {

@@ -1,6 +1,11 @@
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import type { Tool } from "@modelcontextprotocol/server";
-import { McpAuthorizationError, allowMcpOperation, denyMcpOperation } from "@nestm/mcp-core";
+import {
+	McpAuthorizationError,
+	McpMiddlewareReentryError,
+	allowMcpOperation,
+	denyMcpOperation,
+} from "@nestm/mcp-core";
 import { McpServerRuntime, defineMcpServer } from "@nestm/mcp-server";
 import type { AuthInfo, CallToolResult } from "@nestm/mcp-server";
 import { describe, expect, it, vi } from "vitest";
@@ -9,13 +14,13 @@ import {
 	McpGateway,
 	allowAllMcpGatewayPolicy,
 	createMcpGatewayPassthroughMiddleware,
+	defineMcpGatewayTransform,
 } from "../src/index.ts";
 import type {
 	McpGatewayLifecycleObserver,
 	McpGatewayCallToolOptions,
 	McpGatewayDiscoveryCache,
 	McpGatewayDiscoverySnapshot,
-	McpGatewayMiddleware,
 	McpGatewayPolicy,
 } from "../src/index.ts";
 import { McpGatewayTestClient } from "../src/testing/index.ts";
@@ -150,13 +155,10 @@ describe("McpGateway", () => {
 	it("authorizes invocation before user middleware can short-circuit", async () => {
 		const client = new McpGatewayTestClient([TOOL]);
 		let invocationMiddlewareCalled = false;
-		const middleware: McpGatewayMiddleware = async (operation, next) => {
-			if (operation.input.type === "gateway.invocation") {
-				invocationMiddlewareCalled = true;
-				return { content: [{ type: "text", text: "middleware bypass" }] };
-			}
-			return next();
-		};
+		const middleware = defineMcpGatewayTransform("gateway.invocation", async () => {
+			invocationMiddlewareCalled = true;
+			return { content: [{ type: "text", text: "middleware bypass" }] };
+		});
 		const policy: McpGatewayPolicy = {
 			authorize(operation) {
 				return operation.input.action === "invoke"
@@ -480,6 +482,130 @@ describe("McpGateway", () => {
 			"operation.started:tools/call",
 			"operation.succeeded:tools/call",
 		]);
+	});
+
+	it("transforms one exact gateway result after authorization without dropping official fields", async () => {
+		const structuredContent = { echoed: true };
+		const client = new McpGatewayTestClient([TOOL], {
+			echo: () => ({
+				content: [{ type: "text", text: "upstream" }],
+				structuredContent,
+				_meta: { untrustedUpstreamTrace: "removed" },
+			}),
+		});
+		const authorizationOrder: string[] = [];
+		const gateway = new McpGateway({
+			upstreams: [{ name: "primary", client }],
+			policy: {
+				authorize(operation) {
+					if (operation.input.action === "invoke") authorizationOrder.push("authorize");
+					return allowMcpOperation();
+				},
+			},
+			middleware: [
+				defineMcpGatewayTransform("gateway.invocation", async (operation, next) => {
+					authorizationOrder.push("transform");
+					expect(operation.input.toolName).toBe("echo");
+					const result = await next();
+					expect(result["_meta"]).toBeUndefined();
+					return {
+						...result,
+						content: [...result.content, { type: "text", text: "transformed" }],
+						_meta: { trustedGatewayTrace: "trace-1" },
+					};
+				}),
+			],
+			authorizationContextResolver: () => "principal-a",
+		});
+		const [tool] = await gateway.listProjectedTools();
+		authorizationOrder.length = 0;
+
+		const result = await gateway.callTool(tool!.projectedName, {});
+
+		expect(authorizationOrder).toEqual(["authorize", "transform"]);
+		expect(result.content).toEqual([
+			{ type: "text", text: "upstream" },
+			{ type: "text", text: "transformed" },
+		]);
+		expect(result.structuredContent).toBe(structuredContent);
+		expect(result["_meta"]).toEqual({ trustedGatewayTrace: "trace-1" });
+	});
+
+	it("keeps exact gateway continuations downstream of broad transforming middleware", async () => {
+		const client = new McpGatewayTestClient([TOOL], {
+			echo: () => ({ content: [{ type: "text", text: "upstream" }] }),
+		});
+		const mismatchedResult: McpGatewayDiscoverySnapshot = {
+			discoveredAt: 0,
+			tools: [],
+			prompts: [],
+			resources: [],
+			resourceTemplates: [],
+		};
+		let exactNextResult: CallToolResult | undefined;
+		const gateway = new McpGateway({
+			upstreams: [{ name: "primary", client }],
+			policy: allowAllMcpGatewayPolicy(),
+			middleware: [
+				defineMcpGatewayTransform("gateway.invocation", async (_operation, next) => {
+					exactNextResult = await next();
+					return exactNextResult;
+				}),
+				async (operation, next) => {
+					const result = await next();
+					return operation.input.type === "gateway.invocation" ? mismatchedResult : result;
+				},
+			],
+			authorizationContextResolver: () => "principal-a",
+		});
+		const [tool] = await gateway.listProjectedTools();
+
+		await expect(gateway.callTool(tool!.projectedName, {})).rejects.toMatchObject({
+			code: "INVALID_INVOCATION_RESULT",
+		});
+		expect(exactNextResult).toEqual({ content: [{ type: "text", text: "upstream" }] });
+	});
+
+	it("observes transform-side aborts as cancellation and retains next-once enforcement", async () => {
+		const client = new McpGatewayTestClient([TOOL]);
+		const controller = new AbortController();
+		const abortReason = new DOMException("cancel transform", "AbortError");
+		const lifecycleEvents: Array<{ type: string; name: string }> = [];
+		let mode: "abort" | "reenter" = "abort";
+		const gateway = new McpGateway({
+			upstreams: [{ name: "primary", client }],
+			policy: allowAllMcpGatewayPolicy(),
+			middleware: [
+				defineMcpGatewayTransform("gateway.invocation", async (_operation, next) => {
+					const result = await next();
+					if (mode === "abort") {
+						controller.abort(abortReason);
+						return result;
+					}
+					return next();
+				}),
+			],
+			lifecycleObserver: {
+				onEvent(event) {
+					lifecycleEvents.push({ type: event.type, name: event.context.operation.name });
+				},
+			},
+			authorizationContextResolver: () => "principal-a",
+		});
+		const [tool] = await gateway.listProjectedTools();
+		lifecycleEvents.length = 0;
+
+		await expect(
+			gateway.callTool(tool!.projectedName, {}, { signal: controller.signal }),
+		).rejects.toBe(abortReason);
+		expect(
+			lifecycleEvents.filter((event) => event.name === "tools/call").map((event) => event.type),
+		).toEqual(["operation.started", "operation.cancelled"]);
+
+		mode = "reenter";
+		await expect(gateway.callTool(tool!.projectedName, {})).rejects.toBeInstanceOf(
+			McpMiddlewareReentryError,
+		);
 	});
 
 	it("uses separate cache entries for separate principals", async () => {
@@ -914,6 +1040,81 @@ describe("McpGateway", () => {
 		await invocation;
 
 		expect(received).toEqual([{ nested: { role: "user" } }, { nested: { role: "user" } }]);
+	});
+
+	it("detaches and freezes transformed discovery before authorization and invocation", async () => {
+		const mutableTool: Tool = {
+			name: "echo",
+			inputSchema: {
+				type: "object",
+				properties: { value: { type: "string" } },
+			},
+		};
+		const mutableDiscovery: McpGatewayDiscoverySnapshot = {
+			tools: [mutableTool],
+			prompts: [],
+			resources: [],
+			resourceTemplates: [],
+			discoveredAt: 1,
+		};
+		let reportAuthorization: (() => void) | undefined;
+		let releaseAuthorization: (() => void) | undefined;
+		const authorizationEntered = new Promise<void>((resolve) => {
+			reportAuthorization = resolve;
+		});
+		const authorizationGate = new Promise<void>((resolve) => {
+			releaseAuthorization = resolve;
+		});
+		const callTool = vi.fn(
+			(_params: unknown, options?: McpGatewayCallToolOptions): CallToolResult => {
+				expect(options?.toolDefinition?.inputSchema.type).toBe("object");
+				expect(Object.isFrozen(options?.toolDefinition)).toBe(true);
+				return { content: [] };
+			},
+		);
+		const gateway = new McpGateway({
+			upstreams: [
+				{
+					name: "primary",
+					client: { listTools: () => ({ tools: [] }), callTool },
+				},
+			],
+			policy: {
+				async authorize(operation) {
+					if (operation.input.action === "invoke") {
+						expect(operation.input.tool.inputSchema.type).toBe("object");
+						reportAuthorization?.();
+						await authorizationGate;
+					}
+					return allowMcpOperation();
+				},
+			},
+			middleware: [
+				defineMcpGatewayTransform("gateway.discovery", async () => mutableDiscovery),
+				defineMcpGatewayTransform("gateway.invocation", async (operation, next) => {
+					expect(operation.input.tool.inputSchema.type).toBe("object");
+					expect(Object.isFrozen(operation.input.tool)).toBe(true);
+					expect(Object.isFrozen(operation.input.tool.inputSchema)).toBe(true);
+					return next();
+				}),
+				async (operation, next) => {
+					if (operation.input.type === "gateway.invocation") {
+						expect(Reflect.set(operation.input.tool.inputSchema, "type", "string")).toBe(false);
+					}
+					return next();
+				},
+			],
+			authorizationContextResolver: () => "principal-a",
+		});
+		const projectedName = new GatewayNameCodec().encode("primary", "echo");
+
+		const invocation = gateway.callTool(projectedName, { value: "safe" });
+		await authorizationEntered;
+		Reflect.set(mutableTool.inputSchema, "type", "string");
+		releaseAuthorization?.();
+
+		await expect(invocation).resolves.toEqual({ content: [] });
+		expect(callTool).toHaveBeenCalledOnce();
 	});
 
 	it("does not let an invalidated inflight refresh repopulate discovery", async () => {

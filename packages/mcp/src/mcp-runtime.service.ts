@@ -8,6 +8,7 @@ import { McpClientRuntime } from "@nestm/mcp-client";
 import { McpGateway, createMcpClientRuntimeUpstream, createMcpGateway } from "@nestm/mcp-gateway";
 import { McpServerRegistry, type McpServerRuntime } from "@nestm/mcp-server";
 import { McpModuleError } from "./mcp.errors.ts";
+import { assertMcpCatalogExposureOptions } from "./mcp-catalog.runtime.ts";
 import { MCP_MODULE_OPTIONS } from "./mcp.tokens.ts";
 import type {
 	McpModuleOptions,
@@ -38,12 +39,32 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 		try {
 			if (this.options.autoDiscover !== false) this.explorer.scan();
 			const definitions = this.options.servers ?? [];
+			for (const definition of definitions) {
+				if (definition.catalogExposure === undefined) continue;
+				assertMcpCatalogExposureOptions(definition.catalogExposure, definition.name);
+				if (definition.gateway !== undefined) {
+					throw new McpModuleError(
+						"INVALID_CATALOG_EXPOSURE",
+						`MCP catalog exposure cannot be combined with gateway server "${definition.name}".`,
+					);
+				}
+				if ((definition.features?.length ?? 0) > 0) {
+					throw new McpModuleError(
+						"INVALID_CATALOG_EXPOSURE",
+						`MCP catalog exposure for server "${definition.name}" cannot safely project tools from arbitrary custom features. Register cataloged tools through decorators or the live capability registry.`,
+					);
+				}
+			}
 			this.capabilities.configureRuntimes(
 				definitions.map(({ name }) => name),
 				definitions.flatMap(({ name, gateway }) => (gateway === undefined ? [] : [name])),
+				definitions.flatMap(({ name, catalogExposure }) =>
+					catalogExposure === undefined ? [] : [name],
+				),
 			);
 			for (const definition of definitions) {
 				const {
+					catalogExposure,
 					gateway,
 					handlerAuthorization,
 					handlerLifecycleObserver,
@@ -60,6 +81,7 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 				}
 				const discovered = this.capabilities.asServerFeature({
 					serverName: definition.name,
+					...(catalogExposure === undefined ? {} : { catalogExposure }),
 					...(handlerAuthorization === undefined ? {} : { authorization: handlerAuthorization }),
 					...(handlerMiddleware === undefined ? {} : { middleware: handlerMiddleware }),
 					...(handlerLifecycleObserver === undefined

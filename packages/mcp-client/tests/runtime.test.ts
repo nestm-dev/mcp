@@ -1,5 +1,6 @@
 import {
 	type CallToolResult,
+	type CallToolRequestOptions,
 	type Client,
 	type ClientOptions,
 	type ConnectOptions,
@@ -22,7 +23,14 @@ import {
 	inputRequired,
 	type ServerContext,
 } from "@modelcontextprotocol/server";
-import type { McpLifecycleEvent } from "@nestm/mcp-core";
+import {
+	McpAuthorizationError,
+	McpMiddlewareReentryError,
+	allowMcpOperation,
+	createMcpAuthorizationMiddleware,
+	denyMcpOperation,
+	type McpLifecycleEvent,
+} from "@nestm/mcp-core";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -32,7 +40,9 @@ import {
 	MCP_CLIENT_SHUTDOWN_TIMEOUT,
 	McpClientRuntime,
 	createMcpClientPassthroughMiddleware,
+	defineMcpClientTransform,
 	type McpClientMrtrRequestOptions,
+	type McpClientOperationInput,
 	type McpClientServerDefinition,
 	type McpSdkClientFactory,
 } from "../src/index.ts";
@@ -201,6 +211,418 @@ describe("McpClientRuntime", () => {
 			role: "client",
 			operation: { name: "tools/list", capability: "tools", target: "alpha" },
 		});
+	});
+
+	it("transforms one exact client result without dropping structured content or metadata", async () => {
+		const structuredContent = { echoed: true };
+		const upstreamResult = {
+			content: [{ type: "text", text: "upstream" }],
+			structuredContent,
+			_meta: { upstreamTrace: "trace-1" },
+			isError: false,
+		} satisfies CallToolResult;
+		const fake = createFakeClient({ callToolResult: upstreamResult });
+		const controller = new AbortController();
+		const requestOptions = { signal: controller.signal };
+		const runtime = new McpClientRuntime({
+			clientFactory: fixedClientFactory(fake.client),
+			transportFactory: fixedTransportFactory(createFakeTransport()),
+			servers: [server()],
+			middleware: [
+				defineMcpClientTransform("tools/call", async (operation, next) => {
+					expect(operation.input.serverName).toBe("alpha");
+					expect(operation.input.params.name).toBe("echo");
+					expect(operation.input.options).not.toBe(requestOptions);
+					expect(operation.input.options).toEqual(requestOptions);
+					expect(Object.isFrozen(operation.input.options)).toBe(true);
+					expect(operation.context.signal).toBe(controller.signal);
+					const result = await next();
+					expect(result).toBe(upstreamResult);
+					return {
+						...result,
+						content: [...result.content, { type: "text", text: "transformed" }],
+						_meta: { ...result["_meta"], transformed: true },
+					};
+				}),
+			],
+		});
+		await runtime.connect("alpha");
+
+		const result = await runtime.callTool("alpha", { name: "echo" }, requestOptions);
+
+		expect(result.content).toEqual([
+			{ type: "text", text: "upstream" },
+			{ type: "text", text: "transformed" },
+		]);
+		expect(result.structuredContent).toBe(structuredContent);
+		expect(result["_meta"]).toEqual({ upstreamTrace: "trace-1", transformed: true });
+		expect(fake.callTool).toHaveBeenCalledWith({ name: "echo" }, { signal: controller.signal });
+		await runtime.close();
+	});
+
+	it("snapshots result-affecting request options before exact transform dispatch", async () => {
+		const fake = createFakeClient();
+		const mutableOptions = {
+			allowInputRequired: false,
+			headers: { "x-request-id": "original" },
+			toolDefinition: {
+				name: "echo",
+				inputSchema: {
+					type: "object",
+					properties: { value: { type: "string" } },
+				},
+				outputSchema: {
+					type: "object",
+					properties: { echoed: { type: "boolean" } },
+				},
+			},
+		} satisfies CallToolRequestOptions;
+		let transformed = false;
+		const runtime = new McpClientRuntime({
+			clientFactory: fixedClientFactory(fake.client),
+			transportFactory: fixedTransportFactory(createFakeTransport()),
+			servers: [server()],
+			middleware: [
+				defineMcpClientTransform("tools/call", async (operation, next) => {
+					transformed = true;
+					expect(operation.input.options).toEqual({
+						allowInputRequired: false,
+						headers: { "x-request-id": "original" },
+						toolDefinition: {
+							name: "echo",
+							inputSchema: {
+								type: "object",
+								properties: { value: { type: "string" } },
+							},
+							outputSchema: {
+								type: "object",
+								properties: { echoed: { type: "boolean" } },
+							},
+						},
+					});
+					expect(Object.isFrozen(operation.input.options)).toBe(true);
+					expect(Object.isFrozen(operation.input.options?.headers)).toBe(true);
+					expect(Object.isFrozen(operation.input.options?.toolDefinition)).toBe(true);
+					expect(Object.isFrozen(operation.input.options?.toolDefinition?.inputSchema)).toBe(true);
+					return next();
+				}),
+			],
+		});
+		await runtime.connect("alpha");
+
+		const result = runtime.callTool("alpha", { name: "echo" }, mutableOptions);
+		Reflect.set(mutableOptions, "allowInputRequired", true);
+		mutableOptions.headers["x-request-id"] = "mutated";
+		Reflect.set(mutableOptions.toolDefinition.inputSchema, "type", "string");
+		Reflect.set(mutableOptions.toolDefinition.outputSchema, "type", "string");
+
+		await expect(result).resolves.toMatchObject({ content: [{ type: "text", text: "ok" }] });
+		expect(transformed).toBe(true);
+		expect(fake.callTool).toHaveBeenCalledWith(
+			{ name: "echo" },
+			{
+				allowInputRequired: false,
+				headers: { "x-request-id": "original" },
+				toolDefinition: {
+					name: "echo",
+					inputSchema: {
+						type: "object",
+						properties: { value: { type: "string" } },
+					},
+					outputSchema: {
+						type: "object",
+						properties: { echoed: { type: "boolean" } },
+					},
+				},
+			},
+		);
+		await runtime.close();
+	});
+
+	it("snapshots a generic request before asynchronous authorization", async () => {
+		let releaseAuthorization: (() => void) | undefined;
+		let reportAuthorization: (() => void) | undefined;
+		const authorizationGate = new Promise<void>((resolve) => {
+			releaseAuthorization = resolve;
+		});
+		const authorizationEntered = new Promise<void>((resolve) => {
+			reportAuthorization = resolve;
+		});
+		const fake = createFakeClient({ requestResults: [{ tools: [] }] });
+		const transformed: string[] = [];
+		const authorization = createMcpAuthorizationMiddleware<McpClientOperationInput, unknown>({
+			async authorize(operation) {
+				if (operation.input.method === "tools/list") {
+					reportAuthorization?.();
+					await authorizationGate;
+				}
+				return allowMcpOperation();
+			},
+		});
+		const runtime = new McpClientRuntime({
+			clientFactory: fixedClientFactory(fake.client),
+			transportFactory: fixedTransportFactory(createFakeTransport()),
+			servers: [server()],
+			middleware: [
+				defineMcpClientTransform("tools/list", async (_operation, next) => {
+					transformed.push("tools/list");
+					return next();
+				}),
+				defineMcpClientTransform("tools/call", async (_operation, next) => {
+					transformed.push("tools/call");
+					return next();
+				}),
+				authorization,
+			],
+		});
+		await runtime.connect("alpha");
+		const mutableRequest = { method: "tools/list" as const, params: {} };
+
+		const result = runtime.request("alpha", mutableRequest);
+		await authorizationEntered;
+		Reflect.set(mutableRequest, "method", "tools/call");
+		Reflect.set(mutableRequest, "params", { name: "mutated" });
+		releaseAuthorization?.();
+
+		await expect(result).resolves.toEqual({ tools: [] });
+		expect(transformed).toEqual(["tools/list"]);
+		expect(fake.request).toHaveBeenCalledWith({ method: "tools/list", params: {} }, undefined);
+		await runtime.close();
+	});
+
+	it("snapshots tool parameters before authorization and exact transforms", async () => {
+		let releaseAuthorization: (() => void) | undefined;
+		let reportAuthorization: (() => void) | undefined;
+		const authorizationGate = new Promise<void>((resolve) => {
+			releaseAuthorization = resolve;
+		});
+		const authorizationEntered = new Promise<void>((resolve) => {
+			reportAuthorization = resolve;
+		});
+		const fake = createFakeClient();
+		const authorization = createMcpAuthorizationMiddleware<McpClientOperationInput, unknown>({
+			async authorize(operation) {
+				if (operation.input.method === "tools/call") {
+					reportAuthorization?.();
+					await authorizationGate;
+				}
+				return allowMcpOperation();
+			},
+		});
+		const runtime = new McpClientRuntime({
+			clientFactory: fixedClientFactory(fake.client),
+			transportFactory: fixedTransportFactory(createFakeTransport()),
+			servers: [server()],
+			middleware: [
+				defineMcpClientTransform("tools/call", async (operation, next) => {
+					expect(operation.input.params).toEqual({
+						name: "safe-tool",
+						arguments: { tenant: "safe" },
+					});
+					expect(Object.isFrozen(operation.input.params)).toBe(true);
+					expect(Object.isFrozen(operation.input.params.arguments)).toBe(true);
+					return next();
+				}),
+				authorization,
+			],
+		});
+		await runtime.connect("alpha");
+		const mutableParams = {
+			name: "safe-tool",
+			arguments: { tenant: "safe" },
+		};
+
+		const result = runtime.callTool("alpha", mutableParams);
+		await authorizationEntered;
+		mutableParams.name = "mutated-tool";
+		mutableParams.arguments.tenant = "mutated";
+		releaseAuthorization?.();
+
+		await expect(result).resolves.toMatchObject({ content: [{ type: "text", text: "ok" }] });
+		expect(fake.callTool).toHaveBeenCalledWith(
+			{ name: "safe-tool", arguments: { tenant: "safe" } },
+			undefined,
+		);
+		await runtime.close();
+	});
+
+	it("freezes logging parameters before general and exact middleware", async () => {
+		const fake = createFakeClient();
+		const setLoggingLevel = vi.spyOn(fake.client, "setLoggingLevel");
+		const runtime = new McpClientRuntime({
+			clientFactory: fixedClientFactory(fake.client),
+			transportFactory: fixedTransportFactory(createFakeTransport()),
+			servers: [server()],
+			middleware: [
+				defineMcpClientTransform("logging/setLevel", async (operation, next) => {
+					expect(operation.input.params).toEqual({ level: "info" });
+					expect(Object.isFrozen(operation.input.params)).toBe(true);
+					return next();
+				}),
+				async (operation, next) => {
+					if (operation.input.method === "logging/setLevel") {
+						const params = operation.input.params;
+						expect(Object.isFrozen(params)).toBe(true);
+						if (typeof params === "object" && params !== null) {
+							expect(Reflect.set(params, "level", "error")).toBe(false);
+						}
+					}
+					return next();
+				},
+			],
+		});
+		await runtime.connect("alpha");
+
+		await expect(runtime.setLoggingLevel("alpha", "info")).resolves.toEqual({});
+
+		expect(setLoggingLevel).toHaveBeenCalledWith("info", undefined);
+		await runtime.close();
+	});
+
+	it("runs broad authorization and middleware before exact transforms regardless of list order", async () => {
+		const upstreamResult = {
+			content: [{ type: "text" as const, text: "upstream" }],
+		} satisfies CallToolResult;
+		const fake = createFakeClient({ callToolResult: upstreamResult });
+		const exactResults: CallToolResult[] = [];
+		let exactCalls = 0;
+		const exact = defineMcpClientTransform("tools/call", async (_operation, next) => {
+			exactCalls += 1;
+			const result = await next();
+			exactResults.push(result);
+			return result;
+		});
+		const authorization = createMcpAuthorizationMiddleware<McpClientOperationInput, unknown>({
+			authorize: (operation) =>
+				operation.input.method === "tools/call"
+					? denyMcpOperation("Denied by client policy.")
+					: allowMcpOperation(),
+		});
+		let rewrite = false;
+		const runtime = new McpClientRuntime({
+			clientFactory: fixedClientFactory(fake.client),
+			transportFactory: fixedTransportFactory(createFakeTransport()),
+			servers: [server()],
+			middleware: [
+				exact,
+				async (operation, next) => {
+					const result = await next();
+					return rewrite && operation.input.method === "tools/call" ? { tools: [] } : result;
+				},
+			],
+		});
+		await runtime.connect("alpha");
+
+		rewrite = true;
+		await expect(runtime.callTool("alpha", { name: "echo" })).resolves.toEqual({ tools: [] });
+		expect(exactResults).toEqual([upstreamResult]);
+
+		const deniedRuntime = new McpClientRuntime({
+			clientFactory: fixedClientFactory(fake.client),
+			transportFactory: fixedTransportFactory(createFakeTransport()),
+			servers: [server()],
+			middleware: [exact, authorization],
+		});
+		await deniedRuntime.connect("alpha");
+		await expect(deniedRuntime.callTool("alpha", { name: "blocked" })).rejects.toBeInstanceOf(
+			McpAuthorizationError,
+		);
+		expect(exactCalls).toBe(1);
+		expect(fake.callTool).toHaveBeenCalledTimes(1);
+		await runtime.close();
+		await deniedRuntime.close();
+	});
+
+	it("excludes custom-schema, input-required, and managed-listen profiles from exact transforms", async () => {
+		const fake = createFakeClient();
+		const transformed: string[] = [];
+		const runtime = new McpClientRuntime({
+			clientFactory: fixedClientFactory(fake.client),
+			transportFactory: fixedTransportFactory(createFakeTransport()),
+			servers: [server()],
+			middleware: [
+				defineMcpClientTransform("tools/call", async (_operation, next) => {
+					transformed.push("tools/call");
+					return next();
+				}),
+				defineMcpClientTransform("prompts/get", async (_operation, next) => {
+					transformed.push("prompts/get");
+					return next();
+				}),
+				defineMcpClientTransform("resources/read", async (_operation, next) => {
+					transformed.push("resources/read");
+					return next();
+				}),
+				defineMcpClientTransform("subscriptions/listen", async (_operation, next) => {
+					transformed.push("subscriptions/listen");
+					return next();
+				}),
+			],
+		});
+		await runtime.connect("alpha");
+
+		await runtime.requestWithSchema(
+			"alpha",
+			{ method: "tools/call", params: { name: "custom" } },
+			EMPTY_RESULT_SCHEMA,
+		);
+		await runtime.requestWithInputRequired(
+			"alpha",
+			{ method: "tools/call", params: { name: "manual" } },
+			EMPTY_RESULT_SCHEMA,
+		);
+		await runtime.callTool("alpha", { name: "manual" }, { allowInputRequired: true });
+		await runtime.request(
+			"alpha",
+			{ method: "tools/call", params: { name: "generic-manual" } },
+			{ allowInputRequired: true },
+		);
+		await runtime.getPrompt("alpha", { name: "manual" }, { allowInputRequired: true });
+		await runtime.readResource("alpha", { uri: "memory://manual" }, { allowInputRequired: true });
+		await runtime.listen("alpha", { toolsListChanged: true });
+		expect(transformed).toEqual([]);
+
+		await runtime.callTool("alpha", { name: "ordinary" });
+		await runtime.getPrompt("alpha", { name: "ordinary" });
+		expect(transformed).toEqual(["tools/call", "prompts/get"]);
+		await runtime.close();
+	});
+
+	it("observes transform-side aborts as cancellation and retains next-once enforcement", async () => {
+		const fake = createFakeClient();
+		const controller = new AbortController();
+		const abortReason = new DOMException("cancel transform", "AbortError");
+		const events: McpLifecycleEvent[] = [];
+		const runtime = new McpClientRuntime({
+			clientFactory: fixedClientFactory(fake.client),
+			transportFactory: fixedTransportFactory(createFakeTransport()),
+			servers: [server()],
+			middleware: [
+				defineMcpClientTransform("tools/list", async (_operation, next) => {
+					const result = await next();
+					controller.abort(abortReason);
+					return result;
+				}),
+				defineMcpClientTransform("ping", async (_operation, next) => {
+					await next();
+					return next();
+				}),
+			],
+			observer: {
+				onEvent(event) {
+					events.push(event);
+				},
+			},
+		});
+		await runtime.connect("alpha");
+		events.length = 0;
+
+		await expect(runtime.listTools("alpha", undefined, { signal: controller.signal })).rejects.toBe(
+			abortReason,
+		);
+		expect(events.map((event) => event.type)).toEqual(["operation.started", "operation.cancelled"]);
+		await expect(runtime.ping("alpha")).rejects.toBeInstanceOf(McpMiddlewareReentryError);
+		await runtime.close();
 	});
 
 	it("delegates completion, protocol, notification, logging, and legacy capability APIs", async () => {

@@ -10,7 +10,10 @@ export type { GatewayResourceTemplateUriCodecOptions } from "./gateway-resource-
 export { GatewayResourceUriCodec } from "./gateway-resource-uri-codec.ts";
 export type { GatewayResourceUriCodecOptions } from "./gateway-resource-uri-codec.ts";
 
-export { createMcpGatewayPassthroughMiddleware } from "./gateway-middleware.ts";
+export {
+	createMcpGatewayPassthroughMiddleware,
+	defineMcpGatewayTransform,
+} from "./gateway-middleware.ts";
 
 export { McpGatewayError } from "./mcp-gateway.errors.ts";
 export type { McpGatewayErrorCode } from "./mcp-gateway.errors.ts";
@@ -49,8 +52,11 @@ export type {
 	McpGatewayNameCodec,
 	McpGatewayOperationContext,
 	McpGatewayOperationInput,
+	McpGatewayOperationInputFor,
+	McpGatewayOperationKind,
 	McpGatewayOperationOutput,
 	McpGatewayOperationOutputFor,
+	McpGatewayOperationOutputForKind,
 	McpGatewayOperationOutputMap,
 	McpGatewayOptions,
 	McpGatewayPassthroughMiddleware,
@@ -61,6 +67,7 @@ export type {
 	McpGatewayPromptPolicy,
 	McpGatewayPromptPolicyInput,
 	McpGatewayPrincipal,
+	McpGatewayReadonly,
 	McpGatewayProjectedPrompt,
 	McpGatewayProjectedResource,
 	McpGatewayProjectedResourceTemplate,
@@ -77,5 +84,6 @@ export type {
 	McpGatewayResourceTemplateUriCodec,
 	McpGatewayResourceUriCodec,
 	McpGatewayToolClient,
+	McpGatewayTransform,
 	McpGatewayUpstream,
 } from "./mcp-gateway.types.ts";

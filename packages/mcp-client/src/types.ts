@@ -1,4 +1,6 @@
 import type {
+	CacheableRequestOptions,
+	CallToolRequestOptions,
 	Client,
 	ClientOptions,
 	ConnectOptions,
@@ -11,6 +13,7 @@ import type {
 	RequestMethod,
 	RequestOptions,
 	RequestTypeMap,
+	ResultTypeMap,
 	ServerCapabilities,
 	StandardSchemaV1,
 } from "@modelcontextprotocol/client";
@@ -35,6 +38,48 @@ export type McpClientProtocolRequest<Method extends RequestMethod = RequestMetho
 	Method extends RequestMethod
 		? { readonly method: Method } & Omit<RequestTypeMap[Method], "method">
 		: never;
+
+/** Official request methods eligible for operation-specific transforms. */
+export type McpClientRequestMethod = RequestMethod;
+
+/** Recursive readonly view for detached transform input while preserving live control objects. */
+export type McpClientReadonly<Value> = Value extends AbortSignal
+	? Value
+	: Value extends (...arguments_: never[]) => unknown
+		? Value
+		: Value extends readonly unknown[]
+			? { readonly [Index in keyof Value]: McpClientReadonly<Value[Index]> }
+			: Value extends object
+				? { readonly [Key in keyof Value]: McpClientReadonly<Value[Key]> }
+				: Value;
+
+type CompleteResultOptions<Options extends RequestOptions> = Omit<Options, "allowInputRequired"> & {
+	readonly allowInputRequired?: false | undefined;
+};
+
+/** Exact SDK option family associated with one transformable request method. */
+export type McpClientTransformOptions<Method extends McpClientRequestMethod> =
+	Method extends "tools/call"
+		? CompleteResultOptions<CallToolRequestOptions>
+		: Method extends "resources/read"
+			? CompleteResultOptions<CacheableRequestOptions>
+			: Method extends "prompts/get"
+				? CompleteResultOptions<RequestOptions>
+				: Method extends
+							"tools/list" | "prompts/list" | "resources/list" | "resources/templates/list"
+					? CacheableRequestOptions
+					: RequestOptions;
+
+/** Exact middleware input for one official request method. */
+export type McpClientTransformInput<Method extends McpClientRequestMethod> = McpClientReadonly<
+	{
+		readonly serverName: string;
+		readonly options?: McpClientTransformOptions<Method>;
+	} & McpClientProtocolRequest<Method>
+>;
+
+/** Exact official result for one request method. */
+export type McpClientTransformResult<Method extends McpClientRequestMethod> = ResultTypeMap[Method];
 
 /** Modern methods whose results may request another client-input round. */
 export type McpClientMrtrMethod = "prompts/get" | "resources/read" | "tools/call";
@@ -124,6 +169,16 @@ export type McpClientOperationContext<Principal = unknown> = McpOperationContext
 export type McpClientMiddleware<Principal = unknown> = McpOperationMiddleware<
 	McpClientOperationInput,
 	unknown,
+	McpClientOperationContext<Principal>
+>;
+
+/** Transforming middleware scoped to one exact official request/result pair. */
+export type McpClientTransform<
+	Method extends McpClientRequestMethod,
+	Principal = unknown,
+> = McpOperationMiddleware<
+	McpClientTransformInput<Method>,
+	McpClientTransformResult<Method>,
 	McpClientOperationContext<Principal>
 >;
 

@@ -110,6 +110,13 @@ A Nest server's optional `gateway` definition resolves short upstream names agai
 
 Each configured Nest server can define `handlerAuthorization`, `handlerMiddleware`, and `handlerLifecycleObserver`. The official SDK first validates arguments and resolves the registered callback. NestM then builds a handler operation from the trusted callback definition and official server context, runs lifecycle observation, enforces mandatory authorization, runs custom middleware, and finally invokes the provider method. This per-handler pipeline is shared by HTTP and stdio.
 
+Catalog exposure is a projection of that same per-request build, not a second registry. After the
+complete visibility wave succeeds, eager, search, or lazy exposure is resolved against one frozen
+safe view of the tools visible to that caller. Lazy catalog meta-tools close over only that local
+view; they never query the live registry, raw request authentication, or another concurrent build.
+All visible tools remain registered through the ordinary callback path, so choosing deferred
+discovery does not weaken invocation authorization.
+
 `McpServerDefinition.middleware` is deliberately a different seam: it wraps a complete HTTP exchange before the official handler and therefore does not run for stdio. Use it for exchange-level concerns; use the Nest handler pipeline for tool/resource/prompt authorization and observation.
 
 ## Modern per-request serving
@@ -187,6 +194,14 @@ NestM intentionally exposes more than one layer:
 4. **Nest handler middleware** runs after official request validation and routing, around decorated tool/resource/prompt callbacks on HTTP and stdio. Mandatory `handlerAuthorization` remains ahead of custom handler middleware.
 5. **Framework middleware/adapters** mount the web-standard server handler into Node, Express, Fastify, or another host. They should authenticate and normalize the request before MCP dispatch.
 6. **Nest interceptors and guards** remain application concerns and should not be assumed to run for a separately mounted raw Node handler unless the host explicitly routes through Nest's request pipeline.
+
+Operation-specific client and gateway transform helpers are typed adapters over layer 1. They do
+not create another execution path: cancellation, deadlines, one-shot continuations, and lifecycle
+observation remain owned by the existing chain. Gateway authorization is inserted before user
+middleware, so a transform cannot short-circuit a protected invocation before policy runs. The
+client runtime places exact transforms downstream of all general middleware, so configured client
+authorization middleware also runs before an exact transform regardless of their relative options
+order. General client middleware remains caller-ordered within its own group.
 
 Do not place a logical authorization policy only in fetch middleware: stdio and in-memory transports would bypass it. Do not place attempt-level retry metrics only in logical middleware: one operation may produce several network attempts.
 

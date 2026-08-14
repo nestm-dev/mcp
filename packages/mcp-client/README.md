@@ -239,6 +239,11 @@ The manual option type is deliberately limited to official `RequestOptions` and 
 request primitive; tool-specific SEP-2243 header mirroring and output-schema conveniences belong to
 the SDK's `callTool()` path and are not silently approximated here.
 
+The method-keyed `request()` and high-level `callTool()`, `getPrompt()`, and `readResource()`
+helpers likewise expose `InputRequiredResult` in their return type for an MRTR-capable method when
+`allowInputRequired: true` is explicit. With the default or an explicit `false`, their
+complete-result type remains narrow.
+
 ## Completion and protocol extensions
 
 Completion, ping, and all official method-keyed requests pass through the same runtime middleware
@@ -317,7 +322,11 @@ Lifecycle events intentionally contain context and timing, not MCP request or re
 
 ```ts
 import { createMcpAuthorizationMiddleware, type McpLifecycleObserver } from "@nestm/mcp-core";
-import { McpClientRuntime, createMcpClientPassthroughMiddleware } from "@nestm/mcp-client";
+import {
+	McpClientRuntime,
+	createMcpClientPassthroughMiddleware,
+	defineMcpClientTransform,
+} from "@nestm/mcp-client";
 
 const observer: McpLifecycleObserver = {
 	onEvent(event) {
@@ -336,6 +345,10 @@ const runtime = new McpClientRuntime({
 			await next();
 			metrics.finished(operation.input.method);
 		}),
+		defineMcpClientTransform("tools/call", async (operation, next) => {
+			const result = await next(); // CallToolResult, without a cast
+			return { ...result, _meta: { ...result._meta, auditedTool: operation.input.params.name } };
+		}),
 	],
 	observer,
 });
@@ -348,8 +361,24 @@ operation result.
 
 `createMcpClientPassthroughMiddleware` is the safer default for non-transforming concerns. Its
 callback cannot inspect or replace the method-specific result; the runtime returns the exact value
-produced downstream. Use the broader `McpClientMiddleware` contract only when deliberate result
-transformation or successful short-circuiting is required.
+produced downstream. `defineMcpClientTransform(method, transform)` is the deliberate transforming
+path: its callback receives only that official method's request and `ResultTypeMap` result.
+
+The runtime dispatches this helper only for operations whose public result is exactly the ordinary
+official result. Custom-schema requests, manual MRTR/input-required calls, MRTR-capable calls with
+`allowInputRequired: true`, and the runtime-managed high-level `listen()` handle are excluded even
+when their method string matches. Request options are snapshotted and frozen before dispatch while
+callback, signal, and deadline values retain their identities; a supplied tool definition is
+detached and deeply frozen. Official requests and params are likewise detached and deeply frozen.
+The policy, transform, and SDK terminal therefore observe the same method, arguments, and
+result-affecting controls even if a caller later mutates its objects. Abort checks also surround
+the transform, lifecycle observation stays outside it, and the shared `next()` continuation
+remains callable once.
+
+The runtime places exact transforms downstream of all general middleware, preserving relative
+order within each group. A configured authorization middleware therefore always runs before an
+exact transform, even if the transform appears first in the options array, and an exact `next()`
+cannot receive an unrelated result returned by general middleware.
 
 ## Discovery and prior verdicts
 

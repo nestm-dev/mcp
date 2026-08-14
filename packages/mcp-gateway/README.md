@@ -140,7 +140,11 @@ The default authorization-context resolver hashes every available identity dimen
 Gateway middleware wraps upstream discovery and execution. Execution policy is enforced before middleware can reach upstream work. Lifecycle events contain bounded projected names and errors but omit arguments, completion values, raw URI templates, and results.
 
 ```ts
-import { createMcpGateway, createMcpGatewayPassthroughMiddleware } from "@nestm/mcp-gateway";
+import {
+	createMcpGateway,
+	createMcpGatewayPassthroughMiddleware,
+	defineMcpGatewayTransform,
+} from "@nestm/mcp-gateway";
 
 const tracePropagationMiddleware = createMcpGatewayPassthroughMiddleware(
 	async (operation, next) => {
@@ -150,10 +154,18 @@ const tracePropagationMiddleware = createMcpGatewayPassthroughMiddleware(
 	},
 );
 
+const invocationTransform = defineMcpGatewayTransform(
+	"gateway.invocation",
+	async (operation, next) => {
+		const result = await next(); // CallToolResult, without a union or cast
+		return { ...result, _meta: { ...result._meta, routedTool: operation.input.toolName } };
+	},
+);
+
 const gateway = createMcpGateway({
 	upstreams,
 	policy,
-	middleware: [tracePropagationMiddleware, concurrencyLimitMiddleware],
+	middleware: [tracePropagationMiddleware, concurrencyLimitMiddleware, invocationTransform],
 	lifecycleObserver: {
 		onEvent(event) {
 			telemetry.record(event);
@@ -167,6 +179,16 @@ concerns that must preserve the exact downstream result. Its callback sees `next
 `Promise<void>`, so a discovery snapshot cannot be accidentally returned from an invocation (or
 vice versa). For deliberately transforming middleware, `McpGatewayOperationOutputMap` and
 `McpGatewayOperationOutputFor<Input>` expose the discriminator-to-result relationship.
+`defineMcpGatewayTransform(kind, transform)` applies that relationship directly, so the callback
+receives only the selected input and result. Exact transforms are placed downstream of general
+middleware, preserving relative order within each group, so their typed `next()` cannot receive a
+different operation's result from a legacy broad transform. Mandatory
+invocation/prompt/resource authorization remains outermost and therefore runs before every user
+transform, including one that short-circuits without calling `next()`. Abort checks surround each
+transform, lifecycle observation remains outside the secured chain, and the shared continuation
+retains next-once enforcement. Official fields returned by a transform, including
+`structuredContent` and `_meta`, are retained. The existing trust boundary still strips opaque
+upstream `_meta` before a result reaches a transform.
 
 ## Naming
 

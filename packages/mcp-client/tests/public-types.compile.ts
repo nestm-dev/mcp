@@ -1,10 +1,14 @@
 import type {
 	CallToolResult,
+	GetPromptResult,
 	InputRequiredResult,
 	McpClientProtocolRequest,
 	McpClientRuntime,
+	McpClientTransformOptions,
+	ReadResourceResult,
 } from "../src/index.ts";
 import { createMcpClientPassthroughMiddleware } from "../src/index.ts";
+import { defineMcpClientTransform } from "../src/index.ts";
 
 type IsAssignable<Source, Target> = [Source] extends [Target] ? true : false;
 type AssertFalse<Value extends false> = Value;
@@ -32,6 +36,21 @@ const manualToolResult = runtime.callTool(
 	{ name: "echo" },
 	{ allowInputRequired: true },
 );
+const manualPromptResult = runtime.getPrompt(
+	"upstream",
+	{ name: "review" },
+	{ allowInputRequired: true },
+);
+const manualResourceResult = runtime.readResource(
+	"upstream",
+	{ uri: "docs://guide" },
+	{ allowInputRequired: true },
+);
+const manualGenericToolResult = runtime.request(
+	"upstream",
+	{ method: "tools/call", params: { name: "echo" } },
+	{ allowInputRequired: true },
+);
 
 /** Proves normal tool calls retain the official complete-result contract. */
 export type CallToolCompleteResult = AssertFalse<
@@ -42,6 +61,26 @@ export type CallToolCompleteResult = AssertFalse<
 export type CallToolManualResult = AssertFalse<
 	IsAssignable<
 		Awaited<typeof manualToolResult>,
+		Exclude<CallToolResult | InputRequiredResult, InputRequiredResult>
+	>
+>;
+
+/** Proves every MRTR-capable high-level helper exposes an explicit continuation. */
+export type PromptManualResult = AssertFalse<
+	IsAssignable<
+		Awaited<typeof manualPromptResult>,
+		Exclude<GetPromptResult | InputRequiredResult, InputRequiredResult>
+	>
+>;
+export type ResourceManualResult = AssertFalse<
+	IsAssignable<
+		Awaited<typeof manualResourceResult>,
+		Exclude<ReadResourceResult | InputRequiredResult, InputRequiredResult>
+	>
+>;
+export type GenericManualToolResult = AssertFalse<
+	IsAssignable<
+		Awaited<typeof manualGenericToolResult>,
 		Exclude<CallToolResult | InputRequiredResult, InputRequiredResult>
 	>
 >;
@@ -60,3 +99,46 @@ createMcpClientPassthroughMiddleware(async (_operation, next) => {
 
 // @ts-expect-error Passthrough middleware cannot replace a method-specific client result.
 createMcpClientPassthroughMiddleware(async () => ({ tools: [] }));
+
+defineMcpClientTransform("tools/call", async (operation, next) => {
+	const toolName: string = operation.input.params.name;
+	const toolDefinition = operation.input.options?.toolDefinition;
+	// @ts-expect-error Detached transform params are deeply readonly.
+	operation.input.params.name = "mutated";
+	if (operation.input.options !== undefined) {
+		// @ts-expect-error Transform request options are readonly.
+		operation.input.options.timeout = 1;
+	}
+	if (toolDefinition?.inputSchema !== undefined) {
+		// @ts-expect-error Detached tool definitions are deeply readonly.
+		toolDefinition.inputSchema.type = "string";
+	}
+	const result: CallToolResult = await next();
+	void toolName;
+	void toolDefinition?.outputSchema;
+	void result.content;
+	void result.structuredContent;
+	void result["_meta"];
+	return result;
+});
+
+defineMcpClientTransform("tools/call", async (operation, next) => {
+	// @ts-expect-error tools/call input has params.name, not resources/read params.uri.
+	void operation.input.params.uri;
+	return next();
+});
+
+// @ts-expect-error A tools/list result cannot replace a tools/call result.
+defineMcpClientTransform("tools/call", async () => ({ tools: [] }));
+
+declare const dynamicClientMethod: "tools/call" | "tools/list";
+
+// @ts-expect-error A union-valued runtime method cannot preserve one exact input/result correlation.
+defineMcpClientTransform(dynamicClientMethod, async (_operation, next) => next());
+
+const invalidExactOptions: McpClientTransformOptions<"tools/call"> = {
+	// @ts-expect-error Exact-result tool transforms exclude manual input-required mode.
+	allowInputRequired: true,
+};
+
+void invalidExactOptions;
