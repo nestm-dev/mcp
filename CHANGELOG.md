@@ -19,6 +19,10 @@ All notable changes to this project will be documented in this file. The format 
 - Architecture, security/OAuth, observability, contribution, and repository security documentation.
 - Node 22/24 CI for checks, tests, builds, and package publication validation.
 
+### Changed
+
+- Renamed Nest capability decorators to `Tool`, `Prompt`, `Resource`, and `Targets`, with matching unprefixed option and decorator types. Module and runtime names remain MCP-qualified.
+
 ### Planned
 
 - Vendor-specific OpenTelemetry bindings, distributed event-bus and cache implementations, persistent OAuth token stores, token exchange, and external policy-engine adapters.

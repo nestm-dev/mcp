@@ -18,7 +18,7 @@ import {
 	McpModule,
 	McpRuntimeService,
 	McpServerRuntime,
-	McpTool,
+	Tool,
 	acceptedContent,
 	allowAllMcpGatewayPolicy,
 	inputRequired,
@@ -48,7 +48,7 @@ class McpRuntimeConsumer {
 class FeatureImportedToolsProvider {
 	constructor(@Inject(MCP_TEST_CONFIGURATION) private readonly configuration: string) {}
 
-	@McpTool({ name: "feature.imported", servers: "feature-imports" })
+	@Tool({ name: "feature.imported", servers: "feature-imports" })
 	readConfiguration() {
 		return { content: [{ type: "text" as const, text: this.configuration }] };
 	}
@@ -59,7 +59,7 @@ class McpSiblingConsumerModule {}
 
 @Injectable()
 class ToolsProvider {
-	@McpTool({
+	@Tool({
 		name: "greet",
 		servers: "artifact",
 		description: "Greet an agent",
@@ -76,7 +76,7 @@ class ToolsProvider {
 
 @Injectable({ scope: Scope.REQUEST })
 class RequestScopedToolsProvider {
-	@McpTool({ name: "unsafe.request-scoped" })
+	@Tool({ name: "unsafe.request-scoped" })
 	call() {
 		return { content: [{ type: "text" as const, text: "unsafe" }] };
 	}
@@ -90,7 +90,7 @@ const confirmationSchema = fromJsonSchema<{ confirm: boolean }>({
 
 @Injectable()
 class InteractiveToolsProvider {
-	@McpTool({
+	@Tool({
 		name: "publish",
 		servers: "interactive",
 		inputSchema: fromJsonSchema<Record<string, never>>({

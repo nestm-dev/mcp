@@ -2,7 +2,7 @@ import { Injectable, Scope } from "@nestjs/common";
 import { DiscoveryService, MetadataScanner, Reflector } from "@nestjs/core";
 import { McpModuleError } from "../mcp.errors.ts";
 import { MCP_HANDLER_METADATA, MCP_TARGETS_METADATA } from "../mcp.tokens.ts";
-import type { McpHandlerDefinition } from "../decorators/mcp-handler.decorators.ts";
+import type { HandlerDefinition } from "../decorators/mcp-handler.decorators.ts";
 import { McpHandlerRegistry } from "./mcp-handler.registry.ts";
 
 @Injectable()
@@ -27,7 +27,7 @@ export class McpHandlerExplorer {
 			for (const methodName of this.metadataScanner.getAllMethodNames(metatype.prototype)) {
 				const prototypeMethod: unknown = metatype.prototype[methodName];
 				if (typeof prototypeMethod !== "function") continue;
-				const definition = this.reflector.get<McpHandlerDefinition>(
+				const definition = this.reflector.get<HandlerDefinition>(
 					MCP_HANDLER_METADATA,
 					prototypeMethod,
 				);
@@ -67,9 +67,9 @@ export class McpHandlerExplorer {
 }
 
 function withDefaultTargets(
-	definition: McpHandlerDefinition,
+	definition: HandlerDefinition,
 	classTargets: readonly string[] | undefined,
-): McpHandlerDefinition {
+): HandlerDefinition {
 	if (definition.options.servers !== undefined || classTargets === undefined) return definition;
 	if (definition.kind === "tool") {
 		return Object.freeze({

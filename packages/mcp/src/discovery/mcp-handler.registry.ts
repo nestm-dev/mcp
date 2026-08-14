@@ -37,10 +37,10 @@ import type {
 	McpHandlerOperationContext,
 } from "../mcp.types.ts";
 import type {
-	McpHandlerDefinition,
-	McpPromptOptions,
-	McpResourceOptions,
-	McpToolOptions,
+	HandlerDefinition,
+	PromptOptions,
+	ResourceOptions,
+	ToolOptions,
 } from "../decorators/mcp-handler.decorators.ts";
 
 const DEFAULT_VISIBILITY_TIMEOUT_MS = 30_000;
@@ -50,7 +50,7 @@ export type McpDiscoveredHandler = (
 ) => MaybePromise<McpHandlerInvocationOutput>;
 
 export interface McpRegisteredHandler {
-	readonly definition: McpHandlerDefinition;
+	readonly definition: HandlerDefinition;
 	readonly source: string;
 }
 
@@ -78,13 +78,13 @@ export class McpHandlerRegistry {
 	constructor(private readonly moduleRef: ModuleRef) {}
 
 	/** Adds one discovered handler. Prefer the typed capability methods for live registration. */
-	register(definition: McpHandlerDefinition, handler: McpDiscoveredHandler, source: string): void {
+	register(definition: HandlerDefinition, handler: McpDiscoveredHandler, source: string): void {
 		this.#append(definition, handler, source, this.#serverNames !== undefined);
 	}
 
 	/** Atomically installs a live tool for future per-request server builds. */
 	registerTool<const InputSchema extends StandardSchemaWithJSON | undefined = undefined>(
-		options: McpToolOptions<InputSchema>,
+		options: ToolOptions<InputSchema>,
 		handler: ToolCallback<InputSchema>,
 		source = `dynamic tool "${options.name}"`,
 	): McpDynamicHandlerRegistration<ToolCallback<InputSchema>> {
@@ -95,7 +95,7 @@ export class McpHandlerRegistry {
 
 	/** Atomically installs a live prompt for future per-request server builds. */
 	registerPrompt<const ArgsSchema extends StandardSchemaWithJSON | undefined = undefined>(
-		options: McpPromptOptions<ArgsSchema>,
+		options: PromptOptions<ArgsSchema>,
 		handler: PromptCallback<ArgsSchema>,
 		source = `dynamic prompt "${options.name}"`,
 	): McpDynamicHandlerRegistration<PromptCallback<ArgsSchema>> {
@@ -109,7 +109,7 @@ export class McpHandlerRegistry {
 
 	/** Atomically installs a fixed or templated resource for future server builds. */
 	registerResource<const Uri extends string | ResourceTemplate>(
-		options: McpResourceOptions<Uri>,
+		options: ResourceOptions<Uri>,
 		handler: Uri extends string ? ReadResourceCallback : ReadResourceTemplateCallback,
 		source = `dynamic resource "${options.name}"`,
 	): McpDynamicHandlerRegistration<
@@ -194,7 +194,7 @@ export class McpHandlerRegistry {
 	}
 
 	#append(
-		definition: McpHandlerDefinition,
+		definition: HandlerDefinition,
 		handler: McpDiscoveredHandler,
 		source: string,
 		notify: boolean,
@@ -216,7 +216,7 @@ export class McpHandlerRegistry {
 	}
 
 	#registerDynamic<Handler>(
-		definition: McpHandlerDefinition,
+		definition: HandlerDefinition,
 		handler: McpDiscoveredHandler,
 		source: string,
 		eraseReplacement: (handler: Handler) => McpDiscoveredHandler,
@@ -268,7 +268,7 @@ export class McpHandlerRegistry {
 	}
 
 	#resolveVisibility(
-		definition: McpHandlerDefinition,
+		definition: HandlerDefinition,
 		source: string,
 	): boolean | McpCapabilityVisibilityPolicy | undefined {
 		const visibility = definition.options.visibility;
@@ -297,7 +297,7 @@ export class McpHandlerRegistry {
 		}
 	}
 
-	#assertKnownTargets(definition: McpHandlerDefinition, source: string): void {
+	#assertKnownTargets(definition: HandlerDefinition, source: string): void {
 		if (this.#serverNames === undefined) return;
 		for (const target of explicitTargets(definition.options.servers)) {
 			if (!this.#serverNames.includes(target)) {
@@ -334,7 +334,7 @@ export class McpHandlerRegistry {
 		}
 	}
 
-	#effectiveTargets(definition: McpHandlerDefinition): readonly string[] {
+	#effectiveTargets(definition: HandlerDefinition): readonly string[] {
 		return definition.options.servers === undefined
 			? (this.#serverNames ?? [])
 			: explicitTargets(definition.options.servers);
@@ -497,14 +497,14 @@ function targetsRuntime(
 	);
 }
 
-function registrationKey(definition: McpHandlerDefinition): string {
+function registrationKey(definition: HandlerDefinition): string {
 	if (definition.kind === "resource" && typeof definition.options.uri === "string") {
 		return `${definition.kind}:${definition.options.uri}`;
 	}
 	return `${definition.kind}:${definition.options.name}`;
 }
 
-function freezeDefinition(definition: McpHandlerDefinition): McpHandlerDefinition {
+function freezeDefinition(definition: HandlerDefinition): HandlerDefinition {
 	if (typeof definition.options.name !== "string" || definition.options.name.trim().length === 0) {
 		throw new McpModuleError(
 			"INVALID_HANDLER",

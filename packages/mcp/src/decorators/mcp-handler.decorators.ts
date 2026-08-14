@@ -14,16 +14,16 @@ import type {
 import type { McpCapabilityVisibility } from "../mcp-capability.types.ts";
 import { MCP_HANDLER_METADATA, MCP_TARGETS_METADATA } from "../mcp.tokens.ts";
 
-interface McpHandlerTarget {
+interface HandlerTarget {
 	/** Runtime names receiving this handler. Omit for every configured server. */
 	readonly servers?: string | readonly string[];
 	/** Discovery visibility. Invocation authorization remains independently mandatory. */
 	readonly visibility?: McpCapabilityVisibility;
 }
 
-export interface McpToolOptions<
+export interface ToolOptions<
 	InputSchema extends StandardSchemaWithJSON | undefined = StandardSchemaWithJSON | undefined,
-> extends McpHandlerTarget {
+> extends HandlerTarget {
 	readonly name: string;
 	readonly title?: string;
 	readonly description?: string;
@@ -34,9 +34,9 @@ export interface McpToolOptions<
 	readonly _meta?: Record<string, unknown>;
 }
 
-export interface McpResourceOptions<
+export interface ResourceOptions<
 	Uri extends string | ResourceTemplate = string | ResourceTemplate,
-> extends McpHandlerTarget {
+> extends HandlerTarget {
 	readonly name: string;
 	readonly uri: Uri;
 	readonly title?: string;
@@ -49,9 +49,9 @@ export interface McpResourceOptions<
 	readonly cacheHint?: CacheHint;
 }
 
-export interface McpPromptOptions<
+export interface PromptOptions<
 	ArgsSchema extends StandardSchemaWithJSON | undefined = StandardSchemaWithJSON | undefined,
-> extends McpHandlerTarget {
+> extends HandlerTarget {
 	readonly name: string;
 	readonly title?: string;
 	readonly description?: string;
@@ -60,86 +60,87 @@ export interface McpPromptOptions<
 	readonly _meta?: Record<string, unknown>;
 }
 
-export interface McpToolHandlerDefinition {
+export interface ToolHandlerDefinition {
 	readonly kind: "tool";
-	readonly options: McpToolOptions;
+	readonly options: ToolOptions;
 }
 
-export interface McpResourceHandlerDefinition {
+export interface ResourceHandlerDefinition {
 	readonly kind: "resource";
-	readonly options: McpResourceOptions;
+	readonly options: ResourceOptions;
 }
 
-export interface McpPromptHandlerDefinition {
+export interface PromptHandlerDefinition {
 	readonly kind: "prompt";
-	readonly options: McpPromptOptions;
+	readonly options: PromptOptions;
 }
 
-export type McpHandlerDefinition =
-	McpToolHandlerDefinition | McpResourceHandlerDefinition | McpPromptHandlerDefinition;
+export type HandlerDefinition =
+	ToolHandlerDefinition | ResourceHandlerDefinition | PromptHandlerDefinition;
 
 /** Legacy-decorator signature that checks the decorated method without replacing it. */
-export type McpTypedMethodDecorator<ExpectedHandler> = <Handler extends ExpectedHandler>(
+export type TypedMethodDecorator<ExpectedHandler> = <Handler extends ExpectedHandler>(
 	target: object,
 	propertyKey: string | symbol,
 	descriptor: TypedPropertyDescriptor<Handler>,
 ) => void;
 
-export type McpToolMethodDecorator<InputSchema extends StandardSchemaWithJSON | undefined> =
-	McpTypedMethodDecorator<ToolCallback<InputSchema>>;
+export type ToolMethodDecorator<InputSchema extends StandardSchemaWithJSON | undefined> =
+	TypedMethodDecorator<ToolCallback<InputSchema>>;
 
-export type McpPromptMethodDecorator<ArgsSchema extends StandardSchemaWithJSON | undefined> =
-	McpTypedMethodDecorator<PromptCallback<ArgsSchema>>;
+export type PromptMethodDecorator<ArgsSchema extends StandardSchemaWithJSON | undefined> =
+	TypedMethodDecorator<PromptCallback<ArgsSchema>>;
 
-export type McpResourceMethodDecorator<Uri extends string | ResourceTemplate> =
-	McpTypedMethodDecorator<Uri extends string ? ReadResourceCallback : ReadResourceTemplateCallback>;
+export type ResourceMethodDecorator<Uri extends string | ResourceTemplate> = TypedMethodDecorator<
+	Uri extends string ? ReadResourceCallback : ReadResourceTemplateCallback
+>;
 
-export function McpTool<const InputSchema extends StandardSchemaWithJSON | undefined = undefined>(
-	options: McpToolOptions<InputSchema>,
-): McpToolMethodDecorator<InputSchema> {
+export function Tool<const InputSchema extends StandardSchemaWithJSON | undefined = undefined>(
+	options: ToolOptions<InputSchema>,
+): ToolMethodDecorator<InputSchema> {
 	return typedMetadataDecorator(freezeToolDefinition(options));
 }
 
-export function McpResource<const Uri extends string | ResourceTemplate>(
-	options: McpResourceOptions<Uri>,
-): McpResourceMethodDecorator<Uri> {
+export function Resource<const Uri extends string | ResourceTemplate>(
+	options: ResourceOptions<Uri>,
+): ResourceMethodDecorator<Uri> {
 	return typedMetadataDecorator(freezeResourceDefinition(options));
 }
 
-export function McpPrompt<const ArgsSchema extends StandardSchemaWithJSON | undefined = undefined>(
-	options: McpPromptOptions<ArgsSchema>,
-): McpPromptMethodDecorator<ArgsSchema> {
+export function Prompt<const ArgsSchema extends StandardSchemaWithJSON | undefined = undefined>(
+	options: PromptOptions<ArgsSchema>,
+): PromptMethodDecorator<ArgsSchema> {
 	return typedMetadataDecorator(freezePromptDefinition(options));
 }
 
 /** Supplies a default server target for every MCP handler declared by a provider class. */
-export function McpTargets(...serverNames: readonly [string, ...string[]]): ClassDecorator {
+export function Targets(...serverNames: readonly [string, ...string[]]): ClassDecorator {
 	const normalized = normalizeTargets(serverNames);
 	return SetMetadata(MCP_TARGETS_METADATA, normalized);
 }
 
 function typedMetadataDecorator<Handler>(
-	definition: McpHandlerDefinition,
-): McpTypedMethodDecorator<Handler> {
+	definition: HandlerDefinition,
+): TypedMethodDecorator<Handler> {
 	const decorator = SetMetadata(MCP_HANDLER_METADATA, definition);
 	return (target, propertyKey, descriptor) => {
 		decorator(target, propertyKey, descriptor);
 	};
 }
 
-function freezeToolDefinition(options: McpToolOptions): McpToolHandlerDefinition {
+function freezeToolDefinition(options: ToolOptions): ToolHandlerDefinition {
 	return Object.freeze({ kind: "tool", options: freezeOptions(options) });
 }
 
-function freezeResourceDefinition(options: McpResourceOptions): McpResourceHandlerDefinition {
+function freezeResourceDefinition(options: ResourceOptions): ResourceHandlerDefinition {
 	return Object.freeze({ kind: "resource", options: freezeOptions(options) });
 }
 
-function freezePromptDefinition(options: McpPromptOptions): McpPromptHandlerDefinition {
+function freezePromptDefinition(options: PromptOptions): PromptHandlerDefinition {
 	return Object.freeze({ kind: "prompt", options: freezeOptions(options) });
 }
 
-function freezeOptions<Options extends McpHandlerTarget>(options: Options): Options {
+function freezeOptions<Options extends HandlerTarget>(options: Options): Options {
 	const servers = options.servers;
 	const normalizedServers =
 		servers === undefined

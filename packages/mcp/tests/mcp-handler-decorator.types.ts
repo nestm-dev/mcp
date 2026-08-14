@@ -1,24 +1,51 @@
 import { fromJsonSchema } from "@nestm/mcp-server";
-import {
-	McpPrompt,
-	McpResource,
-	McpTool,
-	createMcpHandlerPassthroughMiddleware,
-} from "../src/index.ts";
+import { Prompt, Resource, Tool, createMcpHandlerPassthroughMiddleware } from "../src/index.ts";
 import type {
+	HandlerDefinition,
 	McpHandlerInvocationInput,
 	McpHandlerInvocationOutputFor,
+	PromptHandlerDefinition,
+	PromptMethodDecorator,
+	PromptOptions,
 	ReadResourceResult,
+	ResourceHandlerDefinition,
+	ResourceMethodDecorator,
+	ResourceOptions,
+	ToolHandlerDefinition,
+	ToolMethodDecorator,
+	ToolOptions,
+	TypedMethodDecorator,
 } from "../src/index.ts";
 
 type IsAssignable<Source, Target> = [Source] extends [Target] ? true : false;
 type AssertFalse<Value extends false> = Value;
 type ToolInvocation = McpHandlerInvocationInput & { readonly kind: "tool" };
+type PublicRuntimeApi = typeof import("../src/index.ts");
 
 /** Proves a resource result cannot cross a tool invocation discriminator. */
 export type ToolInvocationRejectsResourceResult = AssertFalse<
 	IsAssignable<ReadResourceResult, McpHandlerInvocationOutputFor<ToolInvocation>>
 >;
+
+/** Proves the unprefixed capability decorator types are exported by the public barrel. */
+export type CapabilityDecoratorApi = {
+	readonly options: ToolOptions | PromptOptions | ResourceOptions;
+	readonly definition:
+		HandlerDefinition | ToolHandlerDefinition | PromptHandlerDefinition | ResourceHandlerDefinition;
+	readonly method:
+		| ToolMethodDecorator<undefined>
+		| PromptMethodDecorator<undefined>
+		| ResourceMethodDecorator<string>
+		| TypedMethodDecorator<(...arguments_: unknown[]) => unknown>;
+};
+
+/** Prevents the removed prefixed decorator values from returning to the public API. */
+export type LegacyCapabilityDecoratorNamesAreAbsent = [
+	AssertFalse<"McpTool" extends keyof PublicRuntimeApi ? true : false>,
+	AssertFalse<"McpPrompt" extends keyof PublicRuntimeApi ? true : false>,
+	AssertFalse<"McpResource" extends keyof PublicRuntimeApi ? true : false>,
+	AssertFalse<"McpTargets" extends keyof PublicRuntimeApi ? true : false>,
+];
 
 createMcpHandlerPassthroughMiddleware(async (_operation, next) => {
 	await next();
@@ -34,19 +61,19 @@ const inputSchema = fromJsonSchema<{ name: string }>({
 });
 
 class ValidDecoratedHandlers {
-	@McpTool({ name: "greet", inputSchema })
+	@Tool({ name: "greet", inputSchema })
 	greet({ name }: { name: string }) {
 		return { content: [{ type: "text" as const, text: name }] };
 	}
 
-	@McpPrompt({ name: "summarize", argsSchema: inputSchema })
+	@Prompt({ name: "summarize", argsSchema: inputSchema })
 	summarize({ name }: { name: string }) {
 		return {
 			messages: [{ role: "user" as const, content: { type: "text" as const, text: name } }],
 		};
 	}
 
-	@McpResource({ name: "guide", uri: "docs://guide" })
+	@Resource({ name: "guide", uri: "docs://guide" })
 	guide(uri: URL) {
 		return { contents: [{ uri: uri.href, text: "guide" }] };
 	}
@@ -54,7 +81,7 @@ class ValidDecoratedHandlers {
 
 class InvalidDecoratedHandlers {
 	// @ts-expect-error The schema requires a string-valued name argument.
-	@McpTool({ name: "invalid", inputSchema })
+	@Tool({ name: "invalid", inputSchema })
 	invalid({ name }: { name: number }) {
 		return { content: [{ type: "text" as const, text: String(name) }] };
 	}

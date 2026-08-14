@@ -4,11 +4,11 @@ NestJS 12 integration for the official Model Context Protocol TypeScript SDK v2.
 
 ```ts
 import { Injectable, Module } from "@nestjs/common";
-import { McpModule, McpTool, fromJsonSchema } from "@nestm/mcp";
+import { McpModule, Tool, fromJsonSchema } from "@nestm/mcp";
 
 @Injectable()
 class ArtifactTools {
-	@McpTool({
+	@Tool({
 		name: "artifact.read",
 		inputSchema: fromJsonSchema<{ id: string }>({
 			type: "object",
@@ -65,8 +65,8 @@ inbound server handlers before upstream clients during Nest shutdown. For Nest-n
 guards, interceptors, prefixes, and versioning, prefer `McpHttpControllerFor()` below.
 
 Decorated singleton providers with static dependency trees are compiled once. The official SDK
-still creates a fresh cheap server instance for every modern HTTP request. `@McpTool`,
-`@McpPrompt`, and `@McpResource` preserve the official callback types: a schema-incompatible
+still creates a fresh cheap server instance for every modern HTTP request. `@Tool`, `@Prompt`, and
+`@Resource` preserve the official callback types: a schema-incompatible
 method signature is rejected by TypeScript before reflective discovery runs.
 
 ## Feature modules and server targeting
@@ -76,18 +76,18 @@ runtime once with `forRoot()`:
 
 ```ts
 import { Injectable, Module } from "@nestjs/common";
-import { McpModule, McpTargets, McpTool } from "@nestm/mcp";
+import { McpModule, Targets, Tool } from "@nestm/mcp";
 
 @Injectable()
-@McpTargets("artifact", "backoffice")
+@Targets("artifact", "backoffice")
 class ArtifactTools {
-	@McpTool({ name: "artifact.read" })
+	@Tool({ name: "artifact.read" })
 	read() {
 		return { content: [{ type: "text" as const, text: "read" }] };
 	}
 
 	// Method targets replace, rather than merge with, the class defaults.
-	@McpTool({ name: "artifact.delete", servers: "backoffice" })
+	@Tool({ name: "artifact.delete", servers: "backoffice" })
 	remove() {
 		return { content: [{ type: "text" as const, text: "removed" }] };
 	}
@@ -107,7 +107,7 @@ export class ArtifactMcpFeatureModule {}
 
 `forFeature()` forwards `imports` to Nest, registers `providers` for discovery and dependency
 injection, and re-exports every supplied provider by default. Set `exports` to expose only a
-specific provider/module subset. `@McpTargets()` supplies class defaults; a decorator's own
+specific provider/module subset. `@Targets()` supplies class defaults; a decorator's own
 `servers` value replaces that default for the method. Omitting both targets every configured
 server, so explicitly target local servers when a dedicated gateway is configured. Empty,
 duplicate, unknown, and gateway targets are rejected.
@@ -119,11 +119,7 @@ authorize invocation:
 
 ```ts
 import { Injectable } from "@nestjs/common";
-import {
-	McpTool,
-	type McpCapabilityVisibilityPolicy,
-	type McpServerBuildContext,
-} from "@nestm/mcp";
+import { Tool, type McpCapabilityVisibilityPolicy, type McpServerBuildContext } from "@nestm/mcp";
 
 @Injectable()
 class ArtifactVisibility implements McpCapabilityVisibilityPolicy {
@@ -134,7 +130,7 @@ class ArtifactVisibility implements McpCapabilityVisibilityPolicy {
 
 @Injectable()
 class InternalArtifactTools {
-	@McpTool({
+	@Tool({
 		name: "artifact.internal",
 		visibility: ArtifactVisibility,
 	})
@@ -295,8 +291,8 @@ McpModule.forRoot({
 });
 ```
 
-Gateway servers are dedicated in this alpha. Do not target the same server with `@McpTool`,
-`@McpPrompt`, or `@McpResource`, or install another feature that owns projected capability
+Gateway servers are dedicated in this alpha. Do not target the same server with `@Tool`, `@Prompt`,
+or `@Resource`, or install another feature that owns projected capability
 handlers/list-change semantics. Nest rejects decorated-handler mixing during bootstrap; the
 framework-neutral gateway rejects other handler ownership with `CAPABILITY_CONFLICT` when the
 per-request SDK server is built.

@@ -6,8 +6,8 @@ import {
 	McpModule,
 	McpModuleError,
 	McpRuntimeService,
-	McpTargets,
-	McpTool,
+	Targets,
+	Tool,
 	allowAllMcpGatewayPolicy,
 } from "../src/index.ts";
 import type {
@@ -20,23 +20,23 @@ import type {
 const NON_BOOLEAN_VISIBILITY_RESULT = Symbol("NON_BOOLEAN_VISIBILITY_RESULT");
 
 @Injectable()
-@McpTargets("alpha")
+@Targets("alpha")
 class ClassTargetedTools {
-	@McpTool({ name: "class-default" })
+	@Tool({ name: "class-default" })
 	classDefault() {
 		return { content: [{ type: "text" as const, text: "alpha" }] };
 	}
 
-	@McpTool({ name: "method-override", servers: "beta" })
+	@Tool({ name: "method-override", servers: "beta" })
 	methodOverride() {
 		return { content: [{ type: "text" as const, text: "beta" }] };
 	}
 }
 
 @Injectable()
-@McpTargets("missing")
+@Targets("missing")
 class UnknownTargetTools {
-	@McpTool({ name: "unknown-target" })
+	@Tool({ name: "unknown-target" })
 	unknownTarget() {
 		return { content: [{ type: "text" as const, text: "unreachable" }] };
 	}
@@ -53,14 +53,14 @@ class SharedVisibilityPolicy implements McpCapabilityVisibilityPolicy {
 }
 
 @Injectable()
-@McpTargets("visible")
+@Targets("visible")
 class SharedVisibilityTools {
-	@McpTool({ name: "visible-one", visibility: SharedVisibilityPolicy })
+	@Tool({ name: "visible-one", visibility: SharedVisibilityPolicy })
 	visibleOne() {
 		return { content: [{ type: "text" as const, text: "one" }] };
 	}
 
-	@McpTool({ name: "visible-two", visibility: SharedVisibilityPolicy })
+	@Tool({ name: "visible-two", visibility: SharedVisibilityPolicy })
 	visibleTwo() {
 		return { content: [{ type: "text" as const, text: "two" }] };
 	}
@@ -91,7 +91,7 @@ class HangingVisibilityPolicy implements McpCapabilityVisibilityPolicy {
 
 @Injectable()
 class InvalidVisibilityTools {
-	@McpTool({
+	@Tool({
 		name: "rejecting-visibility",
 		servers: "visibility-rejects",
 		visibility: RejectingVisibilityPolicy,
@@ -100,7 +100,7 @@ class InvalidVisibilityTools {
 		return { content: [{ type: "text" as const, text: "unreachable" }] };
 	}
 
-	@McpTool({
+	@Tool({
 		name: "non-boolean-visibility",
 		servers: "visibility-non-boolean",
 		visibility: NonBooleanVisibilityPolicy,
@@ -109,7 +109,7 @@ class InvalidVisibilityTools {
 		return { content: [{ type: "text" as const, text: "unreachable" }] };
 	}
 
-	@McpTool({
+	@Tool({
 		name: "hanging-visibility",
 		servers: "visibility-timeout",
 		visibility: HangingVisibilityPolicy,
@@ -128,7 +128,7 @@ describe("MCP capability registry public API", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("uses @McpTargets as a class default while method targets override it", async () => {
+	it("uses @Targets as a class default while method targets override it", async () => {
 		application = await bootstrapMcp(
 			[serverDefinition("alpha"), serverDefinition("beta")],
 			[ClassTargetedTools],

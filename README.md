@@ -155,11 +155,11 @@ Resource-template discovery/read and prompt/template completion are supported. T
 
 ```ts
 import { Injectable, Module } from "@nestjs/common";
-import { McpModule, McpTool, fromJsonSchema } from "@nestm/mcp";
+import { McpModule, Tool, fromJsonSchema } from "@nestm/mcp";
 
 @Injectable()
 class ArtifactTools {
-	@McpTool({
+	@Tool({
 		name: "artifact.read",
 		servers: "artifact-tools",
 		inputSchema: fromJsonSchema<{ id: string }>({

@@ -1,23 +1,18 @@
 export { McpModuleError } from "./mcp.errors.ts";
 export type { McpModuleErrorCode } from "./mcp.errors.ts";
-export {
-	McpPrompt,
-	McpResource,
-	McpTargets,
-	McpTool,
-} from "./decorators/mcp-handler.decorators.ts";
+export { Prompt, Resource, Targets, Tool } from "./decorators/mcp-handler.decorators.ts";
 export type {
-	McpHandlerDefinition,
-	McpPromptHandlerDefinition,
-	McpPromptMethodDecorator,
-	McpPromptOptions,
-	McpResourceHandlerDefinition,
-	McpResourceMethodDecorator,
-	McpResourceOptions,
-	McpToolHandlerDefinition,
-	McpToolMethodDecorator,
-	McpToolOptions,
-	McpTypedMethodDecorator,
+	HandlerDefinition,
+	PromptHandlerDefinition,
+	PromptMethodDecorator,
+	PromptOptions,
+	ResourceHandlerDefinition,
+	ResourceMethodDecorator,
+	ResourceOptions,
+	ToolHandlerDefinition,
+	ToolMethodDecorator,
+	ToolOptions,
+	TypedMethodDecorator,
 } from "./decorators/mcp-handler.decorators.ts";
 export { McpHandlerRegistry } from "./discovery/mcp-handler.registry.ts";
 export type { McpRegisteredHandler } from "./discovery/mcp-handler.registry.ts";
