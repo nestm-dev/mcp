@@ -9,5 +9,11 @@
 		"@nestm/mcp-gateway": "0.0.0",
 		"@nestm/mcp": "0.0.0"
 	},
-	"changesets": ["initial-mcp-runtime"]
+	"changesets": [
+		"initial-mcp-runtime",
+		"nest-native-public-surface",
+		"plain-capability-decorators",
+		"portable-tool-schema",
+		"secure-catalog-transforms"
+	]
 }
