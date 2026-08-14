@@ -2,6 +2,9 @@
 
 NestJS 12 integration for the official Model Context Protocol TypeScript SDK v2.
 
+The package root is intentionally Nest-focused. Import framework-neutral runtime, transport,
+gateway, authentication, and observability APIs from their owning `@nestm/mcp-*` packages.
+
 ```ts
 import { Injectable, Module } from "@nestjs/common";
 import { McpModule, Tool, fromJsonSchema } from "@nestm/mcp";
@@ -54,9 +57,12 @@ McpModule.forRootAsync({
 		clients: config.mcpServers(),
 		connectClientsOnBootstrap: true,
 	}),
-	isGlobal: false,
 });
 ```
+
+The module is local by default. Import `forRoot()` or `forRootAsync()` exactly once per Nest
+application and configure every MCP client and server in that shared root. Set `isGlobal: true`
+only when application-wide injection is intentional.
 
 After Nest application bootstrap, inject `McpRuntimeService`. Mount
 `runtime.server("artifact").toNodeHandler()` at the desired route, access the named upstream with
@@ -76,7 +82,7 @@ runtime once with `forRoot()`:
 
 ```ts
 import { Injectable, Module } from "@nestjs/common";
-import { McpModule, Targets, Tool } from "@nestm/mcp";
+import { Targets, Tool } from "@nestm/mcp";
 
 @Injectable()
 @Targets("artifact", "backoffice")
@@ -94,23 +100,81 @@ class ArtifactTools {
 }
 
 @Module({
-	imports: [
-		McpModule.forFeature({
-			imports: [ArtifactStoreModule],
-			providers: [ArtifactTools],
-			exports: [ArtifactTools],
-		}),
-	],
+	imports: [ArtifactStoreModule],
+	providers: [ArtifactTools],
+	exports: [ArtifactTools],
 })
 export class ArtifactMcpFeatureModule {}
 ```
 
-`forFeature()` forwards `imports` to Nest, registers `providers` for discovery and dependency
-injection, and re-exports every supplied provider by default. Set `exports` to expose only a
-specific provider/module subset. `@Targets()` supplies class defaults; a decorator's own
-`servers` value replaces that default for the method. Omitting both targets every configured
-server, so explicitly target local servers when a dedicated gateway is configured. Empty,
-duplicate, unknown, and gateway targets are rejected.
+Use ordinary Nest modules for imports, providers, and explicit exports; discovery scans registered
+providers across the application. `@Targets()` supplies class defaults; a decorator's own
+`servers` value replaces that default for the method. When neither is present, the capability
+targets every configured server, so explicitly target local servers when a dedicated gateway is
+configured. Empty, duplicate, unknown, and gateway targets are rejected.
+
+### Injectable low-level contributors
+
+When a capability cannot be expressed through decorators or `McpCapabilitiesService`, register a
+singleton contributor provider explicitly:
+
+```ts
+import { Injectable, Module } from "@nestjs/common";
+import { McpModule, type McpServerContributor } from "@nestm/mcp";
+
+@Injectable()
+class HealthContributor implements McpServerContributor {
+	contribute: McpServerContributor["contribute"] = (server) => {
+		server.registerTool("health.check", {}, async () => ({
+			content: [{ type: "text", text: "ok" }],
+		}));
+	};
+}
+
+@Module({
+	imports: [
+		McpModule.forRoot({
+			collaborators: { providers: [HealthContributor] },
+			servers: [
+				{
+					name: "operations",
+					serverInfo: { name: "operations", version: "1.0.0" },
+					contributors: [HealthContributor],
+				},
+			],
+		}),
+	],
+})
+export class OperationsMcpModule {}
+```
+
+Contributors are the Nest boundary for low-level official SDK registration; raw server feature
+callbacks remain in `@nestm/mcp-server`. Contributors must use the default singleton scope and
+cannot share a dedicated gateway or catalog-projected server.
+
+All Nest server collaborators are provider tokens resolved once during bootstrap:
+
+| Server option              | Required provider method                                                                  |
+| -------------------------- | ----------------------------------------------------------------------------------------- |
+| `principalClaims`          | `resolvePrincipalClaims`                                                                  |
+| `middleware[]`             | `handle`                                                                                  |
+| `lifecycleObserver`        | `onEvent`                                                                                 |
+| `observer`                 | `observe`                                                                                 |
+| `onError`                  | `report`                                                                                  |
+| `handlerAuthorization`     | `authorize`                                                                               |
+| `handlerMiddleware[]`      | `handle`                                                                                  |
+| `handlerLifecycleObserver` | `onEvent`                                                                                 |
+| `contributors[]`           | `contribute`                                                                              |
+| `catalogExposure.policy`   | `resolve`                                                                                 |
+| `gateway.policy`           | `authorize`; optional `authorizePrompt`, `authorizeResource`, `authorizeResourceTemplate` |
+
+Use a class token, string token, symbol token, or abstract-class token registered under
+`McpModule`'s `collaborators.providers`. Use `collaborators.imports` for modules that supply their
+dependencies; imported providers can be exposed through `useExisting`. This explicit child-module
+ownership prevents an identically named private provider elsewhere in the application from being
+selected and keeps collaborator initialization/teardown ordered around the runtimes they serve.
+Collaborators must use the default singleton scope with a static dependency tree; bootstrap fails
+before serving traffic when a token is missing, scoped, or does not implement its required method.
 
 ## Per-request capability visibility
 
@@ -140,7 +204,7 @@ class InternalArtifactTools {
 }
 ```
 
-Register policy classes as default-scope singleton providers, usually through `forFeature()`.
+Register policy classes as default-scope singleton `McpModule` collaborators.
 Each policy is evaluated once per fresh server build and shared by every capability that references
 it. Static `true`/`false` visibility is also supported. A missing or non-singleton provider,
 exception, rejection, non-boolean result, request abort, or deadline aborts the server build
@@ -164,44 +228,58 @@ per-request visibility wave:
   definitions.
 
 Eager selectors can match an exact name, a normalized `ToolOptions.tags` value, or a readonly
-predicate. Dynamic strategy selection uses `defineMcpCatalogExposureResolver()`; const inference
-preserves the exact discriminated strategy or strategy union returned by the resolver. Resolver and
-selector inputs are frozen public tool projections plus the token-free principal, runtime name,
-protocol era, and abort signal. They never expose decorated callbacks, visibility providers, raw
-requests, or bearer credentials.
+predicate. Dynamic strategy selection belongs to a singleton `McpCatalogExposurePolicy` provider;
+its `resolve()` input contains frozen public tool projections plus the token-free principal,
+runtime name, protocol era, and abort signal. It never exposes decorated callbacks, visibility
+providers, raw requests, or bearer credentials.
 
 ```ts
-const catalogExposure = {
-	resolver: defineMcpCatalogExposureResolver((input) =>
-		input.principal?.scopes.includes("tools:discover-all")
+import { Injectable } from "@nestjs/common";
+import type {
+	McpCatalogExposurePolicy,
+	McpCatalogExposureStrategy,
+	McpNestCatalogExposureOptions,
+} from "@nestm/mcp";
+
+@Injectable()
+class ArtifactCatalogPolicy implements McpCatalogExposurePolicy {
+	resolve: McpCatalogExposurePolicy["resolve"] = (input): McpCatalogExposureStrategy => {
+		return input.principal?.scopes.includes("tools:discover-all")
 			? { kind: "eager" }
 			: {
 					kind: "lazy",
 					eager: [{ kind: "tag", tag: "essential" }],
-				},
-	),
-};
+				};
+	};
+}
+
+const catalogExposure = {
+	policy: ArtifactCatalogPolicy,
+} satisfies McpNestCatalogExposureOptions;
 ```
+
+Register `ArtifactCatalogPolicy` under `McpModule`'s `collaborators.providers` and assign
+`catalogExposure` to the server definition.
 
 Each lazy meta-tool closes over the exact visible snapshot belonging to that fresh server build.
 Unknown and hidden names are indistinguishable to schema fetches, concurrent builds do not share
 catalog state, and list/search cursors are rejected if reused after the ordered visible snapshot
 changes. Deferred tools plus both meta-tools still enter the normal
 `handlerAuthorization` pipeline when called. Lazy meta-tool names are reserved on every
-catalog-enabled runtime. Catalog exposure cannot share a runtime with a gateway or arbitrary custom
-`features`: the SDK exposes no public tool-enumeration seam for safely projecting those registrations,
-so bootstrap rejects that composition instead of silently dropping tools.
+catalog-enabled runtime. Catalog exposure cannot share a runtime with a gateway or custom
+`contributors`: the SDK exposes no public tool-enumeration seam for safely projecting those
+registrations, so bootstrap rejects that composition instead of silently dropping tools.
 
 ## Live capability registration
 
-After application bootstrap, the same registry is available as `runtime.capabilities`:
+After application bootstrap, inject the public capability service:
 
 ```ts
-import { McpRuntimeService } from "@nestm/mcp";
+import { McpCapabilitiesService } from "@nestm/mcp";
 
-const runtime = app.get(McpRuntimeService);
+const capabilities = app.get(McpCapabilitiesService);
 
-const refresh = runtime.capabilities.registerTool(
+const refresh = capabilities.registerTool(
 	{ name: "artifact.refresh", servers: "artifact" },
 	async () => ({ content: [{ type: "text" as const, text: "refreshed" }] }),
 );
@@ -212,6 +290,8 @@ refresh.replace(async () => ({
 refresh.unregister();
 ```
 
+`McpRuntimeService.capabilities` references the same service for runtime-oriented code.
+
 `registerTool()`, `registerPrompt()`, and `registerResource()` use the same targeting, visibility,
 collision, and callback types as decorators. A registration handle atomically replaces only its
 callback or unregisters that exact entry; either operation returns `false` once the handle is no
@@ -220,31 +300,55 @@ started with, while later builds see the new snapshot. Successful register, repl
 operations publish the matching tools, prompts, or resources list-change notification to every
 targeted runtime.
 
+Once runtime shutdown begins, the service is sealed: new registrations and active-handle
+`replace()`/`unregister()` calls throw `McpModuleError` with code `RUNTIME_CLOSED`.
+
 ## Validated handler pipeline
 
 Each Nest server definition can apply policy around its decorated callbacks:
 
 ```ts
-import { McpModule, allowMcpOperation, denyMcpOperation } from "@nestm/mcp";
+import { Injectable, Module } from "@nestjs/common";
+import {
+	McpModule,
+	allowMcpOperation,
+	denyMcpOperation,
+	type McpHandlerAuthorizationPolicy,
+} from "@nestm/mcp";
 
-McpModule.forRoot({
-	servers: [
-		{
-			name: "artifact",
-			serverInfo: { name: "artifact", version: "1.0.0" },
-			handlerAuthorization: {
-				authorize(operation) {
-					const principal = operation.context.principal;
-					return principal?.scopes.includes("artifacts:read") === true
-						? allowMcpOperation({ policy: "artifact-scopes-v1" })
-						: denyMcpOperation("The required artifact scope is missing.");
-				},
+@Injectable()
+class ArtifactHandlerPolicy implements McpHandlerAuthorizationPolicy {
+	authorize: McpHandlerAuthorizationPolicy["authorize"] = (operation) => {
+		return operation.context.principal?.scopes.includes("artifacts:read") === true
+			? allowMcpOperation({ policy: "artifact-scopes-v1" })
+			: denyMcpOperation("The required artifact scope is missing.");
+	};
+}
+
+@Module({
+	imports: [
+		McpModule.forRoot({
+			collaborators: {
+				providers: [
+					ArtifactHandlerPolicy,
+					DeadlineMiddleware,
+					AuditMiddleware,
+					ArtifactLifecycleObserver,
+				],
 			},
-			handlerMiddleware: [deadlineMiddleware, auditMiddleware],
-			handlerLifecycleObserver: lifecycleObserver,
-		},
+			servers: [
+				{
+					name: "artifact",
+					serverInfo: { name: "artifact", version: "1.0.0" },
+					handlerAuthorization: ArtifactHandlerPolicy,
+					handlerMiddleware: [DeadlineMiddleware, AuditMiddleware],
+					handlerLifecycleObserver: ArtifactLifecycleObserver,
+				},
+			],
+		}),
 	],
-});
+})
+export class ArtifactMcpModule {}
 ```
 
 The official SDK first validates arguments and resolves the registered tool, resource, or prompt.
@@ -265,10 +369,10 @@ This handler pipeline works for HTTP and stdio. Callback arguments and results a
 lifecycle events, and an authenticated HTTP principal is projected without its bearer token or
 arbitrary token metadata.
 
-`McpServerDefinition.middleware` is intentionally different: it surrounds a complete HTTP
-exchange before official dispatch and does not run for stdio. Use it for exchange-level concerns,
-not as the sole authorization seam for individual capabilities. A raw Node handler mounted beside
-Nest routes also does not automatically execute Nest guards or interceptors.
+A server's injectable `middleware` providers are intentionally different: they surround a complete
+HTTP exchange before official dispatch and do not run for stdio. Use them for exchange-level
+concerns, not as the sole authorization seam for individual capabilities. A raw Node handler
+mounted beside Nest routes also does not automatically execute Nest guards or interceptors.
 
 ## Nest-native HTTP controller
 
@@ -278,8 +382,16 @@ HTTP route pipeline:
 ```ts
 import { Controller, Module, UseGuards } from "@nestjs/common";
 import { McpHttpControllerFor, McpModule } from "@nestm/mcp";
+import { McpResourceServer } from "@nestm/mcp-server/auth";
+import { McpValidatedServer } from "@nestm/mcp-server/security";
 
-const ArtifactMcpControllerBase = McpHttpControllerFor("artifact");
+const ArtifactMcpControllerBase = McpHttpControllerFor("artifact", {
+	handler: (runtime) =>
+		new McpValidatedServer(
+			new McpResourceServer(runtime, resourceServerOptions),
+			requestValidationOptions,
+		),
+});
 
 @Controller({ path: "mcp", version: "1" })
 @UseGuards(ArtifactRouteGuard)
@@ -293,10 +405,11 @@ export class AppModule {}
 ```
 
 The inherited catch-all route works with Express and Fastify and preserves Nest global prefixes,
-versioning, guards, and interceptors while leaving HTTP method semantics to the MCP handler. Pass
-`{ handler: (runtime) => wrappedRuntime }` to compose fetch-shaped wrappers such as
-`withMcpBearerAuth()` and `withMcpRequestValidation()`; `nodeAdapter` configures only the Node/Web
-conversion layer.
+versioning, guards, and interceptors while leaving HTTP method semantics to the MCP handler. Prefer
+Nest guards for application route policy. The optional `handler` factory can construct the
+framework-neutral `McpResourceServer` and `McpValidatedServer` facades when protocol-level OAuth
+metadata, bearer verification, or host/origin validation is required. `nodeAdapter` configures only
+the Node/Web conversion layer.
 
 For a Nest-native request-level short circuit, override `interceptMcpRequest()`. Returning a value
 lets Nest serialize it through the normal response pipeline; returning `undefined` delegates to MCP.
@@ -307,17 +420,19 @@ emulated through private Nest internals in this release.
 
 ## Agent gateways and observability
 
-`@nestm/mcp-gateway` exposes an `McpServerFeature`, so a policy-enforced aggregate gateway can be
-included in a Nest server's `features`. The gateway projects tools, prompts, concrete resources,
-resource templates, and completion from official or first-party client connections while keeping
-downstream and upstream credentials separate. `McpRuntimeService.clients` provides the Nest-owned
-named client runtime for application services and agent orchestration.
+The Nest server's declarative `gateway` option installs a policy-enforced aggregate backed by the
+module-owned clients. It projects tools, prompts, concrete resources, resource templates, and
+completion while keeping downstream and upstream credentials separate. Import
+`@nestm/mcp-gateway` directly only when building a framework-neutral gateway.
+`McpRuntimeService.clients` provides the Nest-owned named client runtime for application services
+and agent orchestration.
 
 For the common case, declare the gateway directly on a Nest server. Its upstreams resolve against
 the same module-owned client registry and unknown client names fail during bootstrap:
 
 ```ts
 McpModule.forRoot({
+	collaborators: { providers: [AgentGatewayPolicy] },
 	clients: upstreamServers,
 	connectClientsOnBootstrap: true,
 	servers: [
@@ -326,16 +441,19 @@ McpModule.forRoot({
 			serverInfo: { name: "agent-gateway", version: "1.0.0" },
 			gateway: {
 				upstreams: ["artifact-storage", { clientName: "knowledge", gatewayName: "kb" }],
-				policy: gatewayPolicy,
+				policy: AgentGatewayPolicy,
 			},
 		},
 	],
 });
 ```
 
+`AgentGatewayPolicy` is a default-scope provider implementing `McpGatewayPolicy`; register it under
+`McpModule`'s `collaborators.providers`. The gateway resolves that token once during bootstrap.
+
 Gateway servers are dedicated in this alpha. Do not target the same server with `@Tool`, `@Prompt`,
-or `@Resource`, or install another feature that owns projected capability
-handlers/list-change semantics. Nest rejects decorated-handler mixing during bootstrap; the
+or `@Resource`, or configure a `contributor` that owns projected capability handlers/list-change
+semantics. Nest rejects decorated or contributed handler mixing during bootstrap; the
 framework-neutral gateway rejects other handler ownership with `CAPABILITY_CONFLICT` when the
 per-request SDK server is built.
 
@@ -366,11 +484,10 @@ require sealed route-bound state and long-lived, authorization-partitioned subsc
 coordination.
 
 `@nestm/mcp-observability` provides bounded structured-log and metrics observers plus tracing
-middleware. Pass its lifecycle observers to `clientRuntime.observer`,
-`handlerLifecycleObserver`, or `McpServerDefinition.lifecycleObserver`, and pass tracing middleware to the
-matching logical middleware list. Its default attribute projection excludes principals, payloads,
-request/session identifiers, error messages, stacks, and credentials.
+middleware. Import it directly, then adapt its observers behind the injectable server collaborator
+tokens or pass them to `clientRuntime`. Its default attribute projection excludes principals,
+payloads, request/session identifiers, error messages, stacks, and credentials.
 
-For HTTP bearer authentication and protected-resource metadata, wrap the mounted runtime with
-`@nestm/mcp-server/auth`. OAuth authentication establishes identity; `handlerAuthorization` still
-decides whether that identity may invoke a specific capability.
+For HTTP bearer authentication and protected-resource metadata, construct `McpResourceServer` from
+`@nestm/mcp-server/auth` around the mounted runtime. OAuth authentication establishes identity;
+`handlerAuthorization` still decides whether that identity may invoke a specific capability.

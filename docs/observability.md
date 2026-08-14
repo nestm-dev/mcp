@@ -13,7 +13,11 @@ NestM MCP separates logical-operation telemetry from wire-attempt telemetry. Thi
 | Server runtime observer          | Server build, handler error, and close phases       | per-request factory cost, registration failure, lifecycle health   |
 | Host/Nest telemetry              | Application request and process lifecycle           | inbound route, tenant context, deployment, graceful shutdown       |
 
-The official SDK's framework packages are hosting adapters, not client fetch middleware. A separately mounted Node handler also does not automatically pass through Nest interceptors or guards. `McpServerDefinition.middleware` wraps HTTP only; use `handlerLifecycleObserver` and `handlerMiddleware` for decorated callbacks that must be observed consistently over HTTP and stdio.
+The official SDK's framework packages are hosting adapters, not client fetch middleware. A
+separately mounted Node handler also does not automatically pass through Nest interceptors or
+guards. Framework-neutral `McpServerDefinition.middleware` wraps HTTP only; Nest servers reference
+injectable providers for this layer. Use `handlerLifecycleObserver` and `handlerMiddleware` for
+decorated callbacks that must be observed consistently over HTTP and stdio.
 
 ## Core lifecycle events
 
@@ -36,7 +40,11 @@ NestM logical middleware uses left-to-right entry and right-to-left exit:
 composeMcpMiddleware([lifecycle, authorization, deadline], terminal);
 ```
 
-`lifecycle` is outermost, so denials and deadline failures are recorded. Calling `next()` twice raises a typed re-entry error. Nest server definitions preserve this ordering: `handlerLifecycleObserver` surrounds mandatory `handlerAuthorization`, followed by custom `handlerMiddleware` and the validated callback.
+`lifecycle` is outermost, so denials and deadline failures are recorded. Calling `next()` twice
+raises a typed re-entry error. Nest server definitions preserve this ordering through singleton
+provider tokens: `handlerLifecycleObserver.onEvent` surrounds mandatory
+`handlerAuthorization.authorize`, followed by each `handlerMiddleware.handle` and the validated
+callback.
 
 The official client fetch composition has a different convention: the last middleware passed to `applyMiddlewares` is outermost, and the first sits closest to the network. Keep attempt-level retry closest to the network so higher layers see one settled response.
 

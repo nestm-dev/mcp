@@ -41,7 +41,8 @@ Authentication failures are not protocol-era evidence. A `401` or `403` response
 
 ## Server-side resource protection
 
-`@nestm/mcp-server/auth` wraps a web-standard MCP handler as a resource server:
+`McpResourceServer` from `@nestm/mcp-server/auth` wraps a web-standard MCP handler as a resource
+server:
 
 1. Serve RFC 9728 protected-resource metadata and related authorization-server metadata.
 2. Verify the bearer token before passing the request to the MCP handler.
@@ -50,10 +51,11 @@ Authentication failures are not protocol-era evidence. A `401` or `403` response
 5. Project only token-free principal data into NestM operation context.
 
 The safe principal includes OAuth client/scopes/resource metadata by default. When policy must
-distinguish end users or tenants behind one client, configure `principalClaims(authInfo)` on the
-server definition to project only verified `subject` and `tenantId` strings. Never treat
-`clientId` as an end-user identity, and never copy `AuthInfo.extra` wholesale into policy or
-telemetry context.
+distinguish end users or tenants behind one client, a framework-neutral server can configure
+`principalClaims(authInfo)`; a Nest server references a singleton provider whose
+`resolvePrincipalClaims(authInfo)` method performs the same narrow projection. Project only
+verified `subject` and `tenantId` strings. Never treat `clientId` as an end-user identity, and never
+copy `AuthInfo.extra` wholesale into policy or telemetry context.
 
 Missing, malformed, or expired tokens should return `401 invalid_token`. A valid token missing required scopes should return `403 insufficient_scope`. Both responses should include the correct `WWW-Authenticate: Bearer` challenge and protected-resource metadata URL so a compliant client can begin or step up its OAuth flow.
 
@@ -79,7 +81,13 @@ For expensive or side-effecting tools, authorization should happen both before d
 
 ### Nest validated handler authorization
 
-For decorated Nest tools, resources, and prompts, configure the server's `handlerAuthorization` policy. The official SDK validates arguments and resolves the registered callback first; the policy then receives a stable `McpHandlerInvocationInput` containing the trusted handler kind, name, server name, source, and validated callback arguments. Its operation context contains the official request method, cancellation signal, transport kind, and a token-free principal projection for authenticated HTTP requests.
+For decorated Nest tools, resources, and prompts, configure `handlerAuthorization` with a singleton
+provider token whose `authorize()` method implements the policy. The official SDK validates
+arguments and resolves the registered callback first; the policy then receives a stable
+`McpHandlerInvocationInput` containing the trusted handler kind, name, server name, source, and
+validated callback arguments. Its operation context contains the official request method,
+cancellation signal, transport kind, and a token-free principal projection for authenticated HTTP
+requests.
 
 The execution order is:
 
@@ -95,13 +103,17 @@ is opt-in, and lazy list/search or schema-fetch tools receive a frozen projectio
 the tools visible in that build. Resolver and selector inputs omit handlers, visibility providers,
 raw requests, bearer tokens, and provider-specific authentication data. Treat lazy discovery as a
 usability optimization only: deferred tools and both lazy meta-tools still enter the ordinary
-`handlerAuthorization` pipeline when called. Catalog mode rejects gateway composition and arbitrary
-custom server features because those features have no public enumeration seam from which a complete
-safe projection could be built.
+`handlerAuthorization` pipeline when called. Catalog mode rejects gateway composition and custom
+Nest server contributors because those contributors have no public enumeration seam from which a
+complete safe projection could be built.
 
 Policies and handler middleware can inspect validated callback arguments because domain authorization may depend on ownership or requested action. Treat that input as sensitive: do not copy it into lifecycle attributes, metric labels, or ordinary logs.
 
-`McpServerDefinition.middleware` has a narrower purpose: it surrounds an HTTP exchange before official MCP parsing and does not run for stdio. Use it for coarse HTTP concerns, not as the sole authorization boundary for a capability. Likewise, a separately mounted raw Node handler does not automatically pass through Nest guards or interceptors.
+Framework-neutral `McpServerDefinition.middleware` has a narrower purpose: it surrounds an HTTP
+exchange before official MCP parsing and does not run for stdio. Nest server configuration accepts
+injectable provider tokens for the same layer. Use it for coarse HTTP concerns, not as the sole
+authorization boundary for a capability. Likewise, a separately mounted raw Node handler does not
+automatically pass through Nest guards or interceptors.
 
 Gateway transforms run after the gateway's mandatory call-time policy. Client transforms have no
 implicit authorization policy because the client runtime cannot infer an application's outbound

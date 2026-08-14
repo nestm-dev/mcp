@@ -110,9 +110,6 @@ importers:
       '@nestm/mcp-gateway':
         specifier: workspace:^
         version: link:../mcp-gateway
-      '@nestm/mcp-observability':
-        specifier: workspace:^
-        version: link:../mcp-observability
       '@nestm/mcp-server':
         specifier: workspace:^
         version: link:../mcp-server

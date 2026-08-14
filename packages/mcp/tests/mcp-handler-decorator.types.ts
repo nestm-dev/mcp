@@ -1,30 +1,15 @@
 import { fromJsonSchema } from "@nestm/mcp-server";
-import {
-	Prompt,
-	Resource,
-	Tool,
-	createMcpHandlerPassthroughMiddleware,
-	defineMcpClientTransform,
-	defineMcpGatewayTransform,
-} from "../src/index.ts";
+import { Prompt, Resource, Tool, createMcpHandlerPassthroughMiddleware } from "../src/index.ts";
 import type {
-	CallToolResult,
-	HandlerDefinition,
-	McpClientTransformResult,
-	McpGatewayOperationOutputForKind,
 	McpHandlerInvocationInput,
 	McpHandlerInvocationOutputFor,
-	PromptHandlerDefinition,
 	PromptMethodDecorator,
 	PromptOptions,
 	ReadResourceResult,
-	ResourceHandlerDefinition,
 	ResourceMethodDecorator,
 	ResourceOptions,
-	ToolHandlerDefinition,
 	ToolMethodDecorator,
 	ToolOptions,
-	TypedMethodDecorator,
 } from "../src/index.ts";
 
 type IsAssignable<Source, Target> = [Source] extends [Target] ? true : false;
@@ -40,24 +25,11 @@ export type ToolInvocationRejectsResourceResult = AssertFalse<
 /** Proves the unprefixed capability decorator types are exported by the public barrel. */
 export type CapabilityDecoratorApi = {
 	readonly options: ToolOptions | PromptOptions | ResourceOptions;
-	readonly definition:
-		HandlerDefinition | ToolHandlerDefinition | PromptHandlerDefinition | ResourceHandlerDefinition;
 	readonly method:
 		| ToolMethodDecorator<undefined>
 		| PromptMethodDecorator<undefined>
-		| ResourceMethodDecorator<string>
-		| TypedMethodDecorator<(...arguments_: unknown[]) => unknown>;
+		| ResourceMethodDecorator<string>;
 };
-
-/** Proves the facade retains both operation-specific transform maps. */
-export type FacadeInvocationTransformResults = [
-	McpClientTransformResult<"tools/call">,
-	McpGatewayOperationOutputForKind<"gateway.invocation">,
-	CallToolResult,
-];
-
-defineMcpClientTransform("tools/call", async (_operation, next) => next());
-defineMcpGatewayTransform("gateway.invocation", async (_operation, next) => next());
 
 /** Prevents the removed prefixed decorator values from returning to the public API. */
 export type LegacyCapabilityDecoratorNamesAreAbsent = [

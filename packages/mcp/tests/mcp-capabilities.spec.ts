@@ -1,23 +1,18 @@
 import { Inject, Injectable, type INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { allowAllMcpGatewayPolicy } from "@nestm/mcp-gateway";
+import type { McpServer, McpServerRuntime } from "@nestm/mcp-server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-	McpModule,
-	McpModuleError,
-	McpRuntimeService,
-	Targets,
-	Tool,
-	allowAllMcpGatewayPolicy,
-} from "../src/index.ts";
-import type {
-	McpCapabilityVisibilityPolicy,
-	McpNestServerDefinition,
-	McpServer,
-	McpServerRuntime,
-} from "../src/index.ts";
+import { McpModule, McpModuleError, McpRuntimeService, Targets, Tool } from "../src/index.ts";
+import type { McpCapabilityVisibilityPolicy, McpNestServerDefinition } from "../src/index.ts";
 
 const NON_BOOLEAN_VISIBILITY_RESULT = Symbol("NON_BOOLEAN_VISIBILITY_RESULT");
+const ALLOW_ALL_GATEWAY_POLICY = Symbol("ALLOW_ALL_GATEWAY_POLICY");
+const ALLOW_ALL_GATEWAY_POLICY_PROVIDER = {
+	provide: ALLOW_ALL_GATEWAY_POLICY,
+	useValue: allowAllMcpGatewayPolicy(),
+};
 
 @Injectable()
 @Targets("alpha")
@@ -166,10 +161,9 @@ describe("MCP capability registry public API", () => {
 	});
 
 	it("evaluates one shared visibility policy once per fresh server build", async () => {
-		application = await bootstrapMcp(
-			[serverDefinition("visible")],
-			[SharedVisibilityPolicy, SharedVisibilityTools],
-		);
+		application = await bootstrapMcp([serverDefinition("visible")], [SharedVisibilityTools], {
+			collaborators: [SharedVisibilityPolicy],
+		});
 		const runtime = application.get(McpRuntimeService);
 		const policy = application.get(SharedVisibilityPolicy);
 
@@ -203,13 +197,15 @@ describe("MCP capability registry public API", () => {
 					handlerVisibilityTimeoutMs: 10,
 				},
 			],
-			[
-				RejectingVisibilityPolicy,
-				{ provide: NON_BOOLEAN_VISIBILITY_RESULT, useValue: "visible" },
-				NonBooleanVisibilityPolicy,
-				HangingVisibilityPolicy,
-				InvalidVisibilityTools,
-			],
+			[InvalidVisibilityTools],
+			{
+				collaborators: [
+					RejectingVisibilityPolicy,
+					{ provide: NON_BOOLEAN_VISIBILITY_RESULT, useValue: "visible" },
+					NonBooleanVisibilityPolicy,
+					HangingVisibilityPolicy,
+				],
+			},
 		);
 		const runtime = application.get(McpRuntimeService);
 
@@ -222,7 +218,9 @@ describe("MCP capability registry public API", () => {
 	});
 
 	it("applies dynamic register, replace, and unregister to later builds when discovery is disabled", async () => {
-		application = await bootstrapMcp([serverDefinition("dynamic")], [], false);
+		application = await bootstrapMcp([serverDefinition("dynamic")], [], {
+			autoDiscover: false,
+		});
 		const runtime = application.get(McpRuntimeService);
 		const sessions: BuiltServerSession[] = [];
 
@@ -236,6 +234,14 @@ describe("MCP capability registry public API", () => {
 				async () => ({ content: [{ type: "text" as const, text: "version-one" }] }),
 				"test live tool",
 			);
+			expect(runtime.capabilities.list()).toEqual([
+				{
+					kind: "tool",
+					name: "live-tool",
+					serverNames: ["dynamic"],
+					source: "test live tool",
+				},
+			]);
 			expect(beforeRegistration.client.getServerCapabilities()?.tools).toBeUndefined();
 
 			const afterRegistration = await connectFreshBuild(runtime.server("dynamic"));
@@ -281,6 +287,37 @@ describe("MCP capability registry public API", () => {
 		}
 	});
 
+	it("rejects register, replace, and unregister after runtime close", async () => {
+		application = await bootstrapMcp([serverDefinition("closed")], [], {
+			autoDiscover: false,
+		});
+		const runtime = application.get(McpRuntimeService);
+		const registration = runtime.capabilities.registerTool(
+			{ name: "closed-tool", servers: "closed" },
+			async () => ({ content: [{ type: "text" as const, text: "closed" }] }),
+		);
+
+		await runtime.close();
+
+		const mutations = [
+			() =>
+				runtime.capabilities.registerTool({ name: "late-tool", servers: "closed" }, async () => ({
+					content: [{ type: "text" as const, text: "late" }],
+				})),
+			() =>
+				registration.replace(async () => ({
+					content: [{ type: "text" as const, text: "replacement" }],
+				})),
+			() => registration.unregister(),
+		] as const;
+
+		for (const mutate of mutations) {
+			const failure = captureThrown(mutate);
+			expect(failure).toBeInstanceOf(McpModuleError);
+			if (failure instanceof McpModuleError) expect(failure.code).toBe("RUNTIME_CLOSED");
+		}
+	});
+
 	it("publishes targeted list changes exactly once and publishes nothing for rejected mutations", async () => {
 		application = await bootstrapMcp(
 			[
@@ -299,12 +336,15 @@ describe("MCP capability registry public API", () => {
 								},
 							},
 						],
-						policy: allowAllMcpGatewayPolicy(),
+						policy: ALLOW_ALL_GATEWAY_POLICY,
 					},
 				},
 			],
 			[],
-			false,
+			{
+				autoDiscover: false,
+				collaborators: [ALLOW_ALL_GATEWAY_POLICY_PROVIDER],
+			},
 		);
 		const capabilities = application.get(McpRuntimeService).capabilities;
 		const runtime = application.get(McpRuntimeService);
@@ -422,10 +462,20 @@ function serverDefinition(name: string): McpNestServerDefinition {
 async function bootstrapMcp(
 	servers: readonly McpNestServerDefinition[],
 	providers: readonly import("@nestjs/common").Provider[],
-	autoDiscover = true,
+	options: {
+		readonly autoDiscover?: boolean;
+		readonly collaborators?: import("@nestjs/common").Provider[];
+	} = {},
 ): Promise<INestApplication> {
+	const { autoDiscover = true, collaborators = [] } = options;
 	const testingModule = await Test.createTestingModule({
-		imports: [McpModule.forRoot({ servers, autoDiscover })],
+		imports: [
+			McpModule.forRoot({
+				servers,
+				autoDiscover,
+				collaborators: { providers: collaborators },
+			}),
+		],
 		providers: [...providers],
 	}).compile();
 	const application = testingModule.createNestApplication();
@@ -489,6 +539,14 @@ async function captureFailure(task: Promise<unknown>): Promise<unknown> {
 	try {
 		await task;
 		return undefined;
+	} catch (error) {
+		return error;
+	}
+}
+
+function captureThrown(action: () => unknown): unknown {
+	try {
+		return action();
 	} catch (error) {
 		return error;
 	}

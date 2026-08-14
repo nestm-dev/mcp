@@ -33,7 +33,6 @@ flowchart BT
   nest --> server
   nest --> client
   nest --> gateway
-  nest --> observability
 ```
 
 `@nestm/mcp-core` is not a replacement for `@modelcontextprotocol/core`: the NestM package owns runtime composition contracts, while the official package owns raw protocol schemas. Client and server adapters depend only on the official SDK packages they actually use.
@@ -104,45 +103,54 @@ The runtime also exposes typed general requests, completion, manual modern `inpu
 `@nestm/mcp-gateway` projects tools, prompts, concrete resources, resource templates, and completion from named upstream clients into one MCP server. Names and resource routes are reversible and collision-safe, discovery is isolated by authorization context, and the required capability-specific policy runs during listing and again immediately before execution.
 
 ```ts
-import { allowMcpOperation, denyMcpOperation } from "@nestm/mcp-core";
-import { McpClientRuntime } from "@nestm/mcp-client";
-import { createMcpClientRuntimeUpstream, createMcpGateway } from "@nestm/mcp-gateway";
-import { McpServerRuntime } from "@nestm/mcp-server";
+import { Injectable, Module } from "@nestjs/common";
+import { McpModule, allowMcpOperation, denyMcpOperation } from "@nestm/mcp";
+import type { McpGatewayPolicy } from "@nestm/mcp-gateway";
 
-const clients = new McpClientRuntime({ servers: upstreamServers });
-await clients.connectAll();
+@Injectable()
+class AgentGatewayPolicy implements McpGatewayPolicy {
+	authorize: McpGatewayPolicy["authorize"] = (operation) => {
+		return operation.input.toolName === "artifact.delete"
+			? denyMcpOperation("Destructive tools require a separate approval path.")
+			: allowMcpOperation({ policy: "artifact-agent-v1" });
+	};
 
-const gateway = createMcpGateway({
-	upstreams: [
-		createMcpClientRuntimeUpstream(clients, "artifact-storage"),
-		createMcpClientRuntimeUpstream(clients, "knowledge"),
+	authorizePrompt() {
+		return allowMcpOperation({ policy: "artifact-agent-v1" });
+	}
+
+	authorizeResource() {
+		return allowMcpOperation({ policy: "artifact-agent-v1" });
+	}
+
+	authorizeResourceTemplate() {
+		return allowMcpOperation({ policy: "artifact-agent-v1" });
+	}
+}
+
+@Module({
+	imports: [
+		McpModule.forRoot({
+			collaborators: { providers: [AgentGatewayPolicy] },
+			clients: upstreamServers,
+			connectClientsOnBootstrap: true,
+			servers: [
+				{
+					name: "agent-gateway",
+					serverInfo: { name: "agent-gateway", version: "1.0.0" },
+					gateway: {
+						upstreams: ["artifact-storage", "knowledge"],
+						policy: AgentGatewayPolicy,
+					},
+				},
+			],
+		}),
 	],
-	policy: {
-		authorize(operation) {
-			return operation.input.toolName === "artifact.delete"
-				? denyMcpOperation("Destructive tools require a separate approval path.")
-				: allowMcpOperation({ policy: "artifact-agent-v1" });
-		},
-		authorizePrompt() {
-			return allowMcpOperation({ policy: "artifact-agent-v1" });
-		},
-		authorizeResource() {
-			return allowMcpOperation({ policy: "artifact-agent-v1" });
-		},
-		authorizeResourceTemplate() {
-			return allowMcpOperation({ policy: "artifact-agent-v1" });
-		},
-	},
-});
-
-const agentGateway = new McpServerRuntime({
-	name: "agent-gateway",
-	serverInfo: { name: "agent-gateway", version: "1.0.0" },
-	features: [gateway.asServerFeature()],
-});
+})
+export class AgentGatewayModule {}
 ```
 
-The aggregate feature owns the server-wide tool, prompt, resource, and completion handlers.
+The declarative gateway owns the server-wide tool, prompt, resource, and completion handlers.
 Gateway servers are therefore dedicated in this alpha: put local/decorated capabilities on a
 separate named server rather than composing semantics that cannot be honored for every projected
 capability.
@@ -176,6 +184,7 @@ class ArtifactTools {
 @Module({
 	imports: [
 		McpModule.forRoot({
+			collaborators: { providers: [AgentGatewayPolicy] },
 			servers: [
 				{
 					name: "artifact-tools",
@@ -186,7 +195,7 @@ class ArtifactTools {
 					serverInfo: { name: "agent-gateway", version: "1.0.0" },
 					gateway: {
 						upstreams: ["artifact-storage", "knowledge"],
-						policy: gatewayPolicy,
+						policy: AgentGatewayPolicy,
 					},
 				},
 			],
@@ -209,9 +218,12 @@ McpModule.forRootAsync({
 		clients: config.mcpServers(),
 		connectClientsOnBootstrap: true,
 	}),
-	isGlobal: false,
 });
 ```
+
+The module is local by default. Import `forRoot()` or `forRootAsync()` exactly once per Nest
+application and configure every MCP client and server in that shared root. Set `isGlobal: true`
+only when application-wide injection is intentional.
 
 After Nest application bootstrap, inject `McpRuntimeService`. Use `runtime.server("artifact-tools")` for the local inbound server, `runtime.clients` or `runtime.client(name)` for configured upstreams, and `runtime.gateway("agent-gateway")` to inspect or invalidate the dedicated server's aggregate discovery cache. Shutdown closes inbound server handlers before closing upstream clients. The Nest destroy hook contains cleanup failures so framework adapter disposal can continue; inspect `runtime.shutdownError` or call `runtime.close()` explicitly when the host must fail on cleanup errors.
 
@@ -221,19 +233,33 @@ Decorated tools, resources, and prompts have a validated, transport-independent 
 
 ```ts
 McpModule.forRoot({
+	collaborators: {
+		providers: [
+			ArtifactHandlerPolicy,
+			DeadlineMiddleware,
+			AuditMiddleware,
+			ArtifactLifecycleObserver,
+		],
+	},
 	servers: [
 		{
 			name: "artifact",
 			serverInfo: { name: "artifact", version: "1.0.0" },
-			handlerAuthorization: handlerPolicy,
-			handlerMiddleware: [deadlineMiddleware, auditMiddleware],
-			handlerLifecycleObserver: lifecycleObserver,
+			handlerAuthorization: ArtifactHandlerPolicy,
+			handlerMiddleware: [DeadlineMiddleware, AuditMiddleware],
+			handlerLifecycleObserver: ArtifactLifecycleObserver,
 		},
 	],
 });
 ```
 
-The official SDK validates and routes the request before this pipeline runs. `handlerAuthorization` cannot be bypassed by custom handler middleware, and `handlerLifecycleObserver` records denials as well as successes and failures without including callback arguments or results. This is the correct per-tool/resource/prompt seam for both HTTP and stdio. By contrast, `McpServerDefinition.middleware` surrounds an HTTP exchange and does not run for stdio.
+List these collaborator classes under `McpModule`'s `collaborators.providers`. Authorization providers expose
+`authorize`, middleware providers expose `handle`, and lifecycle providers expose `onEvent`. The
+official SDK validates and routes the request before this pipeline runs. `handlerAuthorization`
+cannot be bypassed by custom handler middleware, and `handlerLifecycleObserver` records denials as
+well as successes and failures without including callback arguments or results. This is the
+correct per-tool/resource/prompt seam for both HTTP and stdio. By contrast, a server's injectable
+`middleware` providers surround an HTTP exchange and do not run for stdio.
 
 `@nestm/mcp-observability` supplies backend-neutral lifecycle observers for structured logs and metrics plus tracing middleware. Its default projection includes only bounded protocol dimensions; principals, payloads, request/session IDs, error messages, stacks, and credentials require explicit opt-in.
 

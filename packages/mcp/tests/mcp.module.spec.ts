@@ -1,4 +1,12 @@
-import { Inject, Injectable, Module, Scope, type INestApplication } from "@nestjs/common";
+import {
+	Inject,
+	Injectable,
+	Module,
+	Scope,
+	type INestApplication,
+	type OnApplicationBootstrap,
+	type OnModuleDestroy,
+} from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import {
 	Client,
@@ -12,26 +20,27 @@ import {
 	fromJsonSchema,
 } from "@modelcontextprotocol/server";
 import { allowMcpOperation } from "@nestm/mcp-core";
+import { allowAllMcpGatewayPolicy } from "@nestm/mcp-gateway";
+import type { McpGatewayClientResolver, McpGatewayPolicy } from "@nestm/mcp-gateway";
+import { McpServerRegistry, McpServerRuntime } from "@nestm/mcp-server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
 	McpModule,
 	McpRuntimeService,
-	McpServerRuntime,
 	Tool,
 	acceptedContent,
-	allowAllMcpGatewayPolicy,
 	inputRequired,
 } from "../src/index.ts";
-import type {
-	CallToolResult,
-	InputRequiredResult,
-	McpGatewayClientResolver,
-	ServerContext,
-} from "../src/index.ts";
+import type { CallToolResult, InputRequiredResult, ServerContext } from "../src/index.ts";
 import { createMcpServerTestFetch } from "../src/testing/index.ts";
 
 const MCP_TEST_CONFIGURATION = Symbol("MCP_TEST_CONFIGURATION");
+const ALLOW_ALL_GATEWAY_POLICY = Symbol("ALLOW_ALL_GATEWAY_POLICY");
+const ALLOW_ALL_GATEWAY_POLICY_PROVIDER = {
+	provide: ALLOW_ALL_GATEWAY_POLICY,
+	useValue: allowAllMcpGatewayPolicy(),
+};
 
 @Module({
 	providers: [{ provide: MCP_TEST_CONFIGURATION, useValue: "async-server" }],
@@ -53,6 +62,12 @@ class FeatureImportedToolsProvider {
 		return { content: [{ type: "text" as const, text: this.configuration }] };
 	}
 }
+
+@Module({
+	imports: [McpTestConfigurationModule],
+	providers: [FeatureImportedToolsProvider],
+})
+class McpFeatureTestModule {}
 
 @Module({ providers: [McpRuntimeConsumer], exports: [McpRuntimeConsumer] })
 class McpSiblingConsumerModule {}
@@ -80,6 +95,51 @@ class RequestScopedToolsProvider {
 	call() {
 		return { content: [{ type: "text" as const, text: "unsafe" }] };
 	}
+}
+
+@Injectable()
+class StatefulGatewayPolicy implements McpGatewayPolicy {
+	readonly calls: string[] = [];
+
+	authorize() {
+		return this.#allow("tool");
+	}
+
+	authorizePrompt() {
+		return this.#allow("prompt");
+	}
+
+	authorizeResource() {
+		return this.#allow("resource");
+	}
+
+	authorizeResourceTemplate() {
+		return this.#allow("resource-template");
+	}
+
+	#allow(kind: string) {
+		this.calls.push(kind);
+		return allowMcpOperation({ policy: `stateful-${kind}` });
+	}
+}
+
+@Injectable({ scope: Scope.REQUEST })
+class RequestScopedCollaborator {
+	readonly scope = "request";
+}
+
+@Injectable({ scope: Scope.REQUEST })
+class RequestScopedCollaboratorDependency {}
+
+@Module({
+	providers: [RequestScopedCollaboratorDependency],
+	exports: [RequestScopedCollaboratorDependency],
+})
+class RequestScopedCollaboratorDependencyModule {}
+
+@Injectable()
+class NonStaticCollaborator {
+	constructor(readonly dependency: RequestScopedCollaboratorDependency) {}
 }
 
 const confirmationSchema = fromJsonSchema<{ confirm: boolean }>({
@@ -134,12 +194,16 @@ describe("McpModule", () => {
 	});
 
 	it("supports async injected configuration and local-module extras", async () => {
+		@Injectable()
+		class AsyncCollaborator {}
+
 		const factory = vi.fn((serverName: string) => ({
 			autoDiscover: false,
 			servers: [{ name: serverName, serverInfo: { name: serverName, version: "1.0.0" } }],
 		}));
 		const dynamicModule = McpModule.forRootAsync({
 			isGlobal: false,
+			collaborators: { providers: [AsyncCollaborator] },
 			imports: [McpTestConfigurationModule],
 			inject: [MCP_TEST_CONFIGURATION],
 			useFactory: factory,
@@ -151,33 +215,118 @@ describe("McpModule", () => {
 
 		const runtime = application.get(McpRuntimeService);
 		expect(runtime.server("async-server").name).toBe("async-server");
+		expect(application.get(AsyncCollaborator)).toBeInstanceOf(AsyncCollaborator);
 		expect(factory).toHaveBeenCalledWith("async-server");
-		expect(McpModule.forRoot().global).toBe(true);
+		expect(McpModule.forRoot().global).toBe(false);
 	});
 
-	it("honors global and local module visibility", async () => {
+	it("is local by default and honors explicit global visibility", async () => {
 		await expect(
 			Test.createTestingModule({
-				imports: [McpModule.forRoot({ isGlobal: false }), McpSiblingConsumerModule],
+				imports: [McpModule.forRoot(), McpSiblingConsumerModule],
 			}).compile(),
 		).rejects.toThrow(/McpRuntimeService/);
 
 		const testingModule = await Test.createTestingModule({
-			imports: [McpModule.forRoot(), McpSiblingConsumerModule],
+			imports: [McpModule.forRoot({ isGlobal: true }), McpSiblingConsumerModule],
 		}).compile();
 		application = testingModule.createNestApplication();
 		await application.init();
 		expect(application.get(McpRuntimeConsumer).runtime).toBe(application.get(McpRuntimeService));
 	});
 
-	it("forwards feature imports and honors explicit exports", async () => {
-		const feature = McpModule.forFeature({
-			imports: [McpTestConfigurationModule],
-			providers: [FeatureImportedToolsProvider],
-			exports: [],
+	it("rejects more than one configured root module", async () => {
+		const testingModule = await Test.createTestingModule({
+			imports: [
+				McpModule.forRoot({
+					autoDiscover: false,
+					servers: [{ name: "root-a", serverInfo: { name: "root-a", version: "1.0.0" } }],
+				}),
+				McpModule.forRoot({
+					autoDiscover: false,
+					servers: [{ name: "root-b", serverInfo: { name: "root-b", version: "1.0.0" } }],
+				}),
+			],
+		}).compile();
+		const failedApplication = testingModule.createNestApplication();
+
+		await expect(failedApplication.init()).rejects.toThrow(
+			/McpModule\.forRoot\(\).*exactly once per Nest application/,
+		);
+		await failedApplication.close();
+	});
+
+	it("runs collaborator bootstrap before readiness and closes runtimes before collaborator destroy", async () => {
+		const events: string[] = [];
+		let runtime: McpRuntimeService;
+
+		@Injectable()
+		class LifecycleCollaborator implements OnApplicationBootstrap, OnModuleDestroy {
+			onApplicationBootstrap(): void {
+				events.push(`collaborator.bootstrap:${String(runtime.isReady())}`);
+			}
+
+			onModuleDestroy(): void {
+				events.push(`collaborator.destroy:${String(runtime.isReady())}`);
+			}
+		}
+
+		const testingModule = await Test.createTestingModule({
+			imports: [
+				McpModule.forRoot({
+					collaborators: { providers: [LifecycleCollaborator] },
+				}),
+			],
+		}).compile();
+		application = testingModule.createNestApplication();
+		runtime = application.get(McpRuntimeService);
+		await application.init();
+		expect(events).toEqual(["collaborator.bootstrap:false"]);
+		expect(runtime.isReady()).toBe(true);
+
+		const servers = application.get(McpServerRegistry);
+		vi.spyOn(servers, "close").mockImplementation(async () => {
+			events.push("runtime.close");
 		});
-		expect(feature.imports).toEqual([McpTestConfigurationModule]);
-		expect(feature.exports).toEqual([]);
+
+		await application.close();
+		application = undefined;
+
+		expect(events).toEqual([
+			"collaborator.bootstrap:false",
+			"runtime.close",
+			"collaborator.destroy:false",
+		]);
+	});
+
+	it.each([
+		{
+			label: "request-scoped",
+			imports: [],
+			providers: [RequestScopedCollaborator],
+		},
+		{
+			label: "singleton with a non-static dependency tree",
+			imports: [RequestScopedCollaboratorDependencyModule],
+			providers: [NonStaticCollaborator],
+		},
+	])("rejects $label collaborators during bootstrap", async ({ imports, providers }) => {
+		const testingModule = await Test.createTestingModule({
+			imports: [
+				McpModule.forRoot({
+					collaborators: { imports, providers },
+				}),
+			],
+		}).compile();
+		const failedApplication = testingModule.createNestApplication();
+
+		await expect(failedApplication.init()).rejects.toThrow(
+			/default singleton scope with a static dependency tree/,
+		);
+		await failedApplication.close();
+	});
+
+	it("discovers providers declared in an ordinary imported feature module", async () => {
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpModule.forRoot({
@@ -188,7 +337,7 @@ describe("McpModule", () => {
 						},
 					],
 				}),
-				feature,
+				McpFeatureTestModule,
 			],
 		}).compile();
 		application = testingModule.createNestApplication();
@@ -211,6 +360,17 @@ describe("McpModule", () => {
 	});
 
 	it("discovers decorated providers and serves them through MCP v2", async () => {
+		const principalClaimsToken = Symbol("ARTIFACT_PRINCIPAL_CLAIMS");
+		const authorizationToken = Symbol("ARTIFACT_HANDLER_AUTHORIZATION");
+		const middlewareToken = Symbol("ARTIFACT_HANDLER_MIDDLEWARE");
+		const lifecycleToken = Symbol("ARTIFACT_HANDLER_LIFECYCLE");
+		const shadowAuthorize = vi.fn(() => allowMcpOperation({ policy: "unrelated" }));
+
+		@Module({
+			providers: [{ provide: authorizationToken, useValue: { authorize: shadowAuthorize } }],
+		})
+		class UnrelatedAuthorizationModule {}
+
 		const authorize = vi.fn((operation) => {
 			expect(operation.context.principal).toMatchObject({
 				clientId: "artifact-agent",
@@ -230,17 +390,29 @@ describe("McpModule", () => {
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpModule.forRoot({
+					collaborators: {
+						providers: [
+							{
+								provide: principalClaimsToken,
+								useValue: { resolvePrincipalClaims: principalClaims },
+							},
+							{ provide: authorizationToken, useValue: { authorize } },
+							{ provide: middlewareToken, useValue: { handle: middleware } },
+							{ provide: lifecycleToken, useValue: { onEvent: lifecycle } },
+						],
+					},
 					servers: [
 						{
 							name: "artifact",
 							serverInfo: { name: "artifact", version: "1.0.0" },
-							principalClaims,
-							handlerAuthorization: { authorize },
-							handlerMiddleware: [middleware],
-							handlerLifecycleObserver: { onEvent: lifecycle },
+							principalClaims: principalClaimsToken,
+							handlerAuthorization: authorizationToken,
+							handlerMiddleware: [middlewareToken],
+							handlerLifecycleObserver: lifecycleToken,
 						},
 					],
 				}),
+				UnrelatedAuthorizationModule,
 			],
 			providers: [ToolsProvider],
 		}).compile();
@@ -289,6 +461,7 @@ describe("McpModule", () => {
 		]);
 		expect(middleware).toHaveBeenCalledOnce();
 		expect(principalClaims).toHaveBeenCalledOnce();
+		expect(shadowAuthorize).not.toHaveBeenCalled();
 	});
 
 	it("rejects request-scoped decorated handlers during bootstrap", async () => {
@@ -311,17 +484,25 @@ describe("McpModule", () => {
 	});
 
 	it("runs authorization and lifecycle on every decorated multi-round input leg", async () => {
+		const authorizationToken = Symbol("INTERACTIVE_HANDLER_AUTHORIZATION");
+		const lifecycleToken = Symbol("INTERACTIVE_HANDLER_LIFECYCLE");
 		const authorize = vi.fn(() => allowMcpOperation({ policy: "interactive-test" }));
 		const lifecycle = vi.fn();
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpModule.forRoot({
+					collaborators: {
+						providers: [
+							{ provide: authorizationToken, useValue: { authorize } },
+							{ provide: lifecycleToken, useValue: { onEvent: lifecycle } },
+						],
+					},
 					servers: [
 						{
 							name: "interactive",
 							serverInfo: { name: "interactive", version: "1.0.0" },
-							handlerAuthorization: { authorize },
-							handlerLifecycleObserver: { onEvent: lifecycle },
+							handlerAuthorization: authorizationToken,
+							handlerLifecycleObserver: lifecycleToken,
 						},
 					],
 				}),
@@ -357,6 +538,57 @@ describe("McpModule", () => {
 			"operation.succeeded",
 			"operation.started",
 			"operation.succeeded",
+		]);
+	});
+
+	it("preserves class gateway policy this binding for optional capability hooks", async () => {
+		const testingModule = await Test.createTestingModule({
+			imports: [
+				McpModule.forRoot({
+					collaborators: { providers: [StatefulGatewayPolicy] },
+					servers: [
+						{
+							name: "stateful-gateway",
+							serverInfo: { name: "stateful-gateway", version: "1.0.0" },
+							gateway: {
+								policy: StatefulGatewayPolicy,
+								upstreams: [
+									{
+										name: "stateful-upstream",
+										client: {
+											listTools: () => ({ tools: [] }),
+											callTool: () => ({ content: [] }),
+											listPrompts: () => ({ prompts: [{ name: "status" }] }),
+											getPrompt: () => ({ messages: [] }),
+											listResources: () => ({
+												resources: [{ name: "guide", uri: "docs://guide" }],
+											}),
+											readResource: () => ({ contents: [] }),
+											listResourceTemplates: () => ({
+												resourceTemplates: [
+													{ name: "section", uriTemplate: "docs://sections/{id}" },
+												],
+											}),
+										},
+									},
+								],
+							},
+						},
+					],
+				}),
+			],
+		}).compile();
+		application = testingModule.createNestApplication();
+		await application.init();
+
+		const gateway = application.get(McpRuntimeService).gateway("stateful-gateway");
+		expect(await gateway.listProjectedPrompts()).toHaveLength(1);
+		expect(await gateway.listProjectedResources()).toHaveLength(1);
+		expect(await gateway.listProjectedResourceTemplates()).toHaveLength(1);
+		expect(application.get(StatefulGatewayPolicy).calls).toEqual([
+			"prompt",
+			"resource",
+			"resource-template",
 		]);
 	});
 
@@ -435,6 +667,7 @@ describe("McpModule", () => {
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpModule.forRoot({
+					collaborators: { providers: [ALLOW_ALL_GATEWAY_POLICY_PROVIDER] },
 					clients: [
 						{
 							name: "knowledge",
@@ -456,7 +689,7 @@ describe("McpModule", () => {
 							serverInfo: { name: "agent-gateway", version: "1.0.0" },
 							gateway: {
 								upstreams: [{ clientName: "knowledge", gatewayName: "kb" }],
-								policy: allowAllMcpGatewayPolicy(),
+								policy: ALLOW_ALL_GATEWAY_POLICY,
 							},
 						},
 					],
@@ -541,6 +774,7 @@ describe("McpModule", () => {
 	});
 
 	it("passes a verified principal to a context-aware declarative gateway upstream", async () => {
+		const principalClaimsToken = Symbol("DELEGATED_PRINCIPAL_CLAIMS");
 		const resolvedPrincipals: unknown[] = [];
 		const resolvedAuthTokens: unknown[] = [];
 		const resolveClient: McpGatewayClientResolver = (context) => {
@@ -561,14 +795,28 @@ describe("McpModule", () => {
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpModule.forRoot({
+					collaborators: {
+						providers: [
+							ALLOW_ALL_GATEWAY_POLICY_PROVIDER,
+							{
+								provide: principalClaimsToken,
+								useValue: {
+									resolvePrincipalClaims: () => ({
+										subject: "user-1",
+										tenantId: "tenant-1",
+									}),
+								},
+							},
+						],
+					},
 					servers: [
 						{
 							name: "delegated-gateway",
 							serverInfo: { name: "delegated-gateway", version: "1.0.0" },
-							principalClaims: () => ({ subject: "user-1", tenantId: "tenant-1" }),
+							principalClaims: principalClaimsToken,
 							gateway: {
 								upstreams: [{ name: "delegated", client: resolveClient }],
-								policy: allowAllMcpGatewayPolicy(),
+								policy: ALLOW_ALL_GATEWAY_POLICY,
 							},
 						},
 					],
@@ -614,13 +862,14 @@ describe("McpModule", () => {
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpModule.forRoot({
+					collaborators: { providers: [ALLOW_ALL_GATEWAY_POLICY_PROVIDER] },
 					servers: [
 						{
 							name: "invalid-gateway",
 							serverInfo: { name: "invalid-gateway", version: "1.0.0" },
 							gateway: {
 								upstreams: ["missing"],
-								policy: allowAllMcpGatewayPolicy(),
+								policy: ALLOW_ALL_GATEWAY_POLICY,
 							},
 						},
 					],
@@ -636,6 +885,7 @@ describe("McpModule", () => {
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpModule.forRoot({
+					collaborators: { providers: [ALLOW_ALL_GATEWAY_POLICY_PROVIDER] },
 					servers: [
 						{
 							name: "artifact",
@@ -650,7 +900,7 @@ describe("McpModule", () => {
 										},
 									},
 								],
-								policy: allowAllMcpGatewayPolicy(),
+								policy: ALLOW_ALL_GATEWAY_POLICY,
 							},
 						},
 					],
@@ -667,6 +917,7 @@ describe("McpModule", () => {
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpModule.forRoot({
+					collaborators: { providers: [ALLOW_ALL_GATEWAY_POLICY_PROVIDER] },
 					servers: [
 						{
 							name: "gateway",
@@ -681,7 +932,7 @@ describe("McpModule", () => {
 										},
 									},
 								],
-								policy: allowAllMcpGatewayPolicy(),
+								policy: ALLOW_ALL_GATEWAY_POLICY,
 							},
 						},
 					],
@@ -691,8 +942,9 @@ describe("McpModule", () => {
 		application = testingModule.createNestApplication();
 		await application.init();
 		const runtime = application.get(McpRuntimeService);
+		const servers = application.get(McpServerRegistry);
 		const closed: string[] = [];
-		vi.spyOn(runtime.servers, "close").mockImplementation(async () => {
+		vi.spyOn(servers, "close").mockImplementation(async () => {
 			closed.push("servers");
 		});
 		vi.spyOn(runtime.gateway("gateway"), "close").mockImplementation(async () => {
@@ -715,8 +967,9 @@ describe("McpModule", () => {
 		application = testingModule.createNestApplication();
 		await application.init();
 		const runtime = application.get(McpRuntimeService);
+		const servers = application.get(McpServerRegistry);
 		let reentrantClose: Promise<void> | undefined;
-		vi.spyOn(runtime.servers, "close").mockImplementation(() => {
+		vi.spyOn(servers, "close").mockImplementation(() => {
 			reentrantClose = runtime.close();
 			return Promise.resolve();
 		});
@@ -735,8 +988,9 @@ describe("McpModule", () => {
 		application = testingModule.createNestApplication();
 		await application.init();
 		const runtime = application.get(McpRuntimeService);
+		const servers = application.get(McpServerRegistry);
 		const clientClose = vi.spyOn(runtime.clients, "close").mockResolvedValue();
-		vi.spyOn(runtime.servers, "close").mockRejectedValue(new Error("server close failed"));
+		vi.spyOn(servers, "close").mockRejectedValue(new Error("server close failed"));
 
 		await expect(application.close()).resolves.toBeUndefined();
 		application = undefined;

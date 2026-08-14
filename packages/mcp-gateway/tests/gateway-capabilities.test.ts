@@ -1,7 +1,7 @@
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import type { Prompt, Resource } from "@modelcontextprotocol/server";
 import { allowMcpOperation, denyMcpOperation } from "@nestm/mcp-core";
-import { McpServerRuntime, defineMcpServer } from "@nestm/mcp-server";
+import { McpServerRuntime } from "@nestm/mcp-server";
 import { describe, expect, it, vi } from "vitest";
 import {
 	GatewayPromptNameCodec,
@@ -60,13 +60,11 @@ describe("gateway prompt and resource projection", () => {
 			upstreams: [{ name: "tenant/acme", client: upstream }],
 			policy: allowAllMcpGatewayPolicy(),
 		});
-		const runtime = new McpServerRuntime(
-			defineMcpServer({
-				name: "gateway",
-				serverInfo: { name: "gateway", version: "1.0.0" },
-				features: [gateway.asServerFeature()],
-			}),
-		);
+		const runtime = new McpServerRuntime({
+			name: "gateway",
+			serverInfo: { name: "gateway", version: "1.0.0" },
+			features: [gateway.asServerFeature()],
+		});
 		const server = await runtime.createServer({ era: "modern" });
 		const client = new Client({ name: "capability-test", version: "1.0.0" });
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -385,22 +383,20 @@ describe("gateway prompt and resource projection", () => {
 			],
 			policy: allowAllMcpGatewayPolicy(),
 		});
-		const runtime = new McpServerRuntime(
-			defineMcpServer({
-				name: "mixed",
-				serverInfo: { name: "mixed", version: "1.0.0" },
-				features: [
-					(server) => {
-						server.server.registerCapabilities({
-							tools: { listChanged: true },
-							prompts: { listChanged: true },
-							resources: { listChanged: true, subscribe: true },
-						});
-					},
-					gateway.asServerFeature(),
-				],
-			}),
-		);
+		const runtime = new McpServerRuntime({
+			name: "mixed",
+			serverInfo: { name: "mixed", version: "1.0.0" },
+			features: [
+				(server) => {
+					server.server.registerCapabilities({
+						tools: { listChanged: true },
+						prompts: { listChanged: true },
+						resources: { listChanged: true, subscribe: true },
+					});
+				},
+				gateway.asServerFeature(),
+			],
+		});
 		await expect(runtime.createServer({ era: "modern" })).rejects.toMatchObject({
 			code: "CAPABILITY_CONFLICT",
 		});

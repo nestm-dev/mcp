@@ -5,15 +5,29 @@ import {
 	type OnModuleDestroy,
 } from "@nestjs/common";
 import { McpClientRuntime } from "@nestm/mcp-client";
-import { McpGateway, createMcpClientRuntimeUpstream, createMcpGateway } from "@nestm/mcp-gateway";
-import { McpServerRegistry, type McpServerRuntime } from "@nestm/mcp-server";
+import { McpGateway, createMcpClientRuntimeUpstream } from "@nestm/mcp-gateway";
+import type { McpGatewayPolicy } from "@nestm/mcp-gateway";
+import { McpServerRegistry, type McpServerFeature, type McpServerRuntime } from "@nestm/mcp-server";
+import { McpCapabilitiesService } from "./mcp-capabilities.service.ts";
+import type { McpCatalogExposurePolicy } from "./mcp-catalog-exposure.ts";
 import { McpModuleError } from "./mcp.errors.ts";
+import { McpProviderRegistry, mcpProviderTokenName } from "./mcp-provider.registry.ts";
 import { assertMcpCatalogExposureOptions } from "./mcp-catalog.runtime.ts";
 import { MCP_MODULE_OPTIONS } from "./mcp.tokens.ts";
 import type {
+	McpHandlerAuthorizationPolicy,
+	McpHandlerLifecycleObserver,
+	McpHandlerMiddlewareProvider,
 	McpModuleOptions,
 	McpNestGatewayOptions,
 	McpNestGatewayUpstreamDefinition,
+	McpProviderToken,
+	McpServerContributor,
+	McpServerErrorReporter,
+	McpServerLifecycleObserver,
+	McpServerMiddlewareProvider,
+	McpServerPrincipalClaimsProvider,
+	McpServerRuntimeObserverProvider,
 } from "./mcp.types.ts";
 import { McpHandlerExplorer } from "./discovery/mcp-handler.explorer.ts";
 import { McpHandlerRegistry } from "./discovery/mcp-handler.registry.ts";
@@ -29,33 +43,45 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 	constructor(
 		@Inject(MCP_MODULE_OPTIONS) private readonly options: McpModuleOptions,
 		readonly clients: McpClientRuntime,
-		readonly servers: McpServerRegistry,
+		private readonly servers: McpServerRegistry,
 		private readonly explorer: McpHandlerExplorer,
-		/** Live, copy-on-write capability registry used by future request server builds. */
-		readonly capabilities: McpHandlerRegistry,
+		private readonly handlerRegistry: McpHandlerRegistry,
+		/** Public live-capability service used by future request server builds. */
+		readonly capabilities: McpCapabilitiesService,
+		private readonly providers: McpProviderRegistry,
 	) {}
 
 	async onApplicationBootstrap(): Promise<void> {
 		try {
+			this.explorer.assertSingleRoot();
 			if (this.options.autoDiscover !== false) this.explorer.scan();
 			const definitions = this.options.servers ?? [];
 			for (const definition of definitions) {
 				if (definition.catalogExposure === undefined) continue;
-				assertMcpCatalogExposureOptions(definition.catalogExposure, definition.name);
+				if (
+					typeof definition.catalogExposure !== "object" ||
+					definition.catalogExposure === null ||
+					definition.catalogExposure.policy === undefined
+				) {
+					throw new McpModuleError(
+						"INVALID_CATALOG_EXPOSURE",
+						`MCP catalog exposure for server "${definition.name}" requires a policy provider token.`,
+					);
+				}
 				if (definition.gateway !== undefined) {
 					throw new McpModuleError(
 						"INVALID_CATALOG_EXPOSURE",
 						`MCP catalog exposure cannot be combined with gateway server "${definition.name}".`,
 					);
 				}
-				if ((definition.features?.length ?? 0) > 0) {
+				if ((definition.contributors?.length ?? 0) > 0) {
 					throw new McpModuleError(
 						"INVALID_CATALOG_EXPOSURE",
-						`MCP catalog exposure for server "${definition.name}" cannot safely project tools from arbitrary custom features. Register cataloged tools through decorators or the live capability registry.`,
+						`MCP catalog exposure for server "${definition.name}" cannot safely project tools from custom contributors. Register cataloged tools through decorators or McpCapabilitiesService.`,
 					);
 				}
 			}
-			this.capabilities.configureRuntimes(
+			this.handlerRegistry.configureRuntimes(
 				definitions.map(({ name }) => name),
 				definitions.flatMap(({ name, gateway }) => (gateway === undefined ? [] : [name])),
 				definitions.flatMap(({ name, catalogExposure }) =>
@@ -65,25 +91,146 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 			for (const definition of definitions) {
 				const {
 					catalogExposure,
+					contributors: contributorTokens,
 					gateway,
-					handlerAuthorization,
-					handlerLifecycleObserver,
-					handlerMiddleware,
+					handlerAuthorization: handlerAuthorizationToken,
+					handlerLifecycleObserver: handlerLifecycleObserverToken,
+					handlerMiddleware: handlerMiddlewareTokens,
 					handlerVisibilityTimeoutMs,
-					principalClaims,
+					lifecycleObserver: lifecycleObserverToken,
+					middleware: middlewareTokens,
+					observer: observerToken,
+					onError: errorReporterToken,
+					principalClaims: principalClaimsToken,
 					...serverDefinition
 				} = definition;
-				if (gateway !== undefined && this.capabilities.hasHandlersFor(definition.name)) {
+				const contributors = this.#providerTokenList(
+					contributorTokens,
+					definition.name,
+					"contributors",
+				).map((token) =>
+					this.#resolveProvider<McpServerContributor>(
+						token,
+						definition.name,
+						"contributor",
+						"contribute",
+					),
+				);
+				const catalogPolicy =
+					catalogExposure === undefined
+						? undefined
+						: this.#resolveProvider<McpCatalogExposurePolicy>(
+								catalogExposure.policy,
+								definition.name,
+								"catalog exposure policy",
+								"resolve",
+							);
+				const resolvedCatalogExposure =
+					catalogPolicy === undefined
+						? undefined
+						: Object.freeze({
+								resolver: (input: Parameters<McpCatalogExposurePolicy["resolve"]>[0]) =>
+									catalogPolicy.resolve(input),
+							});
+				if (resolvedCatalogExposure !== undefined) {
+					assertMcpCatalogExposureOptions(resolvedCatalogExposure, definition.name);
+				}
+				const handlerAuthorization =
+					handlerAuthorizationToken === undefined
+						? undefined
+						: this.#resolveProvider<McpHandlerAuthorizationPolicy>(
+								handlerAuthorizationToken,
+								definition.name,
+								"handler authorization policy",
+								"authorize",
+							);
+				const handlerMiddleware = this.#providerTokenList(
+					handlerMiddlewareTokens,
+					definition.name,
+					"handlerMiddleware",
+				).map((token) => {
+					const provider = this.#resolveProvider<McpHandlerMiddlewareProvider>(
+						token,
+						definition.name,
+						"handler middleware",
+						"handle",
+					);
+					return provider.handle.bind(provider);
+				});
+				const handlerLifecycleObserver =
+					handlerLifecycleObserverToken === undefined
+						? undefined
+						: this.#resolveProvider<McpHandlerLifecycleObserver>(
+								handlerLifecycleObserverToken,
+								definition.name,
+								"handler lifecycle observer",
+								"onEvent",
+							);
+				const principalClaimsProvider =
+					principalClaimsToken === undefined
+						? undefined
+						: this.#resolveProvider<McpServerPrincipalClaimsProvider>(
+								principalClaimsToken,
+								definition.name,
+								"principal claims provider",
+								"resolvePrincipalClaims",
+							);
+				const middleware = this.#providerTokenList(
+					middlewareTokens,
+					definition.name,
+					"middleware",
+				).map((token) => {
+					const provider = this.#resolveProvider<McpServerMiddlewareProvider>(
+						token,
+						definition.name,
+						"server middleware",
+						"handle",
+					);
+					return provider.handle.bind(provider);
+				});
+				const lifecycleObserver =
+					lifecycleObserverToken === undefined
+						? undefined
+						: this.#resolveProvider<McpServerLifecycleObserver>(
+								lifecycleObserverToken,
+								definition.name,
+								"server lifecycle observer",
+								"onEvent",
+							);
+				const runtimeObserver =
+					observerToken === undefined
+						? undefined
+						: this.#resolveProvider<McpServerRuntimeObserverProvider>(
+								observerToken,
+								definition.name,
+								"server runtime observer",
+								"observe",
+							);
+				const errorReporter =
+					errorReporterToken === undefined
+						? undefined
+						: this.#resolveProvider<McpServerErrorReporter>(
+								errorReporterToken,
+								definition.name,
+								"server error reporter",
+								"report",
+							);
+				if (
+					gateway !== undefined &&
+					(this.handlerRegistry.hasHandlersFor(definition.name) || contributors.length > 0)
+				) {
 					throw new McpModuleError(
 						"INVALID_OPTIONS",
-						`MCP gateway server "${definition.name}" must be dedicated and cannot also host decorated tools, prompts, or resources.`,
+						`MCP gateway server "${definition.name}" must be dedicated and cannot also host decorated or contributed capabilities.`,
 					);
 				}
-				const discovered = this.capabilities.asServerFeature({
+				const discovered = this.handlerRegistry.asServerFeature({
 					serverName: definition.name,
-					...(catalogExposure === undefined ? {} : { catalogExposure }),
+					...(resolvedCatalogExposure === undefined
+						? {}
+						: { catalogExposure: resolvedCatalogExposure }),
 					...(handlerAuthorization === undefined ? {} : { authorization: handlerAuthorization }),
-					...(handlerMiddleware === undefined ? {} : { middleware: handlerMiddleware }),
+					...(handlerMiddleware.length === 0 ? {} : { middleware: handlerMiddleware }),
 					...(handlerLifecycleObserver === undefined
 						? {}
 						: { lifecycleObserver: handlerLifecycleObserver }),
@@ -91,19 +238,37 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 						? {}
 						: { visibilityTimeoutMs: handlerVisibilityTimeoutMs }),
 				});
-				const features = [...(serverDefinition.features ?? [])];
+				const features: McpServerFeature[] = [];
 				// Discovery may be disabled while live registry APIs remain enabled.
 				if (gateway === undefined) features.push(discovered);
+				if (contributors.length > 0) {
+					features.push(async (server, context) => {
+						for (const contributor of contributors) await contributor.contribute(server, context);
+					});
+				}
 				if (gateway !== undefined) {
 					features.push(this.#createGatewayFeature(definition.name, gateway));
 				}
 				this.servers.register({
 					...serverDefinition,
-					...(principalClaims === undefined ? {} : { principalClaims }),
+					...(principalClaimsProvider === undefined
+						? {}
+						: {
+								principalClaims: (authInfo) =>
+									principalClaimsProvider.resolvePrincipalClaims(authInfo),
+							}),
+					...(middleware.length === 0 ? {} : { middleware }),
+					...(lifecycleObserver === undefined ? {} : { lifecycleObserver }),
+					...(runtimeObserver === undefined
+						? {}
+						: { observer: (event) => runtimeObserver.observe(event) }),
+					...(errorReporter === undefined
+						? {}
+						: { onError: (error) => errorReporter.report(error) }),
 					...(features.length === 0 ? {} : { features }),
 				});
 			}
-			this.#unsubscribeCapabilityMutations = this.capabilities.onMutation(
+			this.#unsubscribeCapabilityMutations = this.handlerRegistry.onMutation(
 				({ kind, serverNames }) => {
 					for (const serverName of serverNames) {
 						try {
@@ -195,6 +360,7 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 		const errors: unknown[] = [];
 		this.#unsubscribeCapabilityMutations?.();
 		this.#unsubscribeCapabilityMutations = undefined;
+		this.handlerRegistry.close();
 		// Stop accepting inbound gateway work before closing its upstream clients.
 		try {
 			await this.servers.close();
@@ -229,7 +395,23 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 	}
 
 	#createGatewayFeature(serverName: string, options: McpNestGatewayOptions) {
-		const upstreams = options.upstreams.map((definition) => {
+		const { policy: policyToken, upstreams: upstreamDefinitions, ...gatewayOptions } = options;
+		const policy = this.#bindGatewayPolicy(
+			this.#resolveProvider<McpGatewayPolicy>(
+				policyToken,
+				serverName,
+				"gateway policy",
+				"authorize",
+			),
+			serverName,
+		);
+		if (!Array.isArray(upstreamDefinitions)) {
+			throw new McpModuleError(
+				"INVALID_OPTIONS",
+				`MCP gateway upstreams for server "${serverName}" must be an array.`,
+			);
+		}
+		const upstreams = upstreamDefinitions.map((definition) => {
 			if (isResolvedGatewayUpstream(definition)) return definition;
 			const normalized = normalizeGatewayUpstream(definition);
 			if (!this.clients.has(normalized.clientName)) {
@@ -244,9 +426,90 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 				normalized.gatewayName,
 			);
 		});
-		const gateway = createMcpGateway({ ...options, upstreams });
+		const gateway = new McpGateway({ ...gatewayOptions, policy, upstreams });
 		this.#gateways.set(serverName, gateway);
 		return gateway.asServerFeature();
+	}
+
+	#resolveProvider<Value>(
+		token: McpProviderToken<Value>,
+		serverName: string,
+		role: string,
+		method: string,
+	): Value {
+		try {
+			const provider = this.providers.get(token);
+			if (
+				(typeof provider !== "object" && typeof provider !== "function") ||
+				provider === null ||
+				typeof Reflect.get(provider, method) !== "function"
+			) {
+				throw new TypeError(`resolved provider does not implement ${method}()`);
+			}
+			// The configured contract for every collaborator is structural and method-based.
+			// oxlint-disable-next-line typescript/no-unsafe-type-assertion
+			return provider as Value;
+		} catch (cause) {
+			throw new McpModuleError(
+				"INVALID_OPTIONS",
+				`MCP ${role} ${mcpProviderTokenName(token)} for server "${serverName}" must be listed in McpModule collaborators.providers and implement ${method}().`,
+				{ cause },
+			);
+		}
+	}
+
+	#providerTokenList<Value>(
+		value: readonly McpProviderToken<Value>[] | undefined,
+		serverName: string,
+		field: string,
+	): readonly McpProviderToken<Value>[] {
+		if (value === undefined) return [];
+		if (Array.isArray(value)) return value;
+		throw new McpModuleError(
+			"INVALID_OPTIONS",
+			`MCP server "${serverName}" ${field} must be an array of collaborator provider tokens.`,
+		);
+	}
+
+	#bindGatewayPolicy(policy: McpGatewayPolicy, serverName: string): McpGatewayPolicy {
+		const { authorizePrompt, authorizeResource, authorizeResourceTemplate } = policy;
+		for (const [name, hook] of [
+			["authorizePrompt", authorizePrompt],
+			["authorizeResource", authorizeResource],
+			["authorizeResourceTemplate", authorizeResourceTemplate],
+		] as const) {
+			if (hook !== undefined && typeof hook !== "function") {
+				throw new McpModuleError(
+					"INVALID_OPTIONS",
+					`MCP gateway policy for server "${serverName}" has a non-callable ${name} hook.`,
+				);
+			}
+		}
+		return Object.freeze({
+			authorize: (operation: Parameters<McpGatewayPolicy["authorize"]>[0]) =>
+				policy.authorize(operation),
+			...(authorizePrompt === undefined
+				? {}
+				: {
+						authorizePrompt: (
+							operation: Parameters<NonNullable<McpGatewayPolicy["authorizePrompt"]>>[0],
+						) => authorizePrompt.call(policy, operation),
+					}),
+			...(authorizeResource === undefined
+				? {}
+				: {
+						authorizeResource: (
+							operation: Parameters<NonNullable<McpGatewayPolicy["authorizeResource"]>>[0],
+						) => authorizeResource.call(policy, operation),
+					}),
+			...(authorizeResourceTemplate === undefined
+				? {}
+				: {
+						authorizeResourceTemplate: (
+							operation: Parameters<NonNullable<McpGatewayPolicy["authorizeResourceTemplate"]>>[0],
+						) => authorizeResourceTemplate.call(policy, operation),
+					}),
+		});
 	}
 }
 

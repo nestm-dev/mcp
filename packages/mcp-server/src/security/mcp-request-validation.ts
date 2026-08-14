@@ -46,13 +46,6 @@ export class McpValidatedServer implements McpFetchHandler {
 	}
 }
 
-export function withMcpRequestValidation(
-	handler: McpFetchHandler,
-	options: McpRequestValidationOptions,
-): McpValidatedServer {
-	return new McpValidatedServer(handler, options);
-}
-
 function normalizeAllowlist(values: readonly string[], field: string): string[] {
 	if (values.length === 0) throw new TypeError(`${field} cannot be empty.`);
 	return values.map((value, index) => {

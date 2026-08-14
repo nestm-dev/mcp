@@ -1,4 +1,4 @@
-import type { Type } from "@nestjs/common";
+import type { InjectionToken } from "@nestjs/common";
 import type { MaybePromise } from "@nestm/mcp-core";
 import type { McpServerBuildContext } from "@nestm/mcp-server";
 
@@ -8,7 +8,7 @@ export interface McpCapabilityVisibilityPolicy {
 }
 
 /** Static visibility or a singleton Nest provider evaluated once per server build. */
-export type McpCapabilityVisibility = boolean | Type<McpCapabilityVisibilityPolicy>;
+export type McpCapabilityVisibility = boolean | InjectionToken<McpCapabilityVisibilityPolicy>;
 
 /** A live dynamic registration backed by the registry's copy-on-write snapshot. */
 export interface McpDynamicHandlerRegistration<Handler> {
@@ -31,3 +31,11 @@ export interface McpCapabilityMutation {
 }
 
 export type McpCapabilityMutationObserver = (mutation: McpCapabilityMutation) => MaybePromise<void>;
+
+/** Public, callback-free description of one registered capability. */
+export interface McpCapabilityDescriptor {
+	readonly kind: McpCapabilityMutationKind;
+	readonly name: string;
+	readonly source: string;
+	readonly serverNames: readonly string[];
+}

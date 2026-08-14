@@ -26,8 +26,8 @@ pnpm add @nestm/mcp-gateway @nestm/mcp-client @nestm/mcp-server
 
 ```ts
 import { allowMcpOperation, denyMcpOperation } from "@nestm/mcp-core";
-import { createMcpGateway, type McpGatewayPolicy } from "@nestm/mcp-gateway";
-import { defineMcpServer } from "@nestm/mcp-server";
+import { McpGateway, type McpGatewayPolicy } from "@nestm/mcp-gateway";
+import type { McpServerDefinition } from "@nestm/mcp-server";
 
 const policy: McpGatewayPolicy = {
 	authorize(operation) {
@@ -55,7 +55,7 @@ const policy: McpGatewayPolicy = {
 	},
 };
 
-const gateway = createMcpGateway({
+const gateway = new McpGateway({
 	upstreams: [
 		{ name: "github", client: githubClient },
 		{ name: "observability", client: observabilityClient },
@@ -64,17 +64,17 @@ const gateway = createMcpGateway({
 	// The default resolver safely partitions by principal dimensions and bearer fingerprint.
 });
 
-export const gatewayServer = defineMcpServer({
+export const gatewayServer = {
 	name: "agent-gateway",
 	serverInfo: { name: "agent-gateway", version: "1.0.0" },
 	features: [gateway.asServerFeature()],
-});
+} satisfies McpServerDefinition;
 ```
 
 `McpGatewayClient` is intentionally structural and capability-complete. An official v2 `Client` can be supplied directly. Existing `McpGatewayToolClient` implementations remain valid: prompts, concrete resources, templates, and completion are projected only when their required structural methods and advertised upstream capabilities are present. A resolver may be supplied instead when the correct upstream connection depends on tenant, principal, or credential state:
 
 ```ts
-const gateway = createMcpGateway({
+const gateway = new McpGateway({
 	upstreams: [
 		{
 			name: "tenant-tools",
@@ -93,10 +93,10 @@ For the first-party multi-server client runtime, use the named-server adapter:
 
 ```ts
 import { McpClientRuntime } from "@nestm/mcp-client";
-import { createMcpClientRuntimeUpstream, createMcpGateway } from "@nestm/mcp-gateway";
+import { McpGateway, createMcpClientRuntimeUpstream } from "@nestm/mcp-gateway";
 
 const clients = new McpClientRuntime({ servers });
-const gateway = createMcpGateway({
+const gateway = new McpGateway({
 	upstreams: [
 		createMcpClientRuntimeUpstream(clients, "github"),
 		createMcpClientRuntimeUpstream(clients, "grafana", "observability"),
@@ -141,7 +141,7 @@ Gateway middleware wraps upstream discovery and execution. Execution policy is e
 
 ```ts
 import {
-	createMcpGateway,
+	McpGateway,
 	createMcpGatewayPassthroughMiddleware,
 	defineMcpGatewayTransform,
 } from "@nestm/mcp-gateway";
@@ -162,7 +162,7 @@ const invocationTransform = defineMcpGatewayTransform(
 	},
 );
 
-const gateway = createMcpGateway({
+const gateway = new McpGateway({
 	upstreams,
 	policy,
 	middleware: [tracePropagationMiddleware, concurrencyLimitMiddleware, invocationTransform],

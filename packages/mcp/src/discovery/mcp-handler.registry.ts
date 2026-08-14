@@ -1,5 +1,4 @@
-import { Injectable, Scope } from "@nestjs/common";
-import { ModuleRef } from "@nestjs/core";
+import { Injectable } from "@nestjs/common";
 import {
 	composeMcpMiddleware,
 	createMcpAuthorizationMiddleware,
@@ -23,6 +22,7 @@ import type {
 	ToolCallback,
 } from "@nestm/mcp-server";
 import type {
+	McpCapabilityDescriptor,
 	McpCapabilityMutation,
 	McpCapabilityMutationObserver,
 	McpCapabilityVisibilityPolicy,
@@ -48,6 +48,11 @@ import type {
 	McpHandlerMiddleware,
 	McpHandlerOperationContext,
 } from "../mcp.types.ts";
+import {
+	McpProviderRegistry,
+	isMcpRuntimeProviderToken,
+	mcpProviderTokenName,
+} from "../mcp-provider.registry.ts";
 import type {
 	HandlerDefinition,
 	PromptOptions,
@@ -61,14 +66,11 @@ export type McpDiscoveredHandler = (
 	...arguments_: unknown[]
 ) => MaybePromise<McpHandlerInvocationOutput>;
 
-export interface McpRegisteredHandler {
-	readonly definition: HandlerDefinition;
-	readonly source: string;
-}
-
-interface RegisteredHandler extends McpRegisteredHandler {
+interface RegisteredHandler {
 	readonly id: symbol;
+	readonly definition: HandlerDefinition;
 	readonly handler: McpDiscoveredHandler;
+	readonly source: string;
 	readonly visibility: boolean | McpCapabilityVisibilityPolicy | undefined;
 }
 
@@ -84,12 +86,13 @@ interface McpHandlerPipelineOptions {
 @Injectable()
 export class McpHandlerRegistry {
 	#handlers: readonly RegisteredHandler[] = Object.freeze([]);
+	#closed = false;
 	#serverNames: readonly string[] | undefined;
 	#gatewayNames = new Set<string>();
 	#catalogRuntimeNames = new Set<string>();
 	readonly #mutationObservers = new Set<McpCapabilityMutationObserver>();
 
-	constructor(private readonly moduleRef: ModuleRef) {}
+	constructor(private readonly providers: McpProviderRegistry) {}
 
 	/** Adds one discovered handler. Prefer the typed capability methods for live registration. */
 	register(definition: HandlerDefinition, handler: McpDiscoveredHandler, source: string): void {
@@ -138,8 +141,15 @@ export class McpHandlerRegistry {
 		);
 	}
 
-	list(): readonly McpRegisteredHandler[] {
-		return this.#handlers.map(({ definition, source }) => Object.freeze({ definition, source }));
+	list(): readonly McpCapabilityDescriptor[] {
+		return this.#handlers.map((entry) =>
+			Object.freeze({
+				kind: entry.definition.kind,
+				name: entry.definition.options.name,
+				source: entry.source,
+				serverNames: Object.freeze([...this.#effectiveTargets(entry.definition)]),
+			}),
+		);
 	}
 
 	/** Locks target validation to the runtimes declared by the root module. */
@@ -168,6 +178,7 @@ export class McpHandlerRegistry {
 
 	/** Observes committed live mutations. The returned unsubscriber is idempotent. */
 	onMutation(observer: McpCapabilityMutationObserver): () => void {
+		this.#assertOpen();
 		if (typeof observer !== "function") {
 			throw new TypeError("MCP capability mutation observer must be a function.");
 		}
@@ -175,6 +186,14 @@ export class McpHandlerRegistry {
 		return () => {
 			this.#mutationObservers.delete(observer);
 		};
+	}
+
+	/** Seals live mutation APIs and releases handler callbacks during application shutdown. */
+	close(): void {
+		if (this.#closed) return;
+		this.#closed = true;
+		this.#handlers = Object.freeze([]);
+		this.#mutationObservers.clear();
 	}
 
 	assertNoCollisions(runtimeName: string): void {
@@ -241,6 +260,7 @@ export class McpHandlerRegistry {
 		source: string,
 		notify: boolean,
 	): RegisteredHandler {
+		this.#assertOpen();
 		const normalizedSource = normalizeSource(source);
 		const normalizedDefinition = freezeDefinition(definition);
 		this.#assertKnownTargets(normalizedDefinition, normalizedSource);
@@ -263,6 +283,7 @@ export class McpHandlerRegistry {
 		source: string,
 		eraseReplacement: (handler: Handler) => McpDiscoveredHandler,
 	): McpDynamicHandlerRegistration<Handler> {
+		this.#assertOpen();
 		if (this.#serverNames === undefined) {
 			throw new McpModuleError(
 				"RUNTIME_NOT_READY",
@@ -274,6 +295,7 @@ export class McpHandlerRegistry {
 		return Object.freeze({
 			source: current.source,
 			replace: (nextHandler: Handler): boolean => {
+				this.#assertOpen();
 				if (!active) return false;
 				const index = this.#handlers.findIndex((entry) => entry.id === current.id);
 				if (index === -1) {
@@ -295,6 +317,7 @@ export class McpHandlerRegistry {
 				return true;
 			},
 			unregister: (): boolean => {
+				this.#assertOpen();
 				if (!active) return false;
 				const next = this.#handlers.filter((entry) => entry.id !== current.id);
 				if (next.length === this.#handlers.length) {
@@ -309,31 +332,36 @@ export class McpHandlerRegistry {
 		});
 	}
 
+	#assertOpen(): void {
+		if (!this.#closed) return;
+		throw new McpModuleError(
+			"RUNTIME_CLOSED",
+			"MCP capabilities cannot be mutated after the Nest runtime begins shutdown.",
+		);
+	}
+
 	#resolveVisibility(
 		definition: HandlerDefinition,
 		source: string,
 	): boolean | McpCapabilityVisibilityPolicy | undefined {
 		const visibility = definition.options.visibility;
 		if (visibility === undefined || typeof visibility === "boolean") return visibility;
-		if (typeof visibility !== "function") {
+		if (!isMcpRuntimeProviderToken(visibility)) {
 			throw new McpModuleError(
 				"INVALID_VISIBILITY_POLICY",
-				`MCP handler ${source} visibility must be a boolean or registered singleton provider class.`,
+				`MCP handler ${source} visibility must be a boolean or collaborator provider token.`,
 			);
 		}
 		try {
-			if (this.moduleRef.introspect(visibility).scope !== Scope.DEFAULT) {
-				throw new TypeError("visibility policies must use the default singleton scope");
-			}
-			const policy = this.moduleRef.get(visibility, { strict: false });
-			if (typeof policy !== "object" || policy === null || typeof policy.isVisible !== "function") {
+			const policy = this.providers.get(visibility);
+			if (!isCapabilityVisibilityPolicy(policy)) {
 				throw new TypeError("resolved provider does not implement isVisible(context)");
 			}
 			return policy;
 		} catch (cause) {
 			throw new McpModuleError(
 				"INVALID_VISIBILITY_POLICY",
-				`MCP handler ${source} visibility policy ${visibility.name || "<anonymous>"} must be a registered singleton provider.`,
+				`MCP handler ${source} visibility policy ${mcpProviderTokenName(visibility)} must be a registered singleton collaborator provider.`,
 				{ cause },
 			);
 		}
@@ -425,6 +453,14 @@ export class McpHandlerRegistry {
 			`MCP tool "${definition.options.name}" from ${source} collides with a reserved catalog meta-tool on server "${runtimeName}".`,
 		);
 	}
+}
+
+function isCapabilityVisibilityPolicy(value: unknown): value is McpCapabilityVisibilityPolicy {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof Reflect.get(value, "isVisible") === "function"
+	);
 }
 
 async function selectVisibleHandlers(

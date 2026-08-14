@@ -1,4 +1,4 @@
-export { McpResourceServer, withMcpBearerAuth } from "./mcp-resource-server.ts";
+export { McpResourceServer } from "./mcp-resource-server.ts";
 export type { McpFetchHandler, McpResourceServerOptions } from "./mcp-resource-server.ts";
 
 export {

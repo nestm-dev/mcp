@@ -109,13 +109,3 @@ export interface McpServerDefinition {
 	/** Isolated error reporter; synchronous throws and asynchronous rejections are contained. */
 	readonly onError?: (error: Error) => MaybePromise<void>;
 }
-
-export function defineMcpServer<const DEFINITION extends McpServerDefinition>(
-	definition: DEFINITION,
-): DEFINITION {
-	return definition;
-}
-
-export function defineMcpServerFeature(feature: McpServerFeature): McpServerFeature {
-	return feature;
-}

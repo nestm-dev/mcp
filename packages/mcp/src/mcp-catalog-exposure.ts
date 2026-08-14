@@ -76,13 +76,14 @@ export type McpCatalogExposureResolver<
 	Strategy extends McpCatalogExposureStrategy = McpCatalogExposureStrategy,
 > = (input: McpCatalogExposureResolverInput) => MaybePromise<Strategy>;
 
-/** Preserves the resolver's exact discriminated strategy return type. */
-export function defineMcpCatalogExposureResolver<const Strategy extends McpCatalogExposureStrategy>(
-	resolver: McpCatalogExposureResolver<Strategy>,
-): McpCatalogExposureResolver<Strategy> {
-	return resolver;
+/** Injectable Nest policy that selects the catalog projection for one serving unit. */
+export interface McpCatalogExposurePolicy<
+	Strategy extends McpCatalogExposureStrategy = McpCatalogExposureStrategy,
+> {
+	resolve(input: McpCatalogExposureResolverInput): MaybePromise<Strategy>;
 }
 
+/** Framework-internal callback adapter. Nest applications configure a policy provider token. */
 export interface McpCatalogExposureOptions {
 	readonly resolver: McpCatalogExposureResolver;
 }

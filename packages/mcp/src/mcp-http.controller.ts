@@ -18,8 +18,8 @@ export interface McpHttpControllerOptions {
 	/**
 	 * Optionally wrap the named runtime before it is mounted.
 	 *
-	 * Use this seam for the framework-neutral `withMcpBearerAuth()` and
-	 * `withMcpRequestValidation()` wrappers. Returning the runtime unchanged is
+	 * Use this seam for framework-neutral `McpResourceServer` and
+	 * `McpValidatedServer` wrappers. Returning the runtime unchanged is
 	 * equivalent to omitting the factory.
 	 */
 	readonly handler?: McpHttpHandlerFactory;
@@ -28,7 +28,9 @@ export interface McpHttpControllerOptions {
 }
 
 /** Constructor returned by {@link McpHttpControllerFor}. */
-export type McpHttpControllerClass = abstract new () => McpHttpController;
+export type McpHttpControllerClass = abstract new (
+	runtimeService: McpRuntimeService,
+) => McpHttpController;
 
 /**
  * Nest-native HTTP entry point for a named MCP server runtime.
@@ -39,8 +41,7 @@ export type McpHttpControllerClass = abstract new () => McpHttpController;
  * the MCP handler.
  */
 export abstract class McpHttpController {
-	@Inject(McpRuntimeService)
-	private readonly runtimeService!: McpRuntimeService;
+	constructor(@Inject(McpRuntimeService) private readonly runtimeService: McpRuntimeService) {}
 
 	protected get mcpServerName(): string {
 		throw new TypeError(

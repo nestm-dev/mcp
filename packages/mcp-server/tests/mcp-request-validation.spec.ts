@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { McpServerRuntime } from "../src/index.ts";
-import { withMcpRequestValidation } from "../src/security/index.ts";
+import { McpValidatedServer } from "../src/security/index.ts";
 
 describe("McpValidatedServer", () => {
 	it("rejects untrusted hosts before dispatch", async () => {
 		const handler = createHandler();
 		const fetch = vi.spyOn(handler, "fetch");
-		const server = withMcpRequestValidation(handler, {
+		const server = new McpValidatedServer(handler, {
 			allowedHostnames: ["api.example.com"],
 			allowedOriginHostnames: ["app.example.com"],
 		});
@@ -26,7 +26,7 @@ describe("McpValidatedServer", () => {
 	it("allows configured host and origin", async () => {
 		const handler = createHandler();
 		const fetch = vi.spyOn(handler, "fetch");
-		const server = withMcpRequestValidation(handler, {
+		const server = new McpValidatedServer(handler, {
 			allowedHostnames: ["api.example.com"],
 			allowedOriginHostnames: ["app.example.com"],
 		});

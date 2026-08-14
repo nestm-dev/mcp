@@ -16,8 +16,8 @@ import { FastifyAdapter } from "@nestjs/platform-fastify";
 import type { Observable } from "rxjs";
 import type { AuthInfo, OAuthTokenVerifier } from "@modelcontextprotocol/server";
 import type { McpServerMiddleware } from "@nestm/mcp-server";
-import { withMcpBearerAuth } from "@nestm/mcp-server/auth";
-import { withMcpRequestValidation } from "@nestm/mcp-server/security";
+import { McpResourceServer } from "@nestm/mcp-server/auth";
+import { McpValidatedServer } from "@nestm/mcp-server/security";
 import { describe, expect, it, vi } from "vitest";
 import { McpModule } from "../src/mcp.module.ts";
 import { McpHttpControllerFor } from "../src/mcp-http.controller.ts";
@@ -76,6 +76,7 @@ describe("McpHttpController", () => {
 	it.each<NestPlatform>(["express", "fastify"])(
 		"mounts through Nest %s with path, version, global guard, and fetch wrappers intact",
 		async (platform) => {
+			const middlewareToken = Symbol(`HTTP_MIDDLEWARE_${platform}`);
 			const guardPaths: string[] = [];
 			const guard: CanActivate = {
 				canActivate(context) {
@@ -110,8 +111,8 @@ describe("McpHttpController", () => {
 
 			const ControllerBase = McpHttpControllerFor("controller-server", {
 				handler: (runtime) =>
-					withMcpRequestValidation(
-						withMcpBearerAuth(runtime, {
+					new McpValidatedServer(
+						new McpResourceServer(runtime, {
 							bearerAuth: { verifier, requiredScopes: ["mcp:invoke"] },
 						}),
 						{
@@ -129,11 +130,14 @@ describe("McpHttpController", () => {
 				imports: [
 					McpModule.forRoot({
 						autoDiscover: false,
+						collaborators: {
+							providers: [{ provide: middlewareToken, useValue: { handle: middleware } }],
+						},
 						servers: [
 							{
 								name: "controller-server",
 								serverInfo: { name: "controller-server", version: "1.0.0" },
-								middleware: [middleware],
+								middleware: [middlewareToken],
 							},
 						],
 					}),

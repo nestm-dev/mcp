@@ -13,7 +13,7 @@ import type {
 	Tool,
 } from "@modelcontextprotocol/server";
 import { allowMcpOperation, denyMcpOperation } from "@nestm/mcp-core";
-import { McpServerRuntime, defineMcpServer } from "@nestm/mcp-server";
+import { McpServerRuntime } from "@nestm/mcp-server";
 import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -71,13 +71,11 @@ describe("gateway resource templates and completion", () => {
 			upstreams: [{ name: "tenant/acme", client: upstreamClient }],
 			policy: allowAllMcpGatewayPolicy(),
 		});
-		const runtime = new McpServerRuntime(
-			defineMcpServer({
-				name: "gateway",
-				serverInfo: { name: "gateway", version: "1.0.0" },
-				features: [gateway.asServerFeature()],
-			}),
-		);
+		const runtime = new McpServerRuntime({
+			name: "gateway",
+			serverInfo: { name: "gateway", version: "1.0.0" },
+			features: [gateway.asServerFeature()],
+		});
 		const downstreamServer = await runtime.createServer({ era: "modern" });
 		const downstreamClient = new Client({ name: "agent", version: "1.0.0" });
 		const [downstreamClientTransport, downstreamServerTransport] =
@@ -176,13 +174,11 @@ describe("gateway resource templates and completion", () => {
 			policy: allowAllMcpGatewayPolicy(),
 			authorizationContextResolver: () => "principal-a",
 		});
-		const runtime = new McpServerRuntime(
-			defineMcpServer({
-				name: "gateway",
-				serverInfo: { name: "gateway", version: "1.0.0" },
-				features: [gateway.asServerFeature()],
-			}),
-		);
+		const runtime = new McpServerRuntime({
+			name: "gateway",
+			serverInfo: { name: "gateway", version: "1.0.0" },
+			features: [gateway.asServerFeature()],
+		});
 		const server = await runtime.createServer({ era: "modern" });
 		const client = new Client({ name: "agent", version: "1.0.0" });
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

@@ -6,7 +6,7 @@ import {
 	allowMcpOperation,
 	denyMcpOperation,
 } from "@nestm/mcp-core";
-import { McpServerRuntime, defineMcpServer } from "@nestm/mcp-server";
+import { McpServerRuntime } from "@nestm/mcp-server";
 import type { AuthInfo, CallToolResult } from "@nestm/mcp-server";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -45,13 +45,11 @@ describe("McpGateway", () => {
 			upstreams: [{ name: "primary", client: upstream }],
 			policy: allowAllMcpGatewayPolicy(),
 		});
-		const runtime = new McpServerRuntime(
-			defineMcpServer({
-				name: "gateway",
-				serverInfo: { name: "gateway", version: "1.0.0" },
-				features: [gateway.asServerFeature()],
-			}),
-		);
+		const runtime = new McpServerRuntime({
+			name: "gateway",
+			serverInfo: { name: "gateway", version: "1.0.0" },
+			features: [gateway.asServerFeature()],
+		});
 		const server = await runtime.createServer({ era: "modern" });
 		const client = new Client({ name: "gateway-test", version: "1.0.0" });
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

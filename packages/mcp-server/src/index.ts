@@ -2,7 +2,6 @@ export { McpServerRuntimeError } from "./mcp-server.errors.ts";
 export type { McpServerErrorCode } from "./mcp-server.errors.ts";
 export { McpServerRegistry } from "./mcp-server.registry.ts";
 export { McpServerRuntime, resolveMcpServerPrincipal } from "./mcp-server.runtime.ts";
-export { defineMcpServer, defineMcpServerFeature } from "./mcp-server.types.ts";
 export type {
 	MaybePromise,
 	McpServerBuildContext,

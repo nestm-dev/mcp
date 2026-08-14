@@ -106,7 +106,6 @@ export { createMcpClientPassthroughMiddleware, defineMcpClientTransform } from "
 
 export {
 	composeMcpFetchMiddleware,
-	createDefaultMcpClientTransportFactory,
 	createMcpClientTransport,
 	createMcpHttpClientTransport,
 	createMcpStdioClientTransport,

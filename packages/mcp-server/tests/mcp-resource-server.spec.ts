@@ -1,13 +1,13 @@
 import type { AuthInfo } from "@modelcontextprotocol/server";
 import { describe, expect, it, vi } from "vitest";
-import { withMcpBearerAuth } from "../src/auth/index.ts";
+import { McpResourceServer } from "../src/auth/index.ts";
 import { McpServerRuntime } from "../src/index.ts";
 
 describe("McpResourceServer", () => {
 	it("rejects missing tokens before dispatch", async () => {
 		const handler = createHandler();
 		const fetch = vi.spyOn(handler, "fetch");
-		const resourceServer = withMcpBearerAuth(handler, {
+		const resourceServer = new McpResourceServer(handler, {
 			bearerAuth: {
 				verifier: { verifyAccessToken: vi.fn<() => Promise<AuthInfo>>() },
 				requiredScopes: ["mcp"],
@@ -34,7 +34,7 @@ describe("McpResourceServer", () => {
 		};
 		const handler = createHandler();
 		const fetch = vi.spyOn(handler, "fetch");
-		const resourceServer = withMcpBearerAuth(handler, {
+		const resourceServer = new McpResourceServer(handler, {
 			bearerAuth: {
 				verifier: { verifyAccessToken: async () => authInfo },
 				requiredScopes: ["mcp"],

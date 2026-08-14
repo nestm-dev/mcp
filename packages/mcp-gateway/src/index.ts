@@ -21,8 +21,6 @@ export type { McpGatewayErrorCode } from "./mcp-gateway.errors.ts";
 export {
 	McpGateway,
 	allowAllMcpGatewayPolicy,
-	createMcpGateway,
-	createMcpGatewayFeature,
 	defaultMcpGatewayAuthorizationContext,
 } from "./mcp-gateway.ts";
 

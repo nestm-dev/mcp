@@ -16,6 +16,17 @@ export class McpHandlerExplorer {
 		private readonly registry: McpHandlerRegistry,
 	) {}
 
+	assertSingleRoot(): void {
+		const rootCount = this.discovery
+			.getProviders()
+			.filter(({ token }) => token === McpHandlerRegistry).length;
+		if (rootCount === 1) return;
+		throw new McpModuleError(
+			"INVALID_OPTIONS",
+			"McpModule.forRoot() or forRootAsync() must be imported exactly once per Nest application. Configure every MCP client and server in that shared root.",
+		);
+	}
+
 	scan(): void {
 		if (this.#scanned) return;
 		this.#scanned = true;

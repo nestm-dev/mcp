@@ -448,7 +448,7 @@ For a deliberate legacy-only connection:
 - Deprecated compatibility: `setLoggingLevel`, `sendRootsListChanged`
 - Introspection: `snapshot(name?)`
 - Transports: `createMcpHttpClientTransport`, `createMcpStdioClientTransport`,
-  `createMcpClientTransport`, `createDefaultMcpClientTransportFactory`
+  `createMcpClientTransport`, `defaultMcpClientTransportFactory`
 - Fetch middleware: `composeMcpFetchMiddleware` plus re-exported `applyMiddlewares`,
   `createMiddleware`, `withLogging`, and `withOAuth`
 - Official SDK facade: `Client`, `StreamableHTTPClientTransport`, `StdioClientTransport`, OAuth

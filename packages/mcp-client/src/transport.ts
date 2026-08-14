@@ -116,16 +116,12 @@ export function createMcpClientTransport(
 	}
 }
 
-/** Returns a stateless transport factory suitable for runtime defaults or DI. */
-export function createDefaultMcpClientTransportFactory(): McpClientTransportFactory {
-	return Object.freeze({
-		createTransport(definition: McpClientTransportDefinition): Transport {
-			return createMcpClientTransport(definition);
-		},
-	});
-}
-
-export const defaultMcpClientTransportFactory = createDefaultMcpClientTransportFactory();
+/** Stateless transport factory used by runtimes that do not inject a custom factory. */
+export const defaultMcpClientTransportFactory: McpClientTransportFactory = Object.freeze({
+	createTransport(definition: McpClientTransportDefinition): Transport {
+		return createMcpClientTransport(definition);
+	},
+});
 
 const defaultFetch: FetchLike = (url, init) => globalThis.fetch(url, init);
 

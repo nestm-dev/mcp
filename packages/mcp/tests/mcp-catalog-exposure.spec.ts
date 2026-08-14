@@ -1,6 +1,8 @@
 import { Injectable, type INestApplication, type Provider } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { allowAllMcpGatewayPolicy } from "@nestm/mcp-gateway";
+import type { McpServer, McpServerRuntime } from "@nestm/mcp-server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	MCP_CATALOG_SCHEMAS_TOOL_NAME,
@@ -9,18 +11,18 @@ import {
 	McpModuleError,
 	McpRuntimeService,
 	Tool,
-	allowAllMcpGatewayPolicy,
 	allowMcpOperation,
 	fromJsonSchema,
 } from "../src/index.ts";
 import type {
 	McpCapabilityVisibilityPolicy,
+	McpCatalogExposurePolicy,
 	McpCatalogExposureResolverInput,
 	McpHandlerAuthorizationPolicy,
 	McpNestServerDefinition,
-	McpServer,
+	McpProviderToken,
 	McpServerBuildContext,
-	McpServerRuntime,
+	McpServerContributor,
 } from "../src/index.ts";
 
 const TYPELESS_INPUT_SCHEMA = fromJsonSchema<{ value?: string }>({
@@ -166,7 +168,6 @@ class InvalidVisibilityCatalogFixtures {
 	@Tool({
 		name: "non-boolean-visibility",
 		servers: "visibility-nonboolean-catalog",
-		// @ts-expect-error This malformed provider verifies the runtime's fail-closed check.
 		visibility: NonBooleanCatalogVisibility,
 	})
 	nonBooleanVisibility() {
@@ -201,7 +202,10 @@ describe("authorization-safe MCP catalog exposure", () => {
 					return { kind: "eager" };
 				}),
 			]),
-			[AdminOnlyVisibility, CatalogFixtures],
+			{
+				fixtureProviders: [CatalogFixtures],
+				collaboratorProviders: [AdminOnlyVisibility],
+			},
 		);
 		const session = await connectFreshBuild(
 			application.get(McpRuntimeService).server("eager-catalog"),
@@ -270,10 +274,15 @@ describe("authorization-safe MCP catalog exposure", () => {
 									eager: [{ kind: "tag" as const, tag: "public" }],
 								};
 					}),
-					handlerAuthorization: { authorize },
+					handlerAuthorization: testValueProviderToken("principal-catalog authorization", {
+						authorize,
+					} satisfies McpHandlerAuthorizationPolicy),
 				},
 			]),
-			[AdminOnlyVisibility, CatalogFixtures],
+			{
+				fixtureProviders: [CatalogFixtures],
+				collaboratorProviders: [AdminOnlyVisibility],
+			},
 		);
 		const runtime = application.get(McpRuntimeService).server("principal-catalog");
 		const [admin, guest] = await Promise.all([
@@ -375,10 +384,15 @@ describe("authorization-safe MCP catalog exposure", () => {
 						eager: [{ kind: "name", name: "search-eager" }],
 						deferredMetadata: { "vendor.example/deferred": { searchable: true } },
 					})),
-					handlerAuthorization: { authorize },
+					handlerAuthorization: testValueProviderToken("search-catalog authorization", {
+						authorize,
+					} satisfies McpHandlerAuthorizationPolicy),
 				},
 			]),
-			[AdminOnlyVisibility, CatalogFixtures],
+			{
+				fixtureProviders: [CatalogFixtures],
+				collaboratorProviders: [AdminOnlyVisibility],
+			},
 		);
 		const session = await connectFreshBuild(
 			application.get(McpRuntimeService).server("search-catalog"),
@@ -426,8 +440,7 @@ describe("authorization-safe MCP catalog exposure", () => {
 					};
 				}),
 			],
-			[],
-			false,
+			{ autoDiscover: false },
 		);
 		const service = application.get(McpRuntimeService);
 		const mutableMeta = { existing: { version: "initial" } };
@@ -468,8 +481,7 @@ describe("authorization-safe MCP catalog exposure", () => {
 					eager: [{ kind: "predicate", predicate: () => true }],
 				})),
 			],
-			[],
-			false,
+			{ autoDiscover: false },
 		);
 		const service = application.get(McpRuntimeService);
 		const runtime = service.server("dynamic-catalog");
@@ -497,12 +509,13 @@ describe("authorization-safe MCP catalog exposure", () => {
 				async () => ({ content: [{ type: "text" as const, text: String(index) }] }),
 			);
 		}
-		const stored = service.capabilities
-			.list()
-			.find(({ definition }) => definition.options.name === "bulk-00");
-		if (stored?.definition.kind !== "tool") throw new Error("Expected stored dynamic tool.");
-		expect(stored.definition.options.tags).toEqual(["bulk"]);
-		expect(Object.isFrozen(stored.definition.options.tags)).toBe(true);
+		const stored = service.capabilities.list().find(({ name }) => name === "bulk-00");
+		expect(stored).toMatchObject({
+			kind: "tool",
+			name: "bulk-00",
+			serverNames: ["dynamic-catalog"],
+		});
+		expect(stored).not.toHaveProperty("definition");
 		expect(() =>
 			service.capabilities.registerTool(
 				{ name: "invalid-tags", servers: "dynamic-catalog", tags: ["duplicate", "duplicate"] },
@@ -534,6 +547,13 @@ describe("authorization-safe MCP catalog exposure", () => {
 		expect(changes).toHaveBeenCalledTimes(56);
 		const currentBuild = await connectFreshBuild(runtime);
 		try {
+			const storedTagSearch = await registeredBuild.client.callTool({
+				name: MCP_CATALOG_SEARCH_TOOL_NAME,
+				arguments: { query: "bulk-00" },
+			});
+			expect(readStructuredTools(storedTagSearch)).toEqual([
+				{ name: "bulk-00", description: LONG_MULTIBYTE_QUERY, tags: ["bulk"] },
+			]);
 			expect((await oldBuild.client.listTools()).tools.map(({ name }) => name)).toEqual([
 				MCP_CATALOG_SEARCH_TOOL_NAME,
 				MCP_CATALOG_SCHEMAS_TOOL_NAME,
@@ -638,15 +658,18 @@ describe("authorization-safe MCP catalog exposure", () => {
 
 	it("rejects unsafe catalog composition and static meta-tool collisions at bootstrap", async () => {
 		const customFeature = vi.fn();
+		const contributor = testValueProviderToken("custom-feature-catalog contributor", {
+			contribute: customFeature,
+		} satisfies McpServerContributor);
 		await expectBootstrapFailure(
 			[
 				{
 					...catalogServer("custom-feature-catalog", () => ({ kind: "eager" })),
-					features: [customFeature],
+					contributors: [contributor],
 				},
 			],
 			[],
-			/cannot safely project tools from arbitrary custom features/,
+			/cannot safely project tools from custom contributors/,
 		);
 		expect(customFeature).not.toHaveBeenCalled();
 		await expectBootstrapFailure(
@@ -663,7 +686,7 @@ describe("authorization-safe MCP catalog exposure", () => {
 								},
 							},
 						],
-						policy: allowAllMcpGatewayPolicy(),
+						policy: testValueProviderToken("gateway-catalog policy", allowAllMcpGatewayPolicy()),
 					},
 				},
 			],
@@ -688,12 +711,14 @@ describe("authorization-safe MCP catalog exposure", () => {
 					handlerVisibilityTimeoutMs: 10,
 				},
 			],
-			[
-				RejectingCatalogVisibility,
-				NonBooleanCatalogVisibility,
-				TimeoutCatalogVisibility,
-				InvalidVisibilityCatalogFixtures,
-			],
+			{
+				fixtureProviders: [InvalidVisibilityCatalogFixtures],
+				collaboratorProviders: [
+					RejectingCatalogVisibility,
+					NonBooleanCatalogVisibility,
+					TimeoutCatalogVisibility,
+				],
+			},
 		);
 		const service = application.get(McpRuntimeService);
 		for (const [runtimeName, message] of [
@@ -737,7 +762,10 @@ describe("authorization-safe MCP catalog exposure", () => {
 				// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- corrupt boundary fixture
 				catalogServer("invalid-strategy-catalog", () => ({ kind: "undeclared" }) as never),
 			]),
-			[AdminOnlyVisibility, CatalogFixtures],
+			{
+				fixtureProviders: [CatalogFixtures],
+				collaboratorProviders: [AdminOnlyVisibility],
+			},
 		);
 		const service = application.get(McpRuntimeService);
 
@@ -763,12 +791,15 @@ describe("authorization-safe MCP catalog exposure", () => {
 
 function catalogServer(
 	name: string,
-	resolver: NonNullable<McpNestServerDefinition["catalogExposure"]>["resolver"],
+	resolve: McpCatalogExposurePolicy["resolve"],
 ): McpNestServerDefinition {
+	const policy = testValueProviderToken<McpCatalogExposurePolicy>(`${name} catalog policy`, {
+		resolve,
+	});
 	return {
 		name,
 		serverInfo: { name, version: "1.0.0" },
-		catalogExposure: { resolver },
+		catalogExposure: { policy },
 	};
 }
 
@@ -794,14 +825,28 @@ function completeFixtureServers(
 	];
 }
 
+interface McpTestBootstrapOptions {
+	readonly fixtureProviders?: readonly Provider[];
+	readonly collaboratorProviders?: readonly Provider[];
+	readonly autoDiscover?: boolean;
+}
+
 async function bootstrapMcp(
 	servers: readonly McpNestServerDefinition[],
-	providers: readonly Provider[],
-	autoDiscover = true,
+	options: McpTestBootstrapOptions = {},
 ): Promise<INestApplication> {
+	const { fixtureProviders = [], collaboratorProviders = [], autoDiscover = true } = options;
 	const testingModule = await Test.createTestingModule({
-		imports: [McpModule.forRoot({ servers, autoDiscover })],
-		providers: [...providers],
+		imports: [
+			McpModule.forRoot({
+				servers,
+				autoDiscover,
+				collaborators: {
+					providers: [...TEST_VALUE_PROVIDERS.values(), ...collaboratorProviders],
+				},
+			}),
+		],
+		providers: [...fixtureProviders],
 	}).compile();
 	const nextApplication = testingModule.createNestApplication();
 	await nextApplication.init();
@@ -891,12 +936,17 @@ function expectDeepFrozen(value: unknown): void {
 
 async function expectBootstrapFailure(
 	servers: readonly McpNestServerDefinition[],
-	providers: readonly Provider[],
+	fixtureProviders: readonly Provider[],
 	message: RegExp,
 ): Promise<void> {
 	const testingModule = await Test.createTestingModule({
-		imports: [McpModule.forRoot({ servers })],
-		providers: [...providers],
+		imports: [
+			McpModule.forRoot({
+				servers,
+				collaborators: { providers: [...TEST_VALUE_PROVIDERS.values()] },
+			}),
+		],
+		providers: [...fixtureProviders],
 	}).compile();
 	const failedApplication = testingModule.createNestApplication();
 	try {
@@ -927,4 +977,12 @@ async function captureFailure(task: Promise<unknown>): Promise<unknown> {
 	} catch (error) {
 		return error;
 	}
+}
+
+const TEST_VALUE_PROVIDERS = new Map<symbol, Provider>();
+
+function testValueProviderToken<Value>(description: string, value: Value): McpProviderToken<Value> {
+	const token = Symbol(description);
+	TEST_VALUE_PROVIDERS.set(token, { provide: token, useValue: value });
+	return token;
 }

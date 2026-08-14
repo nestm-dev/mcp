@@ -1,4 +1,4 @@
-export { McpValidatedServer, withMcpRequestValidation } from "./mcp-request-validation.ts";
+export { McpValidatedServer } from "./mcp-request-validation.ts";
 export type { McpRequestValidationOptions } from "./mcp-request-validation.ts";
 
 export {

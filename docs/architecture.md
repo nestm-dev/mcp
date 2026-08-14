@@ -41,10 +41,13 @@ flowchart TB
   nest --> server
   nest --> client
   nest --> gateway
-  nest --> observability
 ```
 
-Gateway composition remains framework-neutral. A gateway is installed as a server feature, so it can be used by a plain `McpServerRuntime` or included in a Nest server definition without moving protocol behavior into the Nest layer. The Nest facade re-exports the curated gateway and observability APIs, owns its configured multi-server client runtime, and exposes that runtime through `McpRuntimeService.clients`.
+Gateway composition remains framework-neutral. A plain `McpServerRuntime` can install a gateway as
+a server feature; a Nest application instead uses the declarative server `gateway` option. The
+Nest facade intentionally exports its module, decorators, services, and a small set of callback
+types rather than mirroring the lower packages. Import gateway, client, server, or observability
+APIs directly from their owning package when building outside the Nest adapter.
 
 ### `@nestm/mcp-core`
 
@@ -104,20 +107,46 @@ Payloads, principals, request/session identifiers, error messages, stacks, and c
 
 ### `@nestm/mcp`
 
-The Nest adapter owns `McpModule.forRoot()`/`forRootAsync()`, named upstream client configuration, discovery, decorators, DI tokens, bootstrap readiness, rollback, and shutdown. Async configuration accepts normal Nest imports/injection and can opt out of the default global module through `isGlobal: false`. Decorator generics preserve the official schema-inferred callback contracts at compile time. Decorated singleton providers with static dependency trees are discovered once; their handlers are registered as a feature on each fresh request server.
+The Nest adapter owns `McpModule.forRoot()`/`forRootAsync()`, named upstream client configuration,
+discovery, decorators, DI tokens, bootstrap readiness, rollback, and shutdown. Applications import
+exactly one shared root; a second root fails bootstrap because decorator discovery is intentionally
+application-wide. The module is local by default, and `isGlobal: true` is an explicit opt-in.
+Ordinary Nest modules own decorated capability providers and their imports/exports. Runtime
+collaborators are explicitly owned by the dynamic
+module through `collaborators.providers` and `collaborators.imports`, which preserves module
+isolation and lifecycle ordering. Decorator generics preserve the official schema-inferred callback
+contracts at compile time. Decorated singleton providers with static dependency trees are
+discovered once; their handlers are installed on each fresh request server. Low-level extensions
+are registered as injectable `McpServerContributor` providers instead of raw feature callbacks in
+the Nest definition.
 
-A Nest server's optional `gateway` definition resolves short upstream names against the module-owned `McpClientRuntime`, accepts complete context-aware upstream resolvers for delegated identity, builds the framework-neutral gateway feature at bootstrap, and rejects unknown client names before serving traffic. Gateway servers are dedicated in this alpha because official list/call/read handlers and list-change/subscription capability bits are server-wide; Nest rejects decorated local handlers targeting the same server instead of advertising semantics the combined server cannot honor. `McpRuntimeService.gateway(serverName)` retains the operational gateway for cache invalidation and inspection.
+A Nest server's optional `gateway` definition resolves short upstream names against the module-owned
+`McpClientRuntime`, accepts complete context-aware upstream resolvers for delegated identity, and
+resolves its policy from a singleton Nest provider token before building the framework-neutral
+gateway. Unknown clients or policy providers fail during bootstrap. Gateway servers are dedicated
+in this alpha because official list/call/read handlers and list-change/subscription capability bits
+are server-wide; Nest rejects decorated local handlers targeting the same server instead of
+advertising semantics the combined server cannot honor. `McpRuntimeService.gateway(serverName)`
+retains the operational gateway for cache invalidation and inspection.
 
-Each configured Nest server can define `handlerAuthorization`, `handlerMiddleware`, and `handlerLifecycleObserver`. The official SDK first validates arguments and resolves the registered callback. NestM then builds a handler operation from the trusted callback definition and official server context, runs lifecycle observation, enforces mandatory authorization, runs custom middleware, and finally invokes the provider method. This per-handler pipeline is shared by HTTP and stdio.
+Each configured Nest server can reference singleton providers through `handlerAuthorization`,
+`handlerMiddleware`, and `handlerLifecycleObserver`. The official SDK first validates arguments and
+resolves the registered callback. NestM then builds a handler operation from the trusted callback
+definition and official server context, runs lifecycle observation, enforces mandatory
+authorization, runs custom middleware, and finally invokes the provider method. This per-handler
+pipeline is shared by HTTP and stdio.
 
-Catalog exposure is a projection of that same per-request build, not a second registry. After the
-complete visibility wave succeeds, eager, search, or lazy exposure is resolved against one frozen
-safe view of the tools visible to that caller. Lazy catalog meta-tools close over only that local
-view; they never query the live registry, raw request authentication, or another concurrent build.
-All visible tools remain registered through the ordinary callback path, so choosing deferred
-discovery does not weaken invocation authorization.
+Catalog exposure is a projection of that same per-request build, not a second registry. A singleton
+policy provider's `resolve()` method selects eager, search, or lazy exposure against one frozen safe
+view after the complete visibility wave succeeds. Lazy catalog meta-tools close over only that
+local view; they never query the live registry, raw request authentication, or another concurrent
+build. All visible tools remain registered through the ordinary callback path, so choosing
+deferred discovery does not weaken invocation authorization.
 
-`McpServerDefinition.middleware` is deliberately a different seam: it wraps a complete HTTP exchange before the official handler and therefore does not run for stdio. Use it for exchange-level concerns; use the Nest handler pipeline for tool/resource/prompt authorization and observation.
+Framework-neutral `McpServerDefinition.middleware` is deliberately a different seam: it wraps a
+complete HTTP exchange before the official handler and therefore does not run for stdio. A Nest
+server references injectable middleware providers for the same layer. Use it for exchange-level
+concerns; use the Nest handler pipeline for tool/resource/prompt authorization and observation.
 
 ## Modern per-request serving
 
@@ -217,6 +246,9 @@ The gateway's discovery cache is separate from protocol-era negotiation. It stor
 
 ## Extension points
 
-Existing seams include client/transport factories, client configuration callbacks, server and gateway features, operation and Nest handler middleware, lifecycle observers, authorization policies, request error callbacks, bearer verifiers, discovery caches, telemetry sinks/tracers, and Nest feature providers.
+Existing seams include client/transport factories, client configuration callbacks,
+framework-neutral server and gateway features, operation and Nest handler middleware, lifecycle
+observers, authorization policies, request error callbacks, bearer verifiers, discovery caches,
+telemetry sinks/tracers, and Nest contributor providers.
 
 The implemented observability package remains backend-neutral. OpenTelemetry SDK bindings, persistent encrypted OAuth provider state, RFC 8693-style token exchange, distributed event buses/caches, external policy engines, and artifact-specific catalogs can be added as adapters without forcing a telemetry backend, database, identity provider, cache, or Nest deployment shape into core.

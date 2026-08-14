@@ -67,10 +67,3 @@ export class McpResourceServer implements McpFetchHandler {
 		return this.#handler.close();
 	}
 }
-
-export function withMcpBearerAuth(
-	handler: McpFetchHandler,
-	options: McpResourceServerOptions,
-): McpResourceServer {
-	return new McpResourceServer(handler, options);
-}

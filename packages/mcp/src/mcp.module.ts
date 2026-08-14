@@ -8,11 +8,11 @@ import {
 	type McpForRootAsyncOptions,
 	type McpForRootOptions,
 } from "./mcp.module-definition.ts";
+import { McpCapabilitiesService } from "./mcp-capabilities.service.ts";
 import { McpRuntimeService } from "./mcp-runtime.service.ts";
 import { MCP_MODULE_OPTIONS } from "./mcp.tokens.ts";
 import { McpHandlerExplorer } from "./discovery/mcp-handler.explorer.ts";
 import { McpHandlerRegistry } from "./discovery/mcp-handler.registry.ts";
-import type { McpFeatureOptions } from "./mcp.types.ts";
 
 const MCP_PROVIDERS = [
 	{
@@ -26,24 +26,15 @@ const MCP_PROVIDERS = [
 	},
 	McpServerRegistry,
 	McpHandlerRegistry,
+	McpCapabilitiesService,
 	McpHandlerExplorer,
 	McpRuntimeService,
 ];
 
-/** Host module for decorated handlers registered through `McpModule.forFeature()`. */
-@Module({})
-export class McpFeatureModule {}
-
 @Module({
 	imports: [DiscoveryModule],
 	providers: MCP_PROVIDERS,
-	exports: [
-		MCP_MODULE_OPTIONS,
-		McpClientRuntime,
-		McpServerRegistry,
-		McpHandlerRegistry,
-		McpRuntimeService,
-	],
+	exports: [McpClientRuntime, McpCapabilitiesService, McpRuntimeService],
 })
 export class McpModule extends ConfigurableModuleClass {
 	static override forRoot(options: McpForRootOptions = {}): DynamicModule {
@@ -52,15 +43,5 @@ export class McpModule extends ConfigurableModuleClass {
 
 	static override forRootAsync(options: McpForRootAsyncOptions): DynamicModule {
 		return super.forRootAsync(options);
-	}
-
-	static forFeature(options: McpFeatureOptions = {}): DynamicModule {
-		const providers = [...(options.providers ?? [])];
-		return {
-			module: McpFeatureModule,
-			...(options.imports === undefined ? {} : { imports: [...options.imports] }),
-			providers,
-			exports: options.exports === undefined ? providers : [...options.exports],
-		};
 	}
 }

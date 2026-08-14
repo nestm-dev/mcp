@@ -27,7 +27,7 @@ import type {
 	McpOperationHandler,
 	MaybePromise,
 } from "@nestm/mcp-core";
-import { ResourceTemplate, defineMcpServerFeature, fromJsonSchema } from "@nestm/mcp-server";
+import { ResourceTemplate, fromJsonSchema } from "@nestm/mcp-server";
 import type { CallToolResult, McpServerBuildContext, McpServerFeature } from "@nestm/mcp-server";
 import {
 	InMemoryMcpGatewayDiscoveryCache,
@@ -231,9 +231,8 @@ export class McpGateway implements AsyncDisposable {
 				this.#discoveryGenerations.clear();
 			},
 		});
-		this.#feature = defineMcpServerFeature((server, context) =>
-			this.#lifecycle.track(() => this.#install(server, context)),
-		);
+		this.#feature = (server, context) =>
+			this.#lifecycle.track(() => this.#install(server, context));
 	}
 
 	/** Dedicated-server feature; conflicting local MCP capability handlers fail at build time. */
@@ -1686,18 +1685,6 @@ export class McpGateway implements AsyncDisposable {
 		}
 		return Object.freeze({ ...contextSnapshot, authorizationContext });
 	}
-}
-
-export function createMcpGateway(options: McpGatewayOptions): McpGateway {
-	return new McpGateway(options);
-}
-
-export function createMcpGatewayFeature(
-	gatewayOrOptions: McpGateway | McpGatewayOptions,
-): McpServerFeature {
-	const gateway =
-		gatewayOrOptions instanceof McpGateway ? gatewayOrOptions : new McpGateway(gatewayOrOptions);
-	return gateway.asServerFeature();
 }
 
 /** Explicit opt-in policy for already trusted, isolated gateway deployments. */
