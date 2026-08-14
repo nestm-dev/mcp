@@ -19,6 +19,7 @@ import type {
 	McpLifecycleObserver,
 	McpOperationContext,
 	McpOperationMiddleware,
+	McpPassthroughMiddleware,
 	MaybePromise,
 } from "@nestm/mcp-core";
 import type { McpClientRuntime } from "@nestm/mcp-client";
@@ -430,15 +431,39 @@ export type McpGatewayOperationInput =
 	| McpGatewayResourceReadOperationInput
 	| McpGatewayResourceTemplateReadOperationInput
 	| McpGatewayCompletionOperationInput;
-export type McpGatewayOperationOutput =
-	| McpGatewayDiscoverySnapshot
-	| CallToolResult
-	| GetPromptResult
-	| ReadResourceResult
-	| CompleteResult;
+
+/** Exact result contract for every gateway operation discriminator. */
+export type McpGatewayOperationOutputMap = Readonly<{
+	"gateway.discovery": McpGatewayDiscoverySnapshot;
+	"gateway.invocation": CallToolResult;
+	"gateway.prompt.get": GetPromptResult;
+	"gateway.resource.read": ReadResourceResult;
+	"gateway.resource-template.read": ReadResourceResult;
+	"gateway.completion": CompleteResult;
+}>;
+
+/** Result corresponding to one gateway operation input (or input union). */
+export type McpGatewayOperationOutputFor<Input extends McpGatewayOperationInput> =
+	McpGatewayOperationOutputMap[Input["type"]];
+
+export type McpGatewayOperationOutput = McpGatewayOperationOutputFor<McpGatewayOperationInput>;
+/**
+ * Transforming gateway middleware retained for deliberate result replacement
+ * and successful short-circuiting. Prefer `McpGatewayPassthroughMiddleware`
+ * when discriminator-specific results should remain opaque.
+ */
 export type McpGatewayMiddleware = McpOperationMiddleware<
 	McpGatewayOperationInput,
 	McpGatewayOperationOutput,
+	McpGatewayOperationContext
+>;
+
+/**
+ * Result-opaque gateway middleware for concerns that must never substitute one
+ * operation's result with the shape belonging to another discriminator.
+ */
+export type McpGatewayPassthroughMiddleware = McpPassthroughMiddleware<
+	McpGatewayOperationInput,
 	McpGatewayOperationContext
 >;
 export type McpGatewayLifecycleObserver = McpLifecycleObserver<McpGatewayOperationContext>;
@@ -471,6 +496,8 @@ export interface McpGatewayOptions {
 	readonly discoveryMaxStringBytes?: number;
 	/** Maximum shared refreshes running across all authorization contexts. Defaults to 64. */
 	readonly discoveryMaxConcurrentFlights?: number;
+	/** Maximum time close waits for accepted gateway work and cache mutations. Defaults to 30 seconds. */
+	readonly shutdownTimeoutMs?: number;
 	readonly authorizationContextResolver?: McpGatewayAuthorizationContextResolver;
 	/** Runs around upstream discovery and execution after mandatory execution authorization. */
 	readonly middleware?: readonly McpGatewayMiddleware[];

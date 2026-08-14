@@ -311,6 +311,24 @@ describe("McpServerRuntime", () => {
 		expect(observer).toHaveBeenCalledWith(expect.objectContaining({ phase: "build:success" }));
 	});
 
+	it("observes asynchronous error-reporter rejection without changing the reported failure", async () => {
+		const reportingFailure = new Error("reporting backend unavailable");
+		const onError = vi.fn(async () => {
+			throw reportingFailure;
+		});
+		runtime = new McpServerRuntime({
+			name: "async-error-reporter",
+			serverInfo: { name: "async-error-reporter", version: "1.0.0" },
+			features: [() => Promise.reject(new Error("feature failed"))],
+			onError,
+		});
+
+		await expect(runtime.createServer({ era: "modern" })).rejects.toThrow("feature failed");
+		await new Promise<void>((resolve) => setImmediate(resolve));
+
+		expect(onError).toHaveBeenCalledOnce();
+	});
+
 	it("closes a partially configured SDK server when a later feature fails", async () => {
 		const closeServer = vi.fn(async () => undefined);
 		const firstFeature = vi.fn((server: import("../src/index.ts").McpServer) => {

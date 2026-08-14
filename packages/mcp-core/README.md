@@ -8,6 +8,7 @@ Framework-neutral runtime primitives for building MCP clients, servers, gateways
 
 - Immutable operation context and metadata with correlation, cancellation, principal, and attribute propagation.
 - Onion-style middleware composition with concurrent invocation safety and a guard against calling `next()` twice.
+- Result-opaque passthrough middleware for observers that must preserve the exact downstream value.
 - Explicit allow/deny authorization decisions, fail-closed enforcement, and reusable authorization middleware.
 - Structured started, succeeded, failed, and cancelled lifecycle events.
 - Best-effort telemetry middleware that never replaces the operation result or its primary error.
@@ -77,6 +78,11 @@ const result = await execute(createMcpOperation({ tool: "weather" }, context));
 ```
 
 Middleware is entered from left to right and unwinds from right to left. A middleware continuation may be called at most once. Keep lifecycle middleware outside authorization middleware when denied attempts should produce failure telemetry.
+
+For logging, tracing, rate limits, and similar concerns that should never transform a protocol result,
+wrap a result-opaque callback with `createMcpPassthroughMiddleware`. Its `next()` resolves to `void`;
+the adapter retains and returns the exact downstream value, requires the callback to continue, and
+does not allow a swallowed downstream failure to become a successful result.
 
 ## Authorization is fail closed
 

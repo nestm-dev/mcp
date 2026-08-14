@@ -106,7 +106,8 @@ export interface McpServerDefinition {
 	readonly lifecycleObserver?: McpLifecycleObserver<McpServerOperationContext>;
 	/** Server-instance construction lifecycle; use `lifecycleObserver` for request telemetry. */
 	readonly observer?: McpServerRuntimeObserver;
-	readonly onError?: (error: Error) => void;
+	/** Isolated error reporter; synchronous throws and asynchronous rejections are contained. */
+	readonly onError?: (error: Error) => MaybePromise<void>;
 }
 
 export function defineMcpServer<const DEFINITION extends McpServerDefinition>(

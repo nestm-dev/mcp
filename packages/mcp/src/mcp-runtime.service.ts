@@ -23,44 +23,55 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 	readonly #gateways = new Map<string, McpGateway>();
 	#closeTask: Promise<void> | undefined;
 	#shutdownError: AggregateError | undefined;
+	#unsubscribeCapabilityMutations: (() => void) | undefined;
 
 	constructor(
 		@Inject(MCP_MODULE_OPTIONS) private readonly options: McpModuleOptions,
 		readonly clients: McpClientRuntime,
 		readonly servers: McpServerRegistry,
 		private readonly explorer: McpHandlerExplorer,
-		private readonly handlers: McpHandlerRegistry,
+		/** Live, copy-on-write capability registry used by future request server builds. */
+		readonly capabilities: McpHandlerRegistry,
 	) {}
 
 	async onApplicationBootstrap(): Promise<void> {
 		try {
 			if (this.options.autoDiscover !== false) this.explorer.scan();
-			for (const definition of this.options.servers ?? []) {
-				this.handlers.assertNoCollisions(definition.name);
+			const definitions = this.options.servers ?? [];
+			this.capabilities.configureRuntimes(
+				definitions.map(({ name }) => name),
+				definitions.flatMap(({ name, gateway }) => (gateway === undefined ? [] : [name])),
+			);
+			for (const definition of definitions) {
 				const {
 					gateway,
 					handlerAuthorization,
 					handlerLifecycleObserver,
 					handlerMiddleware,
+					handlerVisibilityTimeoutMs,
 					principalClaims,
 					...serverDefinition
 				} = definition;
-				if (gateway !== undefined && this.handlers.hasHandlersFor(definition.name)) {
+				if (gateway !== undefined && this.capabilities.hasHandlersFor(definition.name)) {
 					throw new McpModuleError(
 						"INVALID_OPTIONS",
 						`MCP gateway server "${definition.name}" must be dedicated and cannot also host decorated tools, prompts, or resources.`,
 					);
 				}
-				const discovered = this.handlers.asServerFeature({
+				const discovered = this.capabilities.asServerFeature({
 					serverName: definition.name,
 					...(handlerAuthorization === undefined ? {} : { authorization: handlerAuthorization }),
 					...(handlerMiddleware === undefined ? {} : { middleware: handlerMiddleware }),
 					...(handlerLifecycleObserver === undefined
 						? {}
 						: { lifecycleObserver: handlerLifecycleObserver }),
+					...(handlerVisibilityTimeoutMs === undefined
+						? {}
+						: { visibilityTimeoutMs: handlerVisibilityTimeoutMs }),
 				});
 				const features = [...(serverDefinition.features ?? [])];
-				if (this.options.autoDiscover !== false && gateway === undefined) features.push(discovered);
+				// Discovery may be disabled while live registry APIs remain enabled.
+				if (gateway === undefined) features.push(discovered);
 				if (gateway !== undefined) {
 					features.push(this.#createGatewayFeature(definition.name, gateway));
 				}
@@ -70,6 +81,20 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 					...(features.length === 0 ? {} : { features }),
 				});
 			}
+			this.#unsubscribeCapabilityMutations = this.capabilities.onMutation(
+				({ kind, serverNames }) => {
+					for (const serverName of serverNames) {
+						try {
+							const notifier = this.servers.get(serverName).notify;
+							if (kind === "tool") notifier.toolsChanged();
+							else if (kind === "prompt") notifier.promptsChanged();
+							else notifier.resourcesChanged();
+						} catch {
+							// A committed registry mutation remains valid if publication races shutdown.
+						}
+					}
+				},
+			);
 			if (this.options.connectClientsOnBootstrap === true) {
 				await this.clients.connectAll();
 			}
@@ -146,11 +171,19 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 
 	async #performClose(): Promise<void> {
 		const errors: unknown[] = [];
+		this.#unsubscribeCapabilityMutations?.();
+		this.#unsubscribeCapabilityMutations = undefined;
 		// Stop accepting inbound gateway work before closing its upstream clients.
 		try {
 			await this.servers.close();
 		} catch (error) {
 			errors.push(error);
+		}
+		const gatewayResults = await Promise.allSettled(
+			[...this.#gateways.values()].map(async (gateway) => gateway.close()),
+		);
+		for (const result of gatewayResults) {
+			if (result.status === "rejected") errors.push(result.reason);
 		}
 		try {
 			await this.clients.close();

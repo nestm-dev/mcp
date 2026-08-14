@@ -22,6 +22,7 @@ import type {
 	McpLifecycleObserver,
 	McpOperationContext,
 	McpOperationMiddleware,
+	McpPassthroughMiddleware,
 } from "@nestm/mcp-core";
 
 import type { McpClientTransportDefinition, McpClientTransportFactory } from "./transport.ts";
@@ -115,9 +116,24 @@ export interface McpClientOperationInput {
 
 export type McpClientOperationContext<Principal = unknown> = McpOperationContext<Principal>;
 
+/**
+ * Transforming client middleware retained for deliberate result replacement
+ * and successful short-circuiting. Prefer `McpClientPassthroughMiddleware`
+ * when the method-specific result should remain opaque.
+ */
 export type McpClientMiddleware<Principal = unknown> = McpOperationMiddleware<
 	McpClientOperationInput,
 	unknown,
+	McpClientOperationContext<Principal>
+>;
+
+/**
+ * Result-opaque client middleware. Use this for cross-cutting concerns that
+ * must observe or delay an operation without replacing its method-specific
+ * result with an unrelated value.
+ */
+export type McpClientPassthroughMiddleware<Principal = unknown> = McpPassthroughMiddleware<
+	McpClientOperationInput,
 	McpClientOperationContext<Principal>
 >;
 

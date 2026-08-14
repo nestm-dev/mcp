@@ -58,8 +58,9 @@ export class McpModule extends ConfigurableModuleClass {
 		const providers = [...(options.providers ?? [])];
 		return {
 			module: McpFeatureModule,
+			...(options.imports === undefined ? {} : { imports: [...options.imports] }),
 			providers,
-			exports: providers,
+			exports: options.exports === undefined ? providers : [...options.exports],
 		};
 	}
 }

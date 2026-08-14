@@ -105,11 +105,33 @@ const gateway = createMcpGateway({
 });
 ```
 
+## Lifecycle
+
+`McpGateway` implements `AsyncDisposable`. `close()` is idempotent: it rejects new work with
+`GATEWAY_CLOSED`, aborts accepted discovery and execution through their request signals, and waits
+for gateway-owned work and cache queues to settle. `shutdownTimeoutMs` bounds that wait at 30
+seconds by default; an upstream or cache implementation that ignores cancellation produces
+`GATEWAY_SHUTDOWN_TIMEOUT` instead of hanging shutdown indefinitely.
+
+For framework-neutral composition, stop the inbound server first, then close the gateway, then
+close the clients that own its upstream connections:
+
+```ts
+await gatewayServerRuntime.close();
+await gateway.close();
+await clients.close();
+```
+
 ## Cache isolation
 
 `McpGatewayDiscoveryCacheKey` always contains `upstreamName` and `authorizationContext`. The default `InMemoryMcpGatewayDiscoveryCache` provides TTL expiration plus entry-count and total-byte weighted LRU eviction (64 MiB by default). Inject a shared cache for multi-process deployments, but retain both key dimensions and equivalent memory bounds.
 
 Concurrent misses for the same key share one in-process refresh across tools, prompts, concrete resources, and resource templates. Every refresh has a gateway-owned timeout (60 seconds by default); abandoned work is signalled to abort, and its concurrency slot remains occupied until the raw upstream promise actually settles even when a structural client ignores that signal. New authorization contexts fail with `DISCOVERY_OVERLOADED` after the configured concurrent-flight limit (64 by default). Discovery follows raw `nextCursor` pages independently for each capability, with repeat detection, `discoveryMaxPages` (64), `discoveryMaxItemsPerCapability` (10,000), `discoveryMaxItemBytes` (256 KiB), `discoveryMaxSnapshotBytes` (8 MiB), `discoveryMaxDepth` (64), and `discoveryMaxStringBytes` (64 KiB), including cursors. These are payload limits after transport parsing; configure HTTP body limits at the host boundary too. The first-party adapter deliberately uses the client's method-keyed request funnel so gateway bounds apply before official helper-level aggregation; structural clients must preserve each raw page.
+
+Application-owned change handling can call `invalidateDiscovery(key)` for one partition or
+`invalidateAllDiscovery()` for every partition. Global invalidation aborts older refreshes and uses
+a cache barrier so stale writes cannot repopulate the cache after the clear. `close()` never clears
+an injected cache because that cache may be shared by other gateway instances.
 
 The default authorization-context resolver hashes every available identity dimension: pre-resolved client ID, explicit subject, explicit tenant ID, sorted scopes, and resource, plus a bearer-token fingerprint when `authInfo` is also present. Without a principal it uses `SHA-256(access_token)`; without either it uses `anonymous`. A token rotation intentionally creates a new cache entry even when the projected principal is unchanged. For application-specific policy dimensions or upstream credential generations, provide your own opaque resolver key. Never use a bearer token itself as that key.
 
@@ -118,6 +140,16 @@ The default authorization-context resolver hashes every available identity dimen
 Gateway middleware wraps upstream discovery and execution. Execution policy is enforced before middleware can reach upstream work. Lifecycle events contain bounded projected names and errors but omit arguments, completion values, raw URI templates, and results.
 
 ```ts
+import { createMcpGateway, createMcpGatewayPassthroughMiddleware } from "@nestm/mcp-gateway";
+
+const tracePropagationMiddleware = createMcpGatewayPassthroughMiddleware(
+	async (operation, next) => {
+		trace.enter(operation.context);
+		await next();
+		trace.leave(operation.context);
+	},
+);
+
 const gateway = createMcpGateway({
 	upstreams,
 	policy,
@@ -129,6 +161,12 @@ const gateway = createMcpGateway({
 	},
 });
 ```
+
+Prefer `createMcpGatewayPassthroughMiddleware` for tracing, logging, concurrency limits, and other
+concerns that must preserve the exact downstream result. Its callback sees `next()` as
+`Promise<void>`, so a discovery snapshot cannot be accidentally returned from an invocation (or
+vice versa). For deliberately transforming middleware, `McpGatewayOperationOutputMap` and
+`McpGatewayOperationOutputFor<Input>` expose the discriminator-to-result relationship.
 
 ## Naming
 
@@ -163,7 +201,7 @@ Multi-round-trip `input_required` flows are not proxied. Every generic structura
 
 Transport/client response-body limits remain mandatory for production. Gateway discovery adds post-parse structural and byte bounds, but execution results (tool, prompt, resource, and completion payloads) can already have been allocated by a custom structural client before the gateway receives them; configure equivalent upstream response limits at that boundary.
 
-The gateway does not bridge upstream subscription streams or list-change notifications. It advertises `listChanged: false` for projected tools/prompts/resources and `subscribe: false` for resources. To keep those claims truthful, `asServerFeature()` is dedicated-server-only in this alpha: pre-existing tool, prompt, resource, completion handlers or notification capability ownership produce `CAPABILITY_CONFLICT`. Run local decorated capabilities on a separate MCP server. Call `invalidateDiscovery()` from application-owned change handling when appropriate; clients receive a refreshed snapshot on a new server instance/request.
+The gateway does not bridge upstream subscription streams or list-change notifications. It advertises `listChanged: false` for projected tools/prompts/resources and `subscribe: false` for resources. To keep those claims truthful, `asServerFeature()` is dedicated-server-only in this alpha: pre-existing tool, prompt, resource, completion handlers or notification capability ownership produce `CAPABILITY_CONFLICT`. Run local decorated capabilities on a separate MCP server. Call `invalidateDiscovery()` for one upstream/authorization partition or `invalidateAllDiscovery()` for a concurrency-safe global clear from application-owned change handling; clients receive a refreshed snapshot on a new server instance/request.
 
 ## Entry points
 

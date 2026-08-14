@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { McpMiddlewareReentryError, composeMcpMiddleware } from "../src/middleware.ts";
+import {
+	McpMiddlewareReentryError,
+	composeMcpMiddleware,
+	createMcpPassthroughMiddleware,
+} from "../src/middleware.ts";
 import { createMcpOperation, createMcpOperationContext } from "../src/operation.ts";
 import type { McpOperationMiddleware } from "../src/operation.ts";
 
@@ -65,5 +69,46 @@ describe("composeMcpMiddleware", () => {
 		source.push(() => 99);
 
 		await expect(Promise.all([pipeline(operation), pipeline(operation)])).resolves.toEqual([1, 1]);
+	});
+
+	it("keeps passthrough middleware result-opaque and returns the exact downstream value", async () => {
+		const calls: string[] = [];
+		const expected = Object.freeze({ content: [] });
+		const passthrough = createMcpPassthroughMiddleware<{ value: number }, typeof expected>(
+			async (_operation, next) => {
+				calls.push("before");
+				await next();
+				calls.push("after");
+			},
+		);
+		const pipeline = composeMcpMiddleware([passthrough], () => expected);
+
+		await expect(pipeline(operation)).resolves.toBe(expected);
+		expect(calls).toEqual(["before", "after"]);
+	});
+
+	it("rejects passthrough middleware that completes without calling next", async () => {
+		const passthrough = createMcpPassthroughMiddleware<{ value: number }, number>(() => {});
+		const pipeline = composeMcpMiddleware([passthrough], () => 1);
+
+		await expect(pipeline(operation)).rejects.toThrow(
+			"Passthrough MCP middleware must call next().",
+		);
+	});
+
+	it("does not let passthrough middleware swallow a downstream failure", async () => {
+		const failure = new Error("downstream failed");
+		const passthrough = createMcpPassthroughMiddleware<{ value: number }, number>(
+			async (_operation, next) => {
+				try {
+					await next();
+				} catch {
+					// The adapter still owns the rejected downstream task.
+				}
+			},
+		);
+		const pipeline = composeMcpMiddleware([passthrough], () => Promise.reject(failure));
+
+		await expect(pipeline(operation)).rejects.toBe(failure);
 	});
 });

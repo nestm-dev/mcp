@@ -35,7 +35,9 @@ export {
 	MCP_MIDDLEWARE_REENTRY,
 	McpMiddlewareReentryError,
 	composeMcpMiddleware,
+	createMcpPassthroughMiddleware,
 } from "./middleware.ts";
+export type { McpPassthroughMiddleware } from "./middleware.ts";
 
 export { createMcpOperation, createMcpOperationContext } from "./operation.ts";
 export type {

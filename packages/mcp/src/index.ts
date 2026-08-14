@@ -1,6 +1,11 @@
 export { McpModuleError } from "./mcp.errors.ts";
 export type { McpModuleErrorCode } from "./mcp.errors.ts";
-export { McpPrompt, McpResource, McpTool } from "./decorators/mcp-handler.decorators.ts";
+export {
+	McpPrompt,
+	McpResource,
+	McpTargets,
+	McpTool,
+} from "./decorators/mcp-handler.decorators.ts";
 export type {
 	McpHandlerDefinition,
 	McpPromptHandlerDefinition,
@@ -15,17 +20,38 @@ export type {
 	McpTypedMethodDecorator,
 } from "./decorators/mcp-handler.decorators.ts";
 export { McpHandlerRegistry } from "./discovery/mcp-handler.registry.ts";
+export type { McpRegisteredHandler } from "./discovery/mcp-handler.registry.ts";
+export { McpHttpController, McpHttpControllerFor } from "./mcp-http.controller.ts";
+export type {
+	McpHttpControllerClass,
+	McpHttpControllerOptions,
+	McpHttpHandlerFactory,
+} from "./mcp-http.controller.ts";
 export { McpFeatureModule, McpModule } from "./mcp.module.ts";
 export type { McpForRootAsyncOptions, McpForRootOptions } from "./mcp.module-definition.ts";
 export { McpRuntimeService } from "./mcp-runtime.service.ts";
+export { createMcpHandlerPassthroughMiddleware } from "./mcp-handler.middleware.ts";
 export { MCP_MODULE_OPTIONS } from "./mcp.tokens.ts";
+export type {
+	McpCapabilityMutation,
+	McpCapabilityMutationKind,
+	McpCapabilityMutationObserver,
+	McpCapabilityMutationType,
+	McpCapabilityVisibility,
+	McpCapabilityVisibilityPolicy,
+	McpDynamicHandlerRegistration,
+} from "./mcp-capability.types.ts";
 export type {
 	McpFeatureOptions,
 	McpHandlerAuthorizationPolicy,
 	McpHandlerInvocationInput,
+	McpHandlerInvocationOutput,
+	McpHandlerInvocationOutputFor,
+	McpHandlerInvocationOutputMap,
 	McpHandlerLifecycleObserver,
 	McpHandlerMiddleware,
 	McpHandlerOperationContext,
+	McpHandlerPassthroughMiddleware,
 	McpModuleExtras,
 	McpModuleOptions,
 	McpNestGatewayOptions,
@@ -44,6 +70,7 @@ export {
 	createMcpLifecycleMiddleware,
 	createMcpOperation,
 	createMcpOperationContext,
+	createMcpPassthroughMiddleware,
 	denyMcpOperation,
 	enforceMcpAuthorization,
 	toMcpErrorDetails,
@@ -61,6 +88,7 @@ export type {
 	McpOperationContext,
 	McpOperationHandler,
 	McpOperationMiddleware,
+	McpPassthroughMiddleware,
 } from "@nestm/mcp-core";
 
 export {
@@ -89,6 +117,7 @@ export {
 	auth,
 	composeMcpFetchMiddleware,
 	createDefaultMcpClientTransportFactory,
+	createMcpClientPassthroughMiddleware,
 	createMcpClientTransport,
 	createMcpHttpClientTransport,
 	createPrivateKeyJwtAuth,
@@ -162,6 +191,7 @@ export type {
 	McpClientMrtrResult,
 	McpClientOperationContext,
 	McpClientOperationInput,
+	McpClientPassthroughMiddleware,
 	McpClientPrincipalResolver,
 	McpClientProtocolRequest,
 	McpClientRuntimeOptions,
@@ -198,6 +228,7 @@ export type {
 	CompleteCallback,
 	CompleteResourceTemplateCallback,
 	ElicitInputParams,
+	GetPromptResult,
 	InputRequiredSpec,
 	InputRequiredResult,
 	InputResponseView,
@@ -220,6 +251,7 @@ export type {
 	RegisteredResourceTemplate,
 	RegisteredTool,
 	ReadResourceCallback,
+	ReadResourceResult,
 	ReadResourceTemplateCallback,
 	RequestStateCodec,
 	RequestStateCodecOptions,
@@ -239,6 +271,7 @@ export {
 	createMcpClientRuntimeUpstream,
 	createMcpGateway,
 	createMcpGatewayFeature,
+	createMcpGatewayPassthroughMiddleware,
 	defaultMcpGatewayAuthorizationContext,
 } from "@nestm/mcp-gateway";
 export type {
@@ -271,7 +304,10 @@ export type {
 	McpGatewayOperationContext,
 	McpGatewayOperationInput,
 	McpGatewayOperationOutput,
+	McpGatewayOperationOutputFor,
+	McpGatewayOperationOutputMap,
 	McpGatewayOptions,
+	McpGatewayPassthroughMiddleware,
 	McpGatewayPolicy,
 	McpGatewayPolicyInput,
 	McpGatewayPrincipal,

@@ -11,11 +11,14 @@ import type {
 	ToolAnnotations,
 	ToolCallback,
 } from "@nestm/mcp-server";
-import { MCP_HANDLER_METADATA } from "../mcp.tokens.ts";
+import type { McpCapabilityVisibility } from "../mcp-capability.types.ts";
+import { MCP_HANDLER_METADATA, MCP_TARGETS_METADATA } from "../mcp.tokens.ts";
 
 interface McpHandlerTarget {
 	/** Runtime names receiving this handler. Omit for every configured server. */
 	readonly servers?: string | readonly string[];
+	/** Discovery visibility. Invocation authorization remains independently mandatory. */
+	readonly visibility?: McpCapabilityVisibility;
 }
 
 export interface McpToolOptions<
@@ -109,6 +112,12 @@ export function McpPrompt<const ArgsSchema extends StandardSchemaWithJSON | unde
 	return typedMetadataDecorator(freezePromptDefinition(options));
 }
 
+/** Supplies a default server target for every MCP handler declared by a provider class. */
+export function McpTargets(...serverNames: readonly [string, ...string[]]): ClassDecorator {
+	const normalized = normalizeTargets(serverNames);
+	return SetMetadata(MCP_TARGETS_METADATA, normalized);
+}
+
 function typedMetadataDecorator<Handler>(
 	definition: McpHandlerDefinition,
 ): McpTypedMethodDecorator<Handler> {
@@ -131,8 +140,31 @@ function freezePromptDefinition(options: McpPromptOptions): McpPromptHandlerDefi
 }
 
 function freezeOptions<Options extends McpHandlerTarget>(options: Options): Options {
+	const servers = options.servers;
+	const normalizedServers =
+		servers === undefined
+			? undefined
+			: typeof servers === "string"
+				? normalizeTargets([servers])[0]
+				: normalizeTargets(servers);
 	return Object.freeze({
 		...options,
-		...(Array.isArray(options.servers) ? { servers: Object.freeze([...options.servers]) } : {}),
+		...(normalizedServers === undefined ? {} : { servers: normalizedServers }),
 	});
+}
+
+function normalizeTargets(serverNames: readonly string[]): readonly string[] {
+	if (serverNames.length === 0) {
+		throw new TypeError("At least one MCP server target is required.");
+	}
+	const normalized = serverNames.map((serverName, index) => {
+		if (typeof serverName !== "string" || serverName.trim().length === 0) {
+			throw new TypeError(`MCP target at index ${String(index)} must be a non-empty string.`);
+		}
+		return serverName.trim();
+	});
+	if (new Set(normalized).size !== normalized.length) {
+		throw new TypeError("MCP class-level targets must not contain duplicates.");
+	}
+	return Object.freeze(normalized);
 }

@@ -2,11 +2,17 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import type { Tool } from "@modelcontextprotocol/server";
 import { McpAuthorizationError, allowMcpOperation, denyMcpOperation } from "@nestm/mcp-core";
 import { McpServerRuntime, defineMcpServer } from "@nestm/mcp-server";
-import type { AuthInfo } from "@nestm/mcp-server";
+import type { AuthInfo, CallToolResult } from "@nestm/mcp-server";
 import { describe, expect, it, vi } from "vitest";
-import { GatewayNameCodec, McpGateway, allowAllMcpGatewayPolicy } from "../src/index.ts";
+import {
+	GatewayNameCodec,
+	McpGateway,
+	allowAllMcpGatewayPolicy,
+	createMcpGatewayPassthroughMiddleware,
+} from "../src/index.ts";
 import type {
 	McpGatewayLifecycleObserver,
+	McpGatewayCallToolOptions,
 	McpGatewayDiscoveryCache,
 	McpGatewayDiscoverySnapshot,
 	McpGatewayMiddleware,
@@ -437,12 +443,11 @@ describe("McpGateway", () => {
 		const client = new McpGatewayTestClient([TOOL]);
 		const middlewareEvents: string[] = [];
 		const lifecycleEvents: string[] = [];
-		const middleware: McpGatewayMiddleware = async (operation, next) => {
+		const middleware = createMcpGatewayPassthroughMiddleware(async (operation, next) => {
 			middlewareEvents.push(`before:${operation.input.type}`);
-			const result = await next();
+			await next();
 			middlewareEvents.push(`after:${operation.input.type}`);
-			return result;
-		};
+		});
 		const lifecycleObserver: McpGatewayLifecycleObserver = {
 			onEvent(event) {
 				lifecycleEvents.push(`${event.type}:${event.context.operation.name}`);
@@ -644,6 +649,92 @@ describe("McpGateway", () => {
 
 		await expect(Promise.all([first, second])).resolves.toHaveLength(2);
 		expect(listTools).toHaveBeenCalledTimes(1);
+	});
+
+	it("closes idempotently, aborts accepted discovery, and rejects new public work", async () => {
+		let discoverySignal: AbortSignal | undefined;
+		const listTools = vi.fn(
+			(_params?: { readonly cursor?: string }, options?: { readonly signal?: AbortSignal }) =>
+				new Promise<{ readonly tools: readonly Tool[] }>((_resolve, reject) => {
+					discoverySignal = options?.signal;
+					options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+						once: true,
+					});
+				}),
+		);
+		const gateway = new McpGateway({
+			upstreams: [{ name: "primary", client: { listTools, callTool: vi.fn() } }],
+			policy: allowAllMcpGatewayPolicy(),
+			shutdownTimeoutMs: 100,
+		});
+		const pending = gateway.listProjectedTools();
+		await vi.waitFor(() => expect(discoverySignal).toBeDefined());
+
+		const close = gateway.close();
+
+		expect(gateway.close()).toBe(close);
+		await expect(pending).rejects.toMatchObject({ code: "GATEWAY_CLOSED" });
+		await expect(close).resolves.toBeUndefined();
+		expect(discoverySignal?.aborted).toBe(true);
+		await expect(gateway.listProjectedTools()).rejects.toMatchObject({
+			code: "GATEWAY_CLOSED",
+		});
+		expect(() => gateway.asServerFeature()).toThrowError(
+			expect.objectContaining({ code: "GATEWAY_CLOSED" }),
+		);
+		await expect(gateway[Symbol.asyncDispose]()).resolves.toBeUndefined();
+	});
+
+	it("bounds close when accepted upstream execution ignores its abort signal", async () => {
+		let invocationSignal: AbortSignal | undefined;
+		let releaseInvocation: ((value: CallToolResult) => void) | undefined;
+		const invocation = new Promise<CallToolResult>((resolve) => {
+			releaseInvocation = resolve;
+		});
+		const callTool = vi.fn(
+			(_params: { readonly name: string }, options?: McpGatewayCallToolOptions) => {
+				invocationSignal = options?.signal;
+				return invocation;
+			},
+		);
+		const gateway = new McpGateway({
+			upstreams: [
+				{
+					name: "primary",
+					client: { listTools: () => ({ tools: [TOOL] }), callTool },
+				},
+			],
+			policy: allowAllMcpGatewayPolicy(),
+			shutdownTimeoutMs: 5,
+		});
+		const [tool] = await gateway.listProjectedTools();
+		const pending = gateway.callTool(tool!.projectedName, {});
+		await vi.waitFor(() => expect(callTool).toHaveBeenCalledOnce());
+
+		const close = gateway.close();
+
+		await expect(pending).rejects.toMatchObject({ code: "GATEWAY_CLOSED" });
+		await expect(close).rejects.toMatchObject({ code: "GATEWAY_SHUTDOWN_TIMEOUT" });
+		expect(invocationSignal?.aborted).toBe(true);
+		releaseInvocation?.({ content: [] });
+	});
+
+	it("does not clear an application-owned discovery cache during close", async () => {
+		const clear = vi.fn();
+		const gateway = new McpGateway({
+			upstreams: [{ name: "primary", client: new McpGatewayTestClient([TOOL]) }],
+			policy: allowAllMcpGatewayPolicy(),
+			discoveryCache: {
+				get: () => undefined,
+				set: () => undefined,
+				delete: () => false,
+				clear,
+			},
+		});
+
+		await gateway.close();
+
+		expect(clear).not.toHaveBeenCalled();
 	});
 
 	it("evicts failed discovery singleflights so a retry can recover", async () => {
@@ -906,6 +997,64 @@ describe("McpGateway", () => {
 		await staleRejection;
 		await expect(fresh).resolves.toMatchObject([{ toolName: "fresh" }]);
 		await expect(gateway.listProjectedTools()).resolves.toMatchObject([{ toolName: "fresh" }]);
+		expect(listTools).toHaveBeenCalledTimes(2);
+	});
+
+	it("globally clears discovery without allowing an older slow write to repopulate it", async () => {
+		let stored: McpGatewayDiscoverySnapshot | undefined;
+		let releaseFirstSet!: () => void;
+		let markFirstSetStarted!: () => void;
+		const firstSetStarted = new Promise<void>((resolve) => {
+			markFirstSetStarted = resolve;
+		});
+		const firstSetRelease = new Promise<void>((resolve) => {
+			releaseFirstSet = resolve;
+		});
+		let setCount = 0;
+		const clear = vi.fn(() => {
+			stored = undefined;
+		});
+		const cache: McpGatewayDiscoveryCache = {
+			get: () => stored,
+			async set(_key, snapshot) {
+				setCount += 1;
+				if (setCount === 1) {
+					markFirstSetStarted();
+					await firstSetRelease;
+				}
+				stored = snapshot;
+			},
+			delete() {
+				const existed = stored !== undefined;
+				stored = undefined;
+				return existed;
+			},
+			clear,
+		};
+		const listTools = vi
+			.fn()
+			.mockResolvedValueOnce({ tools: [{ ...TOOL, name: "stale" }] })
+			.mockResolvedValueOnce({ tools: [{ ...TOOL, name: "fresh" }] });
+		const gateway = new McpGateway({
+			upstreams: [{ name: "primary", client: { listTools, callTool: vi.fn() } }],
+			policy: allowAllMcpGatewayPolicy(),
+			discoveryCache: cache,
+			authorizationContextResolver: () => "principal-a",
+		});
+
+		const stale = gateway.listProjectedTools();
+		const staleRejection = expect(stale).rejects.toMatchObject({ name: "AbortError" });
+		await firstSetStarted;
+		const invalidated = gateway.invalidateAllDiscovery();
+		const fresh = gateway.listProjectedTools();
+		expect(clear).not.toHaveBeenCalled();
+		releaseFirstSet();
+
+		await invalidated;
+		await staleRejection;
+		await expect(fresh).resolves.toMatchObject([{ toolName: "fresh" }]);
+		await expect(gateway.listProjectedTools()).resolves.toMatchObject([{ toolName: "fresh" }]);
+		expect(clear).toHaveBeenCalledOnce();
 		expect(listTools).toHaveBeenCalledTimes(2);
 	});
 });

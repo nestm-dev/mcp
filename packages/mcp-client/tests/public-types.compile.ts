@@ -4,6 +4,7 @@ import type {
 	McpClientProtocolRequest,
 	McpClientRuntime,
 } from "../src/index.ts";
+import { createMcpClientPassthroughMiddleware } from "../src/index.ts";
 
 type IsAssignable<Source, Target> = [Source] extends [Target] ? true : false;
 type AssertFalse<Value extends false> = Value;
@@ -52,3 +53,10 @@ export function protocolRequestCompileTests(): void {
 		params: { name: "not-a-resource-uri" },
 	});
 }
+
+createMcpClientPassthroughMiddleware(async (_operation, next) => {
+	await next();
+});
+
+// @ts-expect-error Passthrough middleware cannot replace a method-specific client result.
+createMcpClientPassthroughMiddleware(async () => ({ tools: [] }));

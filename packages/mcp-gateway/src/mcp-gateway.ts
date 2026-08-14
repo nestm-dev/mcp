@@ -19,7 +19,6 @@ import {
 	composeMcpMiddleware,
 	createMcpLifecycleMiddleware,
 	createMcpOperation,
-	createMcpOperationContext,
 	enforceMcpAuthorization,
 } from "@nestm/mcp-core";
 import type {
@@ -29,20 +28,21 @@ import type {
 	MaybePromise,
 } from "@nestm/mcp-core";
 import { ResourceTemplate, defineMcpServerFeature, fromJsonSchema } from "@nestm/mcp-server";
-import type {
-	CallToolResult,
-	McpServerBuildContext,
-	McpServerFeature,
-	McpServerPrincipal,
-} from "@nestm/mcp-server";
+import type { CallToolResult, McpServerBuildContext, McpServerFeature } from "@nestm/mcp-server";
 import {
 	InMemoryMcpGatewayDiscoveryCache,
 	freezeMcpGatewayDiscoverySnapshot,
 } from "./discovery-cache.ts";
 import { GatewayNameCodec } from "./gateway-name-codec.ts";
 import { GatewayPromptNameCodec } from "./gateway-prompt-name-codec.ts";
+import { GatewayLifecycle } from "./gateway-lifecycle.ts";
 import { GatewayResourceTemplateUriCodec } from "./gateway-resource-template-uri-codec.ts";
 import { GatewayResourceUriCodec } from "./gateway-resource-uri-codec.ts";
+import {
+	createGatewayOperationContext,
+	createGatewayPolicyContext,
+	toSafeGatewayPrincipal,
+} from "./gateway-operation.ts";
 import { McpGatewayError } from "./mcp-gateway.errors.ts";
 import type {
 	McpGatewayAuthorizationContextResolver,
@@ -59,7 +59,6 @@ import type {
 	McpGatewayOptions,
 	McpGatewayPolicy,
 	McpGatewayPolicyInput,
-	McpGatewayPrincipal,
 	McpGatewayProjectedPrompt,
 	McpGatewayProjectedResource,
 	McpGatewayProjectedResourceTemplate,
@@ -86,6 +85,7 @@ const DEFAULT_DISCOVERY_MAX_SNAPSHOT_BYTES = 8 * 1_024 * 1_024;
 const DEFAULT_DISCOVERY_MAX_DEPTH = 64;
 const DEFAULT_DISCOVERY_MAX_STRING_BYTES = 64 * 1_024;
 const DEFAULT_DISCOVERY_MAX_CONCURRENT_FLIGHTS = 64;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
 const MAX_OPERATION_INPUT_BYTES = 1_048_576;
 const MAX_OPERATION_INPUT_DEPTH = 64;
 const MAX_OPERATION_INPUT_NODES = 100_000;
@@ -107,7 +107,7 @@ interface GatewayDiscoveryFlight {
 }
 
 /** Long-lived gateway runtime; expose it through one or more MCP server definitions. */
-export class McpGateway {
+export class McpGateway implements AsyncDisposable {
 	readonly #upstreams: ReadonlyMap<string, McpGatewayUpstream>;
 	readonly #policy: McpGatewayPolicy;
 	readonly #nameCodec: NonNullable<McpGatewayOptions["nameCodec"]>;
@@ -133,6 +133,9 @@ export class McpGateway {
 	readonly #lifecycleObserver: McpGatewayLifecycleObserver | undefined;
 	readonly #onObserverError: ((error: unknown) => MaybePromise<void>) | undefined;
 	readonly #feature: McpServerFeature;
+	readonly #lifecycle: GatewayLifecycle;
+	#discoveryCacheBarrier: Promise<void> = Promise.resolve();
+	#discoveryEpoch = 0;
 
 	constructor(options: McpGatewayOptions) {
 		if (typeof options?.policy?.authorize !== "function") {
@@ -192,21 +195,123 @@ export class McpGateway {
 			"discoveryMaxConcurrentFlights",
 			DEFAULT_DISCOVERY_MAX_CONCURRENT_FLIGHTS,
 		);
+		const shutdownTimeoutMs = positiveIntegerOption(
+			options.shutdownTimeoutMs,
+			"shutdownTimeoutMs",
+			DEFAULT_SHUTDOWN_TIMEOUT_MS,
+		);
 		this.#resolveAuthorizationContext =
 			options.authorizationContextResolver ?? defaultMcpGatewayAuthorizationContext;
 		this.#middleware = snapshotMiddleware(options.middleware ?? []);
 		this.#lifecycleObserver = options.lifecycleObserver;
 		this.#onObserverError = options.onObserverError;
-		this.#feature = defineMcpServerFeature((server, context) => this.#install(server, context));
+		this.#lifecycle = new GatewayLifecycle({
+			shutdownTimeoutMs,
+			acceptedTasks: () => [
+				...this.#activeDiscoveryRefreshes,
+				...this.#discoveryCacheQueues.values(),
+				this.#discoveryCacheBarrier,
+			],
+			onClosing: (closedError) => {
+				this.#discoveryEpoch += 1;
+				for (const [flightKey, flight] of this.#discoveryInflight) {
+					this.#discoveryGenerations.set(flightKey, this.#discoveryGeneration(flightKey) + 1);
+					flight.controller.abort(closedError);
+				}
+			},
+			onClosed: () => {
+				this.#discoveryInflight.clear();
+				this.#discoveryCacheQueues.clear();
+				this.#discoveryGenerations.clear();
+			},
+		});
+		this.#feature = defineMcpServerFeature((server, context) =>
+			this.#lifecycle.track(() => this.#install(server, context)),
+		);
 	}
 
 	/** Dedicated-server feature; conflicting local MCP capability handlers fail at build time. */
 	asServerFeature(): McpServerFeature {
+		this.#lifecycle.assertOpen();
 		return this.#feature;
 	}
 
+	listProjectedTools(
+		context: McpGatewayRequestContext = {},
+	): Promise<readonly McpGatewayProjectedTool[]> {
+		return this.#lifecycle.track(() => this.#listProjectedTools(context));
+	}
+
+	listProjectedPrompts(
+		context: McpGatewayRequestContext = {},
+	): Promise<readonly McpGatewayProjectedPrompt[]> {
+		return this.#lifecycle.track(() => this.#listProjectedPrompts(context));
+	}
+
+	listProjectedResources(
+		context: McpGatewayRequestContext = {},
+	): Promise<readonly McpGatewayProjectedResource[]> {
+		return this.#lifecycle.track(() => this.#listProjectedResources(context));
+	}
+
+	listProjectedResourceTemplates(
+		context: McpGatewayRequestContext = {},
+	): Promise<readonly McpGatewayProjectedResourceTemplate[]> {
+		return this.#lifecycle.track(() => this.#listProjectedResourceTemplates(context));
+	}
+
+	callTool(
+		projectedName: string,
+		arguments_: Readonly<Record<string, unknown>> | undefined,
+		context: McpGatewayRequestContext = {},
+	): Promise<CallToolResult> {
+		return this.#lifecycle.track(() => this.#callTool(projectedName, arguments_, context));
+	}
+
+	getPrompt(
+		projectedName: string,
+		arguments_: Readonly<Record<string, string>> | undefined,
+		context: McpGatewayRequestContext = {},
+	): Promise<GetPromptResult> {
+		return this.#lifecycle.track(() => this.#getPrompt(projectedName, arguments_, context));
+	}
+
+	readResource(
+		projectedUri: string,
+		context: McpGatewayRequestContext = {},
+	): Promise<ReadResourceResult> {
+		return this.#lifecycle.track(() => this.#readResource(projectedUri, context));
+	}
+
+	readResourceTemplate(
+		projectedTemplateUri: string,
+		variables: Variables,
+		context: McpGatewayRequestContext = {},
+	): Promise<ReadResourceResult> {
+		return this.#lifecycle.track(() =>
+			this.#readResourceTemplate(projectedTemplateUri, variables, context),
+		);
+	}
+
+	complete(
+		params: CompleteRequest["params"],
+		context: McpGatewayRequestContext = {},
+	): Promise<CompleteResult> {
+		return this.#lifecycle.track(() => this.#complete(params, context));
+	}
+
+	/** Evict discovery for exactly one upstream and authorization context. */
+	invalidateDiscovery(key: McpGatewayDiscoveryCacheKey): Promise<boolean> {
+		return this.#lifecycle.track(() => this.#invalidateDiscovery(key));
+	}
+
+	/** Evict every discovery partition without allowing older refreshes to repopulate it. */
+	invalidateAllDiscovery(): Promise<void> {
+		return this.#lifecycle.track(() => this.#invalidateAllDiscovery());
+	}
+
 	/** Discover, authorize, and project every visible upstream tool. */
-	async listProjectedTools(
+	async #listProjectedTools(
 		context: McpGatewayRequestContext = {},
 	): Promise<readonly McpGatewayProjectedTool[]> {
 		const resolved = await this.#resolveContext(context);
@@ -225,7 +330,7 @@ export class McpGateway {
 	}
 
 	/** Discover, authorize, and project every visible upstream prompt. */
-	async listProjectedPrompts(
+	async #listProjectedPrompts(
 		context: McpGatewayRequestContext = {},
 	): Promise<readonly McpGatewayProjectedPrompt[]> {
 		const resolved = await this.#resolveContext(context);
@@ -244,7 +349,7 @@ export class McpGateway {
 	}
 
 	/** Discover, authorize, and project every visible concrete upstream resource. */
-	async listProjectedResources(
+	async #listProjectedResources(
 		context: McpGatewayRequestContext = {},
 	): Promise<readonly McpGatewayProjectedResource[]> {
 		const resolved = await this.#resolveContext(context);
@@ -263,7 +368,7 @@ export class McpGateway {
 	}
 
 	/** Discover, authorize, and project every visible upstream resource template. */
-	async listProjectedResourceTemplates(
+	async #listProjectedResourceTemplates(
 		context: McpGatewayRequestContext = {},
 	): Promise<readonly McpGatewayProjectedResourceTemplate[]> {
 		const resolved = await this.#resolveContext(context);
@@ -284,7 +389,7 @@ export class McpGateway {
 	}
 
 	/** Route one canonical projected name to its upstream with mandatory call-time policy. */
-	async callTool(
+	async #callTool(
 		projectedName: string,
 		arguments_: Readonly<Record<string, unknown>> | undefined,
 		context: McpGatewayRequestContext = {},
@@ -356,7 +461,7 @@ export class McpGateway {
 	}
 
 	/** Resolve a projected prompt after authoritative discovery and get-time policy. */
-	async getPrompt(
+	async #getPrompt(
 		projectedName: string,
 		arguments_: Readonly<Record<string, string>> | undefined,
 		context: McpGatewayRequestContext = {},
@@ -431,7 +536,7 @@ export class McpGateway {
 	}
 
 	/** Resolve a projected URI after authoritative discovery and read-time policy. */
-	async readResource(
+	async #readResource(
 		projectedUri: string,
 		context: McpGatewayRequestContext = {},
 	): Promise<ReadResourceResult> {
@@ -489,7 +594,7 @@ export class McpGateway {
 	}
 
 	/** Expand and read one projected template after authoritative template policy. */
-	async readResourceTemplate(
+	async #readResourceTemplate(
 		projectedTemplateUri: string,
 		variables: Variables,
 		context: McpGatewayRequestContext = {},
@@ -560,7 +665,7 @@ export class McpGateway {
 	}
 
 	/** Route official completion requests for projected prompt/template references. */
-	async complete(
+	async #complete(
 		params: CompleteRequest["params"],
 		context: McpGatewayRequestContext = {},
 	): Promise<CompleteResult> {
@@ -718,8 +823,7 @@ export class McpGateway {
 		return result;
 	}
 
-	/** Evict discovery for exactly one upstream and authorization context. */
-	async invalidateDiscovery(key: McpGatewayDiscoveryCacheKey): Promise<boolean> {
+	async #invalidateDiscovery(key: McpGatewayDiscoveryCacheKey): Promise<boolean> {
 		const flightKey = discoveryFlightKey(key);
 		// Bump before detaching: a refresh already inside an asynchronous cache write
 		// will delete its stale write while holding the per-key mutation queue.
@@ -727,6 +831,40 @@ export class McpGateway {
 		this.#discoveryInflight.get(flightKey)?.controller.abort(abandonedDiscoveryError());
 		this.#discoveryInflight.delete(flightKey);
 		return this.#enqueueCacheMutation(flightKey, () => this.#cache.delete(key));
+	}
+
+	async #invalidateAllDiscovery(): Promise<void> {
+		this.#discoveryEpoch += 1;
+		const cancellation = abandonedDiscoveryError();
+		for (const flight of this.#discoveryInflight.values()) {
+			flight.controller.abort(cancellation);
+		}
+		this.#discoveryInflight.clear();
+
+		// Publish the barrier synchronously. Mutations accepted after this point wait
+		// until clear completes; mutations already queued settle before clear runs.
+		const previousBarrier = this.#discoveryCacheBarrier;
+		const priorMutations = [...this.#discoveryCacheQueues.values()];
+		const clearTask = previousBarrier
+			.catch(() => undefined)
+			.then(async () => {
+				await Promise.allSettled(priorMutations);
+				await this.#cache.clear();
+			});
+		this.#discoveryCacheBarrier = clearTask.then(
+			() => undefined,
+			() => undefined,
+		);
+		await clearTask;
+	}
+
+	/** Stop accepting work, cancel owned operations, and wait a bounded time for quiescence. */
+	close(): Promise<void> {
+		return this.#lifecycle.close();
+	}
+
+	async [Symbol.asyncDispose](): Promise<void> {
+		await this.close();
 	}
 
 	async #install(
@@ -976,7 +1114,7 @@ export class McpGateway {
 			McpGatewayOperationContext
 		> = async () => {
 			context.signal.throwIfAborted();
-			const cached = await this.#cache.get(cacheKey);
+			const cached = await this.#readCachedDiscovery(cacheKey, context.signal);
 			if (cached !== undefined) return cached;
 			const flightKey = discoveryFlightKey(cacheKey);
 			const flight =
@@ -1010,6 +1148,7 @@ export class McpGateway {
 		const controller = new AbortController();
 		const sharedContext = Object.freeze({ ...context, signal: controller.signal });
 		const generation = this.#discoveryGeneration(flightKey);
+		const epoch = this.#discoveryEpoch;
 		const timeout = setTimeout(() => {
 			controller.abort(
 				new McpGatewayError(
@@ -1030,10 +1169,19 @@ export class McpGateway {
 			.then(async (snapshot) => {
 				controller.signal.throwIfAborted();
 				await this.#enqueueCacheMutation(flightKey, async () => {
-					if (this.#discoveryGeneration(flightKey) !== generation) return;
+					if (
+						this.#discoveryEpoch !== epoch ||
+						this.#discoveryGeneration(flightKey) !== generation
+					) {
+						return;
+					}
 					controller.signal.throwIfAborted();
 					await this.#cache.set(cacheKey, snapshot);
-					if (controller.signal.aborted || this.#discoveryGeneration(flightKey) !== generation) {
+					if (
+						controller.signal.aborted ||
+						this.#discoveryEpoch !== epoch ||
+						this.#discoveryGeneration(flightKey) !== generation
+					) {
 						await this.#cache.delete(cacheKey);
 						controller.signal.throwIfAborted();
 					}
@@ -1077,12 +1225,31 @@ export class McpGateway {
 		return this.#discoveryGenerations.get(flightKey) ?? 0;
 	}
 
+	async #readCachedDiscovery(
+		key: McpGatewayDiscoveryCacheKey,
+		signal: AbortSignal,
+	): Promise<McpGatewayDiscoverySnapshot | undefined> {
+		for (;;) {
+			const epoch = this.#discoveryEpoch;
+			const barrier = this.#discoveryCacheBarrier;
+			await barrier;
+			signal.throwIfAborted();
+			if (epoch !== this.#discoveryEpoch || barrier !== this.#discoveryCacheBarrier) continue;
+			const cached = await this.#cache.get(key);
+			signal.throwIfAborted();
+			if (epoch === this.#discoveryEpoch) return cached;
+		}
+	}
+
 	async #enqueueCacheMutation<Result>(
 		flightKey: string,
 		mutation: () => MaybePromise<Result>,
 	): Promise<Result> {
+		const barrier = this.#discoveryCacheBarrier;
 		const previous = this.#discoveryCacheQueues.get(flightKey) ?? Promise.resolve();
-		const current = previous.catch(() => undefined).then(async () => mutation());
+		const current = Promise.all([barrier, previous.catch(() => undefined)]).then(async () =>
+			mutation(),
+		);
 		const tail = current.then(
 			() => undefined,
 			() => undefined,
@@ -1230,11 +1397,26 @@ export class McpGateway {
 		>,
 		mandatoryMiddleware: readonly McpGatewayMiddleware[] = [],
 	): Promise<McpGatewayOperationOutput> {
+		this.#lifecycle.assertOpen();
+		operation.context.signal.throwIfAborted();
+		const guardedTerminal: typeof terminal = async (currentOperation) => {
+			this.#lifecycle.assertOpen();
+			currentOperation.context.signal.throwIfAborted();
+			const result = await terminal(currentOperation);
+			currentOperation.context.signal.throwIfAborted();
+			this.#lifecycle.assertOpen();
+			return result;
+		};
 		const securedWork = composeMcpMiddleware(
 			[...mandatoryMiddleware, ...this.#middleware],
-			terminal,
+			guardedTerminal,
 		);
-		if (this.#lifecycleObserver === undefined) return securedWork(operation);
+		if (this.#lifecycleObserver === undefined) {
+			const result = await securedWork(operation);
+			operation.context.signal.throwIfAborted();
+			this.#lifecycle.assertOpen();
+			return result;
+		}
 		const lifecycle =
 			this.#onObserverError === undefined
 				? createMcpLifecycleMiddleware<
@@ -1249,7 +1431,10 @@ export class McpGateway {
 					>(this.#lifecycleObserver, {
 						onObserverError: async (error) => this.#onObserverError?.(error),
 					});
-		return composeMcpMiddleware([lifecycle], securedWork)(operation);
+		const result = await composeMcpMiddleware([lifecycle], securedWork)(operation);
+		operation.context.signal.throwIfAborted();
+		this.#lifecycle.assertOpen();
+		return result;
 	}
 
 	async #canDiscoverTool(
@@ -1435,7 +1620,10 @@ export class McpGateway {
 	async #resolveContext(
 		context: McpGatewayRequestContext,
 	): Promise<McpGatewayResolvedRequestContext> {
-		const signal = context.signal ?? context.request?.signal ?? new AbortController().signal;
+		this.#lifecycle.assertOpen();
+		const requestSignal = context.signal ?? context.request?.signal ?? new AbortController().signal;
+		const signal = AbortSignal.any([requestSignal, this.#lifecycle.signal]);
+		signal.throwIfAborted();
 		const contextSnapshot = Object.freeze({
 			...context,
 			signal,
@@ -1444,6 +1632,8 @@ export class McpGateway {
 				: { principal: toSafeGatewayPrincipal(context.principal) }),
 		});
 		const authorizationContext = await this.#resolveAuthorizationContext(contextSnapshot);
+		this.#lifecycle.assertOpen();
+		signal.throwIfAborted();
 		if (typeof authorizationContext !== "string" || authorizationContext.length === 0) {
 			throw new McpGatewayError(
 				"INVALID_OPTIONS",
@@ -2402,154 +2592,6 @@ function isDiscoverySnapshot(
 		"discoveredAt" in value &&
 		Number.isFinite(value.discoveredAt)
 	);
-}
-
-function createGatewayOperationContext(
-	input: McpGatewayOperationInput,
-	context: McpGatewayResolvedRequestContext,
-): McpGatewayOperationContext {
-	const metadata = operationMetadata(input);
-	return createMcpOperationContext({
-		operationId: operationId(context, input.type),
-		role: "gateway",
-		operation: metadata,
-		signal: context.signal,
-		...(context.requestId === undefined ? {} : { requestId: context.requestId }),
-		...gatewayPrincipalContext(context),
-		...(context.attributes === undefined ? {} : { attributes: context.attributes }),
-	});
-}
-
-function createGatewayPolicyContext(
-	input:
-		| McpGatewayPolicyInput
-		| McpGatewayPromptPolicyInput
-		| McpGatewayResourcePolicyInput
-		| McpGatewayResourceTemplatePolicyInput,
-	context: McpGatewayResolvedRequestContext,
-): McpGatewayOperationContext {
-	const capability =
-		"toolName" in input ? "tools" : "promptName" in input ? "prompts" : "resources";
-	return createMcpOperationContext({
-		operationId: operationId(context, `policy.${input.action}`),
-		role: "gateway",
-		operation: {
-			name: `${capability}/${input.action}.authorize`,
-			kind: "request",
-			capability,
-			target: input.upstreamName,
-			attributes: {
-				"gateway.policy.action": input.action,
-				"mcp.server.name": input.upstreamName,
-				...(capability === "tools" ? { "gen_ai.tool.name": input.projectedName } : {}),
-				...(capability === "prompts" ? { "mcp.prompt.name": input.projectedName } : {}),
-				...(capability === "resources" ? { "mcp.resource.name": input.projectedName } : {}),
-			},
-		},
-		signal: context.signal,
-		...(context.requestId === undefined ? {} : { requestId: context.requestId }),
-		...gatewayPrincipalContext(context),
-		...(context.attributes === undefined ? {} : { attributes: context.attributes }),
-	});
-}
-
-function operationMetadata(input: McpGatewayOperationInput) {
-	const common = {
-		kind: "request" as const,
-		target: input.upstreamName,
-		attributes: {
-			"gateway.operation": input.type,
-			"mcp.server.name": input.upstreamName,
-		},
-	};
-	if (input.type === "gateway.discovery") {
-		const capability = input.capability ?? "tools";
-		return { ...common, name: `${capability}/list`, capability };
-	}
-	if (input.type === "gateway.invocation") {
-		return {
-			...common,
-			name: "tools/call",
-			capability: "tools",
-			attributes: { ...common.attributes, "gen_ai.tool.name": input.projectedName },
-		};
-	}
-	if (input.type === "gateway.prompt.get") {
-		return {
-			...common,
-			name: "prompts/get",
-			capability: "prompts",
-			attributes: { ...common.attributes, "mcp.prompt.name": input.projectedName },
-		};
-	}
-	if (input.type === "gateway.resource.read") {
-		return {
-			...common,
-			name: "resources/read",
-			capability: "resources",
-			attributes: { ...common.attributes, "mcp.resource.name": input.projectedName },
-		};
-	}
-	if (input.type === "gateway.resource-template.read") {
-		return {
-			...common,
-			name: "resources/read",
-			capability: "resources",
-			attributes: {
-				...common.attributes,
-				"mcp.resource.name": input.projectedName,
-			},
-		};
-	}
-	if (input.type === "gateway.completion") {
-		return {
-			...common,
-			name: "completion/complete",
-			capability: "completions",
-			attributes: {
-				...common.attributes,
-				"mcp.completion.reference": input.projectedIdentifier,
-			},
-		};
-	}
-	return assertNever(input);
-}
-
-function operationId(context: McpGatewayResolvedRequestContext, suffix: string): string {
-	return `${context.requestId ?? crypto.randomUUID()}:${suffix}:${crypto.randomUUID()}`;
-}
-
-function toSafeGatewayPrincipal(
-	identity: McpServerPrincipal | NonNullable<McpGatewayResolvedRequestContext["authInfo"]>,
-): McpGatewayPrincipal {
-	const resource =
-		identity.resource === undefined
-			? undefined
-			: typeof identity.resource === "string"
-				? identity.resource
-				: identity.resource.href;
-	return Object.freeze({
-		clientId: identity.clientId,
-		scopes: Object.freeze([...identity.scopes]),
-		...(identity.expiresAt === undefined ? {} : { expiresAt: identity.expiresAt }),
-		...(resource === undefined ? {} : { resource }),
-		...("subject" in identity && identity.subject !== undefined
-			? { subject: identity.subject }
-			: {}),
-		...("tenantId" in identity && identity.tenantId !== undefined
-			? { tenantId: identity.tenantId }
-			: {}),
-	});
-}
-
-function gatewayPrincipalContext(
-	context: McpGatewayResolvedRequestContext,
-): Readonly<{ principal?: McpGatewayPrincipal }> {
-	if (context.principal !== undefined)
-		return { principal: toSafeGatewayPrincipal(context.principal) };
-	if (context.authInfo !== undefined)
-		return { principal: toSafeGatewayPrincipal(context.authInfo) };
-	return {};
 }
 
 function discoveryFlightKey(key: McpGatewayDiscoveryCacheKey): string {

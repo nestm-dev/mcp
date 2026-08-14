@@ -1,5 +1,31 @@
 import { fromJsonSchema } from "@nestm/mcp-server";
-import { McpPrompt, McpResource, McpTool } from "../src/index.ts";
+import {
+	McpPrompt,
+	McpResource,
+	McpTool,
+	createMcpHandlerPassthroughMiddleware,
+} from "../src/index.ts";
+import type {
+	McpHandlerInvocationInput,
+	McpHandlerInvocationOutputFor,
+	ReadResourceResult,
+} from "../src/index.ts";
+
+type IsAssignable<Source, Target> = [Source] extends [Target] ? true : false;
+type AssertFalse<Value extends false> = Value;
+type ToolInvocation = McpHandlerInvocationInput & { readonly kind: "tool" };
+
+/** Proves a resource result cannot cross a tool invocation discriminator. */
+export type ToolInvocationRejectsResourceResult = AssertFalse<
+	IsAssignable<ReadResourceResult, McpHandlerInvocationOutputFor<ToolInvocation>>
+>;
+
+createMcpHandlerPassthroughMiddleware(async (_operation, next) => {
+	await next();
+});
+
+// @ts-expect-error Passthrough handler middleware cannot replace the SDK capability result.
+createMcpHandlerPassthroughMiddleware(async () => ({ content: [] }));
 
 const inputSchema = fromJsonSchema<{ name: string }>({
 	type: "object",

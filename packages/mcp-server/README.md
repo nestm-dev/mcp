@@ -47,6 +47,9 @@ quiescence phase (30 seconds by
 default); expiration is reported as a cleanup failure rather than allowing `close()` to claim a
 clean shutdown while application middleware is still running.
 
+`onError` may return a promise. Reporter throws and rejections are observed and isolated so a
+logging or telemetry outage never changes protocol results or becomes an unhandled rejection.
+
 The `@nestm/mcp-server/auth` subpath adds fail-closed bearer-token verification and optional RFC
 9728/RFC 8414 metadata. It treats the MCP server as an OAuth resource server; use a dedicated
 identity provider to issue tokens.

@@ -317,7 +317,7 @@ Lifecycle events intentionally contain context and timing, not MCP request or re
 
 ```ts
 import { createMcpAuthorizationMiddleware, type McpLifecycleObserver } from "@nestm/mcp-core";
-import { McpClientRuntime } from "@nestm/mcp-client";
+import { McpClientRuntime, createMcpClientPassthroughMiddleware } from "@nestm/mcp-client";
 
 const observer: McpLifecycleObserver = {
 	onEvent(event) {
@@ -329,7 +329,14 @@ const runtime = new McpClientRuntime({
 	servers,
 	principal: currentPrincipal,
 	attributes: { deployment: "artifact-runtime" },
-	middleware: [createMcpAuthorizationMiddleware(policy)],
+	middleware: [
+		createMcpAuthorizationMiddleware(policy),
+		createMcpClientPassthroughMiddleware(async (operation, next) => {
+			metrics.started(operation.input.method);
+			await next();
+			metrics.finished(operation.input.method);
+		}),
+	],
 	observer,
 });
 ```
@@ -338,6 +345,11 @@ Middleware sees a stable `McpClientOperationInput` and context fields including 
 the protocol method, capability family, target server name, abort signal, session ID when known,
 principal, and host attributes. Lifecycle observer failures are best-effort and do not replace the
 operation result.
+
+`createMcpClientPassthroughMiddleware` is the safer default for non-transforming concerns. Its
+callback cannot inspect or replace the method-specific result; the runtime returns the exact value
+produced downstream. Use the broader `McpClientMiddleware` contract only when deliberate result
+transformation or successful short-circuiting is required.
 
 ## Discovery and prior verdicts
 

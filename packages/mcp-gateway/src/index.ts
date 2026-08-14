@@ -10,6 +10,8 @@ export type { GatewayResourceTemplateUriCodecOptions } from "./gateway-resource-
 export { GatewayResourceUriCodec } from "./gateway-resource-uri-codec.ts";
 export type { GatewayResourceUriCodecOptions } from "./gateway-resource-uri-codec.ts";
 
+export { createMcpGatewayPassthroughMiddleware } from "./gateway-middleware.ts";
+
 export { McpGatewayError } from "./mcp-gateway.errors.ts";
 export type { McpGatewayErrorCode } from "./mcp-gateway.errors.ts";
 
@@ -48,7 +50,10 @@ export type {
 	McpGatewayOperationContext,
 	McpGatewayOperationInput,
 	McpGatewayOperationOutput,
+	McpGatewayOperationOutputFor,
+	McpGatewayOperationOutputMap,
 	McpGatewayOptions,
+	McpGatewayPassthroughMiddleware,
 	McpGatewayPolicy,
 	McpGatewayPolicyInput,
 	McpGatewayPromptGetOperationInput,

@@ -1,4 +1,5 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Scope } from "@nestjs/common";
+import { ModuleRef } from "@nestjs/core";
 import {
 	composeMcpMiddleware,
 	createMcpAuthorizationMiddleware,
@@ -6,29 +7,57 @@ import {
 	createMcpOperation,
 	createMcpOperationContext,
 } from "@nestm/mcp-core";
-import type { McpOperationHandler } from "@nestm/mcp-core";
+import type { MaybePromise, McpOperationHandler } from "@nestm/mcp-core";
 import type {
 	McpServer,
+	McpServerBuildContext,
 	McpServerFeature,
 	McpServerPrincipal,
+	PromptCallback,
+	ReadResourceCallback,
+	ReadResourceTemplateCallback,
+	ResourceTemplate,
 	ServerContext,
+	StandardSchemaWithJSON,
+	ToolCallback,
 } from "@nestm/mcp-server";
+import type {
+	McpCapabilityMutation,
+	McpCapabilityMutationObserver,
+	McpCapabilityVisibilityPolicy,
+	McpDynamicHandlerRegistration,
+} from "../mcp-capability.types.ts";
 import { McpModuleError } from "../mcp.errors.ts";
 import type {
 	McpHandlerAuthorizationPolicy,
 	McpHandlerInvocationInput,
+	McpHandlerInvocationOutput,
 	McpHandlerLifecycleObserver,
 	McpHandlerMiddleware,
 	McpHandlerOperationContext,
 } from "../mcp.types.ts";
-import type { McpHandlerDefinition } from "../decorators/mcp-handler.decorators.ts";
+import type {
+	McpHandlerDefinition,
+	McpPromptOptions,
+	McpResourceOptions,
+	McpToolOptions,
+} from "../decorators/mcp-handler.decorators.ts";
 
-export type McpDiscoveredHandler = (...arguments_: unknown[]) => unknown;
+const DEFAULT_VISIBILITY_TIMEOUT_MS = 30_000;
 
-interface RegisteredHandler {
+export type McpDiscoveredHandler = (
+	...arguments_: unknown[]
+) => MaybePromise<McpHandlerInvocationOutput>;
+
+export interface McpRegisteredHandler {
 	readonly definition: McpHandlerDefinition;
-	readonly handler: McpDiscoveredHandler;
 	readonly source: string;
+}
+
+interface RegisteredHandler extends McpRegisteredHandler {
+	readonly id: symbol;
+	readonly handler: McpDiscoveredHandler;
+	readonly visibility: boolean | McpCapabilityVisibilityPolicy | undefined;
 }
 
 interface McpHandlerPipelineOptions {
@@ -36,18 +65,97 @@ interface McpHandlerPipelineOptions {
 	readonly authorization?: McpHandlerAuthorizationPolicy;
 	readonly middleware?: readonly McpHandlerMiddleware[];
 	readonly lifecycleObserver?: McpHandlerLifecycleObserver;
+	readonly visibilityTimeoutMs?: number;
 }
 
 @Injectable()
 export class McpHandlerRegistry {
-	readonly #handlers: RegisteredHandler[] = [];
+	#handlers: readonly RegisteredHandler[] = Object.freeze([]);
+	#serverNames: readonly string[] | undefined;
+	#gatewayNames = new Set<string>();
+	readonly #mutationObservers = new Set<McpCapabilityMutationObserver>();
 
+	constructor(private readonly moduleRef: ModuleRef) {}
+
+	/** Adds one discovered handler. Prefer the typed capability methods for live registration. */
 	register(definition: McpHandlerDefinition, handler: McpDiscoveredHandler, source: string): void {
-		this.#handlers.push({ definition, handler, source });
+		this.#append(definition, handler, source, this.#serverNames !== undefined);
 	}
 
-	list(): readonly RegisteredHandler[] {
-		return [...this.#handlers];
+	/** Atomically installs a live tool for future per-request server builds. */
+	registerTool<const InputSchema extends StandardSchemaWithJSON | undefined = undefined>(
+		options: McpToolOptions<InputSchema>,
+		handler: ToolCallback<InputSchema>,
+		source = `dynamic tool "${options.name}"`,
+	): McpDynamicHandlerRegistration<ToolCallback<InputSchema>> {
+		return this.#registerDynamic({ kind: "tool", options }, eraseHandler(handler), source, (next) =>
+			eraseHandler(next),
+		);
+	}
+
+	/** Atomically installs a live prompt for future per-request server builds. */
+	registerPrompt<const ArgsSchema extends StandardSchemaWithJSON | undefined = undefined>(
+		options: McpPromptOptions<ArgsSchema>,
+		handler: PromptCallback<ArgsSchema>,
+		source = `dynamic prompt "${options.name}"`,
+	): McpDynamicHandlerRegistration<PromptCallback<ArgsSchema>> {
+		return this.#registerDynamic(
+			{ kind: "prompt", options },
+			eraseHandler(handler),
+			source,
+			(next) => eraseHandler(next),
+		);
+	}
+
+	/** Atomically installs a fixed or templated resource for future server builds. */
+	registerResource<const Uri extends string | ResourceTemplate>(
+		options: McpResourceOptions<Uri>,
+		handler: Uri extends string ? ReadResourceCallback : ReadResourceTemplateCallback,
+		source = `dynamic resource "${options.name}"`,
+	): McpDynamicHandlerRegistration<
+		Uri extends string ? ReadResourceCallback : ReadResourceTemplateCallback
+	> {
+		type Handler = Uri extends string ? ReadResourceCallback : ReadResourceTemplateCallback;
+		return this.#registerDynamic(
+			{ kind: "resource", options },
+			eraseHandler(handler),
+			source,
+			(next: Handler) => eraseHandler(next),
+		);
+	}
+
+	list(): readonly McpRegisteredHandler[] {
+		return this.#handlers.map(({ definition, source }) => Object.freeze({ definition, source }));
+	}
+
+	/** Locks target validation to the runtimes declared by the root module. */
+	configureRuntimes(serverNames: readonly string[], gatewayNames: readonly string[] = []): void {
+		if (this.#serverNames !== undefined) {
+			throw new McpModuleError("INVALID_OPTIONS", "MCP handler runtimes are already configured.");
+		}
+		this.#serverNames = normalizeRuntimeNames(serverNames);
+		this.#gatewayNames = new Set(normalizeRuntimeNames(gatewayNames));
+		for (const gatewayName of this.#gatewayNames) {
+			if (!this.#serverNames.includes(gatewayName)) {
+				throw new McpModuleError(
+					"INVALID_OPTIONS",
+					`MCP gateway target "${gatewayName}" is not a configured server.`,
+				);
+			}
+		}
+		for (const entry of this.#handlers) this.#assertKnownTargets(entry.definition, entry.source);
+		for (const runtimeName of this.#serverNames) this.assertNoCollisions(runtimeName);
+	}
+
+	/** Observes committed live mutations. The returned unsubscriber is idempotent. */
+	onMutation(observer: McpCapabilityMutationObserver): () => void {
+		if (typeof observer !== "function") {
+			throw new TypeError("MCP capability mutation observer must be a function.");
+		}
+		this.#mutationObservers.add(observer);
+		return () => {
+			this.#mutationObservers.delete(observer);
+		};
 	}
 
 	assertNoCollisions(runtimeName: string): void {
@@ -74,14 +182,309 @@ export class McpHandlerRegistry {
 	}
 
 	asServerFeature(options: McpHandlerPipelineOptions): McpServerFeature {
-		const snapshot = [...this.#handlers];
-		return (server, context) => {
-			for (const entry of snapshot) {
-				if (!targetsRuntime(entry.definition.options.servers, context.runtimeName)) continue;
-				registerHandler(server, entry, options, context.principal);
-			}
+		const visibilityTimeoutMs = normalizeVisibilityTimeout(options.visibilityTimeoutMs);
+		return async (server, context) => {
+			// A build owns one immutable snapshot. Concurrent live mutations affect only later builds.
+			const snapshot = this.#handlers.filter((entry) =>
+				targetsRuntime(entry.definition.options.servers, context.runtimeName),
+			);
+			const visible = await selectVisibleHandlers(snapshot, context, visibilityTimeoutMs);
+			for (const entry of visible) registerHandler(server, entry, options, context.principal);
 		};
 	}
+
+	#append(
+		definition: McpHandlerDefinition,
+		handler: McpDiscoveredHandler,
+		source: string,
+		notify: boolean,
+	): RegisteredHandler {
+		const normalizedSource = normalizeSource(source);
+		const normalizedDefinition = freezeDefinition(definition);
+		this.#assertKnownTargets(normalizedDefinition, normalizedSource);
+		const entry = Object.freeze({
+			id: Symbol(normalizedSource),
+			definition: normalizedDefinition,
+			handler,
+			source: normalizedSource,
+			visibility: this.#resolveVisibility(normalizedDefinition, normalizedSource),
+		}) satisfies RegisteredHandler;
+		this.#assertNoEntryCollision(entry);
+		this.#handlers = Object.freeze([...this.#handlers, entry]);
+		if (notify) this.#notify(entry, "registered");
+		return entry;
+	}
+
+	#registerDynamic<Handler>(
+		definition: McpHandlerDefinition,
+		handler: McpDiscoveredHandler,
+		source: string,
+		eraseReplacement: (handler: Handler) => McpDiscoveredHandler,
+	): McpDynamicHandlerRegistration<Handler> {
+		if (this.#serverNames === undefined) {
+			throw new McpModuleError(
+				"RUNTIME_NOT_READY",
+				"Dynamic MCP capabilities can be registered after application bootstrap configures runtimes.",
+			);
+		}
+		let current = this.#append(definition, handler, source, true);
+		let active = true;
+		return Object.freeze({
+			source: current.source,
+			replace: (nextHandler: Handler): boolean => {
+				if (!active) return false;
+				const index = this.#handlers.findIndex((entry) => entry.id === current.id);
+				if (index === -1) {
+					active = false;
+					return false;
+				}
+				const replacement = Object.freeze({
+					...current,
+					id: Symbol(current.source),
+					handler: eraseReplacement(nextHandler),
+				}) satisfies RegisteredHandler;
+				this.#handlers = Object.freeze([
+					...this.#handlers.slice(0, index),
+					replacement,
+					...this.#handlers.slice(index + 1),
+				]);
+				current = replacement;
+				this.#notify(replacement, "replaced");
+				return true;
+			},
+			unregister: (): boolean => {
+				if (!active) return false;
+				const next = this.#handlers.filter((entry) => entry.id !== current.id);
+				if (next.length === this.#handlers.length) {
+					active = false;
+					return false;
+				}
+				this.#handlers = Object.freeze(next);
+				active = false;
+				this.#notify(current, "unregistered");
+				return true;
+			},
+		});
+	}
+
+	#resolveVisibility(
+		definition: McpHandlerDefinition,
+		source: string,
+	): boolean | McpCapabilityVisibilityPolicy | undefined {
+		const visibility = definition.options.visibility;
+		if (visibility === undefined || typeof visibility === "boolean") return visibility;
+		if (typeof visibility !== "function") {
+			throw new McpModuleError(
+				"INVALID_VISIBILITY_POLICY",
+				`MCP handler ${source} visibility must be a boolean or registered singleton provider class.`,
+			);
+		}
+		try {
+			if (this.moduleRef.introspect(visibility).scope !== Scope.DEFAULT) {
+				throw new TypeError("visibility policies must use the default singleton scope");
+			}
+			const policy = this.moduleRef.get(visibility, { strict: false });
+			if (typeof policy !== "object" || policy === null || typeof policy.isVisible !== "function") {
+				throw new TypeError("resolved provider does not implement isVisible(context)");
+			}
+			return policy;
+		} catch (cause) {
+			throw new McpModuleError(
+				"INVALID_VISIBILITY_POLICY",
+				`MCP handler ${source} visibility policy ${visibility.name || "<anonymous>"} must be a registered singleton provider.`,
+				{ cause },
+			);
+		}
+	}
+
+	#assertKnownTargets(definition: McpHandlerDefinition, source: string): void {
+		if (this.#serverNames === undefined) return;
+		for (const target of explicitTargets(definition.options.servers)) {
+			if (!this.#serverNames.includes(target)) {
+				throw new McpModuleError(
+					"UNKNOWN_SERVER_TARGET",
+					`MCP handler ${source} targets unknown server "${target}".`,
+				);
+			}
+		}
+	}
+
+	#assertNoEntryCollision(candidate: RegisteredHandler): void {
+		if (this.#serverNames === undefined) return;
+		const candidateTargets = this.#effectiveTargets(candidate.definition);
+		for (const gatewayName of candidateTargets) {
+			if (this.#gatewayNames.has(gatewayName)) {
+				throw new McpModuleError(
+					"INVALID_OPTIONS",
+					`MCP gateway server "${gatewayName}" must be dedicated and cannot also host decorated or dynamic tools, prompts, or resources.`,
+				);
+			}
+		}
+		const key = registrationKey(candidate.definition);
+		for (const entry of this.#handlers) {
+			if (registrationKey(entry.definition) !== key) continue;
+			const existingTargets = this.#effectiveTargets(entry.definition);
+			const collision = candidateTargets.find((target) => existingTargets.includes(target));
+			if (collision !== undefined) {
+				throw new McpModuleError(
+					"DUPLICATE_HANDLER",
+					`Duplicate MCP ${candidate.definition.kind} registration "${key}" for server "${collision}" from ${entry.source} and ${candidate.source}.`,
+				);
+			}
+		}
+	}
+
+	#effectiveTargets(definition: McpHandlerDefinition): readonly string[] {
+		return definition.options.servers === undefined
+			? (this.#serverNames ?? [])
+			: explicitTargets(definition.options.servers);
+	}
+
+	#notify(entry: RegisteredHandler, type: McpCapabilityMutation["type"]): void {
+		const mutation = Object.freeze({
+			kind: entry.definition.kind,
+			type,
+			source: entry.source,
+			serverNames: Object.freeze([...this.#effectiveTargets(entry.definition)]),
+		}) satisfies McpCapabilityMutation;
+		for (const observer of this.#mutationObservers) {
+			try {
+				const result = observer(mutation);
+				void Promise.resolve(result).catch(() => undefined);
+			} catch {
+				// Observation must not make an already-committed mutation appear to fail.
+			}
+		}
+	}
+}
+
+async function selectVisibleHandlers(
+	handlers: readonly RegisteredHandler[],
+	context: McpServerBuildContext,
+	timeoutMs: number,
+): Promise<readonly RegisteredHandler[]> {
+	const policies = new Set<McpCapabilityVisibilityPolicy>();
+	for (const entry of handlers) {
+		if (typeof entry.visibility === "object") policies.add(entry.visibility);
+	}
+	const visibilityTask = Promise.all(
+		[...policies].map(async (policy) => {
+			let visible: unknown;
+			try {
+				visible = await policy.isVisible(context);
+			} catch (cause) {
+				throw visibilityError(policy, context.runtimeName, "threw or rejected", cause);
+			}
+			if (typeof visible !== "boolean") {
+				throw visibilityError(
+					policy,
+					context.runtimeName,
+					`returned ${typeof visible} instead of boolean`,
+				);
+			}
+			return [policy, visible] as const;
+		}),
+	).then((entries) => new Map(entries));
+	const byPolicy = await withDeadline(
+		visibilityTask,
+		timeoutMs,
+		context.requestInfo?.signal,
+		`MCP visibility evaluation for server "${context.runtimeName}"`,
+	);
+	return handlers.filter((entry) => {
+		if (entry.visibility === false) return false;
+		if (entry.visibility === true || entry.visibility === undefined) return true;
+		return byPolicy.get(entry.visibility) === true;
+	});
+}
+
+function visibilityError(
+	policy: McpCapabilityVisibilityPolicy,
+	runtimeName: string,
+	detail: string,
+	cause?: unknown,
+): McpModuleError {
+	return new McpModuleError(
+		"INVALID_VISIBILITY_POLICY",
+		`MCP visibility policy ${policy.constructor.name || "<anonymous>"} ${detail} for server "${runtimeName}".`,
+		cause === undefined ? undefined : { cause },
+	);
+}
+
+function withDeadline<T>(
+	task: Promise<T>,
+	timeoutMs: number,
+	signal: AbortSignal | undefined,
+	label: string,
+): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		let settled = false;
+		const finish = (callback: () => void): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+			callback();
+		};
+		const onAbort = (): void => {
+			finish(() => reject(signal?.reason ?? new DOMException(`${label} aborted.`, "AbortError")));
+		};
+		const timer = setTimeout(() => {
+			finish(() =>
+				reject(
+					new McpModuleError(
+						"INVALID_VISIBILITY_POLICY",
+						`${label} exceeded its ${String(timeoutMs)}ms deadline.`,
+					),
+				),
+			);
+		}, timeoutMs);
+		task.then(
+			(value) => finish(() => resolve(value)),
+			(error: unknown) => finish(() => reject(error)),
+		);
+		if (signal?.aborted === true) onAbort();
+		else signal?.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+function normalizeVisibilityTimeout(value: number | undefined): number {
+	const timeout = value ?? DEFAULT_VISIBILITY_TIMEOUT_MS;
+	if (!Number.isSafeInteger(timeout) || timeout <= 0) {
+		throw new McpModuleError(
+			"INVALID_OPTIONS",
+			"MCP handlerVisibilityTimeoutMs must be a positive safe integer.",
+		);
+	}
+	return timeout;
+}
+
+function normalizeRuntimeNames(names: readonly string[]): readonly string[] {
+	const normalized = names.map((name, index) => {
+		if (typeof name !== "string" || name.trim().length === 0) {
+			throw new McpModuleError(
+				"INVALID_OPTIONS",
+				`MCP runtime name at index ${String(index)} must be a non-empty string.`,
+			);
+		}
+		return name.trim();
+	});
+	if (new Set(normalized).size !== normalized.length) {
+		throw new McpModuleError("INVALID_OPTIONS", "MCP runtime names must be unique.");
+	}
+	return Object.freeze(normalized);
+}
+
+function normalizeSource(source: string): string {
+	if (typeof source !== "string" || source.trim().length === 0) {
+		throw new McpModuleError("INVALID_HANDLER", "MCP handler source must be a non-empty string.");
+	}
+	return source.trim();
+}
+
+function explicitTargets(targets: string | readonly string[] | undefined): readonly string[] {
+	if (targets === undefined) return [];
+	return typeof targets === "string" ? [targets] : targets;
 }
 
 function targetsRuntime(
@@ -101,27 +504,100 @@ function registrationKey(definition: McpHandlerDefinition): string {
 	return `${definition.kind}:${definition.options.name}`;
 }
 
+function freezeDefinition(definition: McpHandlerDefinition): McpHandlerDefinition {
+	if (typeof definition.options.name !== "string" || definition.options.name.trim().length === 0) {
+		throw new McpModuleError(
+			"INVALID_HANDLER",
+			`MCP ${definition.kind} name must be a non-empty string.`,
+		);
+	}
+	const targets = definition.options.servers;
+	const frozenTargets = targets === undefined ? {} : { servers: normalizeHandlerTargets(targets) };
+	if (definition.kind === "tool") {
+		return Object.freeze({
+			kind: "tool",
+			options: Object.freeze({ ...definition.options, ...frozenTargets }),
+		});
+	}
+	if (definition.kind === "prompt") {
+		return Object.freeze({
+			kind: "prompt",
+			options: Object.freeze({ ...definition.options, ...frozenTargets }),
+		});
+	}
+	return Object.freeze({
+		kind: "resource",
+		options: Object.freeze({ ...definition.options, ...frozenTargets }),
+	});
+}
+
+function normalizeHandlerTargets(targets: string | readonly string[]): string | readonly string[] {
+	const values = typeof targets === "string" ? [targets] : targets;
+	if (!Array.isArray(values) || values.length === 0) {
+		throw new McpModuleError(
+			"INVALID_OPTIONS",
+			"MCP handler targets must contain at least one server name.",
+		);
+	}
+	const normalized = values.map((target, index) => {
+		if (typeof target !== "string" || target.trim().length === 0) {
+			throw new McpModuleError(
+				"INVALID_OPTIONS",
+				`MCP handler target at index ${String(index)} must be a non-empty string.`,
+			);
+		}
+		return target.trim();
+	});
+	if (new Set(normalized).size !== normalized.length) {
+		throw new McpModuleError("INVALID_OPTIONS", "MCP handler targets must not contain duplicates.");
+	}
+	return typeof targets === "string" ? normalized[0]! : Object.freeze(normalized);
+}
+
+function eraseHandler(handler: unknown): McpDiscoveredHandler {
+	if (typeof handler !== "function") {
+		throw new McpModuleError("INVALID_HANDLER", "Dynamic MCP handler must be callable.");
+	}
+	return (...arguments_: unknown[]) => Reflect.apply(handler, undefined, arguments_);
+}
+
 function registerHandler(
 	server: McpServer,
 	entry: RegisteredHandler,
 	options: McpHandlerPipelineOptions,
 	principal: McpServerPrincipal | undefined,
 ): void {
-	const callback = (...arguments_: unknown[]): Promise<unknown> =>
+	const callback = (...arguments_: unknown[]): Promise<McpHandlerInvocationOutput> =>
 		invokeHandler(entry, arguments_, options, principal);
 	if (entry.definition.kind === "tool") {
-		const { name, servers: _servers, ...config } = entry.definition.options;
+		const {
+			name,
+			servers: _servers,
+			visibility: _visibility,
+			...config
+		} = entry.definition.options;
 		const registerTool = server.registerTool.bind(server);
 		Reflect.apply(registerTool, undefined, [name, config, callback]);
 		return;
 	}
 	if (entry.definition.kind === "prompt") {
-		const { name, servers: _servers, ...config } = entry.definition.options;
+		const {
+			name,
+			servers: _servers,
+			visibility: _visibility,
+			...config
+		} = entry.definition.options;
 		const registerPrompt = server.registerPrompt.bind(server);
 		Reflect.apply(registerPrompt, undefined, [name, config, callback]);
 		return;
 	}
-	const { name, uri, servers: _servers, ...config } = entry.definition.options;
+	const {
+		name,
+		uri,
+		servers: _servers,
+		visibility: _visibility,
+		...config
+	} = entry.definition.options;
 	const registerResource = server.registerResource.bind(server);
 	Reflect.apply(registerResource, undefined, [name, uri, config, callback]);
 }
@@ -131,7 +607,7 @@ async function invokeHandler(
 	callbackArguments: readonly unknown[],
 	options: McpHandlerPipelineOptions,
 	principal: McpServerPrincipal | undefined,
-): Promise<unknown> {
+): Promise<McpHandlerInvocationOutput> {
 	const sdkContext = callbackArguments.at(-1);
 	if (!isServerContext(sdkContext)) {
 		throw new McpModuleError(
@@ -170,7 +646,7 @@ async function invokeHandler(
 	const operation = createMcpOperation(input, context);
 	const terminal: McpOperationHandler<
 		McpHandlerInvocationInput,
-		unknown,
+		McpHandlerInvocationOutput,
 		McpHandlerOperationContext
 	> = () => entry.handler(...callbackArguments);
 	const middleware: McpHandlerMiddleware[] = [];

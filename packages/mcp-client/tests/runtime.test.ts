@@ -31,6 +31,7 @@ import {
 	MCP_CLIENT_SERVER_NOT_FOUND,
 	MCP_CLIENT_SHUTDOWN_TIMEOUT,
 	McpClientRuntime,
+	createMcpClientPassthroughMiddleware,
 	type McpClientMrtrRequestOptions,
 	type McpClientServerDefinition,
 	type McpSdkClientFactory,
@@ -138,10 +139,10 @@ describe("McpClientRuntime", () => {
 			transportFactory: fixedTransportFactory(createFakeTransport()),
 			servers: [server()],
 			middleware: [
-				async (operation, next) => {
+				createMcpClientPassthroughMiddleware(async (operation, next) => {
 					methods.push(operation.input.method);
-					return next();
-				},
+					await next();
+				}),
 			],
 			observer: {
 				onEvent(event) {

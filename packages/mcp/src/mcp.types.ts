@@ -3,8 +3,16 @@ import type {
 	McpLifecycleObserver,
 	McpOperationContext,
 	McpOperationMiddleware,
+	McpPassthroughMiddleware,
 } from "@nestm/mcp-core";
-import type { McpServerDefinition, McpServerPrincipal } from "@nestm/mcp-server";
+import type {
+	CallToolResult,
+	GetPromptResult,
+	InputRequiredResult,
+	McpServerDefinition,
+	McpServerPrincipal,
+	ReadResourceResult,
+} from "@nestm/mcp-server";
 import type { McpClientRuntimeOptions, McpClientServerDefinition } from "@nestm/mcp-client";
 import type { McpGatewayOptions, McpGatewayUpstream } from "@nestm/mcp-gateway";
 
@@ -18,9 +26,21 @@ export interface McpHandlerInvocationInput {
 }
 
 export type McpHandlerOperationContext = McpOperationContext<McpServerPrincipal>;
+export type McpHandlerInvocationOutputMap = Readonly<{
+	tool: CallToolResult | InputRequiredResult;
+	resource: ReadResourceResult;
+	prompt: GetPromptResult | InputRequiredResult;
+}>;
+export type McpHandlerInvocationOutputFor<Input extends McpHandlerInvocationInput> =
+	McpHandlerInvocationOutputMap[Input["kind"]];
+export type McpHandlerInvocationOutput = McpHandlerInvocationOutputFor<McpHandlerInvocationInput>;
 export type McpHandlerMiddleware = McpOperationMiddleware<
 	McpHandlerInvocationInput,
-	unknown,
+	McpHandlerInvocationOutput,
+	McpHandlerOperationContext
+>;
+export type McpHandlerPassthroughMiddleware = McpPassthroughMiddleware<
+	McpHandlerInvocationInput,
 	McpHandlerOperationContext
 >;
 export type McpHandlerAuthorizationPolicy = McpAuthorizationPolicy<
@@ -57,6 +77,8 @@ export interface McpNestServerDefinition extends McpServerDefinition {
 	readonly handlerMiddleware?: readonly McpHandlerMiddleware[];
 	/** Payload-free lifecycle events for validated tool/resource/prompt invocations. */
 	readonly handlerLifecycleObserver?: McpHandlerLifecycleObserver;
+	/** Maximum duration of one per-request capability visibility wave. Defaults to 30 seconds. */
+	readonly handlerVisibilityTimeoutMs?: number;
 	/** Optional aggregate gateway backed by clients owned by this Nest module. */
 	readonly gateway?: McpNestGatewayOptions;
 }
@@ -80,6 +102,10 @@ export interface McpModuleExtras {
 }
 
 export interface McpFeatureOptions {
+	/** Modules supplying providers used by the feature's handlers. */
+	readonly imports?: import("@nestjs/common").ModuleMetadata["imports"];
 	/** Extra providers to register in the feature module. */
 	readonly providers?: readonly import("@nestjs/common").Provider[];
+	/** Optional subset of feature providers/modules to re-export. Defaults to all providers. */
+	readonly exports?: import("@nestjs/common").ModuleMetadata["exports"];
 }

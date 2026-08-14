@@ -1,4 +1,4 @@
-import { Injectable, Module, Scope, type INestApplication } from "@nestjs/common";
+import { Inject, Injectable, Module, Scope, type INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import {
 	Client,
@@ -42,6 +42,16 @@ class McpTestConfigurationModule {}
 @Injectable()
 class McpRuntimeConsumer {
 	constructor(readonly runtime: McpRuntimeService) {}
+}
+
+@Injectable()
+class FeatureImportedToolsProvider {
+	constructor(@Inject(MCP_TEST_CONFIGURATION) private readonly configuration: string) {}
+
+	@McpTool({ name: "feature.imported", servers: "feature-imports" })
+	readConfiguration() {
+		return { content: [{ type: "text" as const, text: this.configuration }] };
+	}
 }
 
 @Module({ providers: [McpRuntimeConsumer], exports: [McpRuntimeConsumer] })
@@ -158,6 +168,46 @@ describe("McpModule", () => {
 		application = testingModule.createNestApplication();
 		await application.init();
 		expect(application.get(McpRuntimeConsumer).runtime).toBe(application.get(McpRuntimeService));
+	});
+
+	it("forwards feature imports and honors explicit exports", async () => {
+		const feature = McpModule.forFeature({
+			imports: [McpTestConfigurationModule],
+			providers: [FeatureImportedToolsProvider],
+			exports: [],
+		});
+		expect(feature.imports).toEqual([McpTestConfigurationModule]);
+		expect(feature.exports).toEqual([]);
+		const testingModule = await Test.createTestingModule({
+			imports: [
+				McpModule.forRoot({
+					servers: [
+						{
+							name: "feature-imports",
+							serverInfo: { name: "feature-imports", version: "1.0.0" },
+						},
+					],
+				}),
+				feature,
+			],
+		}).compile();
+		application = testingModule.createNestApplication();
+		await application.init();
+		client = new Client(
+			{ name: "feature-imports-test", version: "1.0.0" },
+			{ versionNegotiation: { mode: "auto" } },
+		);
+		await client.connect(
+			new StreamableHTTPClientTransport(new URL("http://feature.test/mcp"), {
+				fetch: createMcpServerTestFetch(
+					application.get(McpRuntimeService).server("feature-imports"),
+				),
+			}),
+		);
+
+		const result = await client.callTool({ name: "feature.imported", arguments: {} });
+
+		expect(result.content).toEqual([{ type: "text", text: "async-server" }]);
 	});
 
 	it("discovers decorated providers and serves them through MCP v2", async () => {
@@ -613,9 +663,30 @@ describe("McpModule", () => {
 		await expect(application.init()).rejects.toThrow(/must be dedicated/);
 	});
 
-	it("closes inbound servers before their upstream clients", async () => {
+	it("closes inbound servers, then gateways, then their upstream clients", async () => {
 		const testingModule = await Test.createTestingModule({
-			imports: [McpModule.forRoot()],
+			imports: [
+				McpModule.forRoot({
+					servers: [
+						{
+							name: "gateway",
+							serverInfo: { name: "gateway", version: "1.0.0" },
+							gateway: {
+								upstreams: [
+									{
+										name: "upstream",
+										client: {
+											listTools: () => ({ tools: [] }),
+											callTool: () => ({ content: [] }),
+										},
+									},
+								],
+								policy: allowAllMcpGatewayPolicy(),
+							},
+						},
+					],
+				}),
+			],
 		}).compile();
 		application = testingModule.createNestApplication();
 		await application.init();
@@ -624,6 +695,9 @@ describe("McpModule", () => {
 		vi.spyOn(runtime.servers, "close").mockImplementation(async () => {
 			closed.push("servers");
 		});
+		vi.spyOn(runtime.gateway("gateway"), "close").mockImplementation(async () => {
+			closed.push("gateway");
+		});
 		vi.spyOn(runtime.clients, "close").mockImplementation(async () => {
 			closed.push("clients");
 		});
@@ -631,7 +705,7 @@ describe("McpModule", () => {
 		await application.close();
 		application = undefined;
 
-		expect(closed).toEqual(["servers", "clients"]);
+		expect(closed).toEqual(["servers", "gateway", "clients"]);
 	});
 
 	it("publishes one stable runtime close promise before child cleanup can re-enter", async () => {

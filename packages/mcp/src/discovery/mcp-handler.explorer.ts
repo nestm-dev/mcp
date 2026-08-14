@@ -1,7 +1,7 @@
 import { Injectable, Scope } from "@nestjs/common";
 import { DiscoveryService, MetadataScanner, Reflector } from "@nestjs/core";
 import { McpModuleError } from "../mcp.errors.ts";
-import { MCP_HANDLER_METADATA } from "../mcp.tokens.ts";
+import { MCP_HANDLER_METADATA, MCP_TARGETS_METADATA } from "../mcp.tokens.ts";
 import type { McpHandlerDefinition } from "../decorators/mcp-handler.decorators.ts";
 import { McpHandlerRegistry } from "./mcp-handler.registry.ts";
 
@@ -23,6 +23,7 @@ export class McpHandlerExplorer {
 		for (const wrapper of this.discovery.getProviders()) {
 			const metatype = wrapper.metatype;
 			if (metatype?.prototype === undefined) continue;
+			const classTargets = this.reflector.get<readonly string[]>(MCP_TARGETS_METADATA, metatype);
 			for (const methodName of this.metadataScanner.getAllMethodNames(metatype.prototype)) {
 				const prototypeMethod: unknown = metatype.prototype[methodName];
 				if (typeof prototypeMethod !== "function") continue;
@@ -56,11 +57,34 @@ export class McpHandlerExplorer {
 					);
 				}
 				this.registry.register(
-					definition,
+					withDefaultTargets(definition, classTargets),
 					(...arguments_: unknown[]) => Reflect.apply(method, instance, arguments_),
 					`${metatype.name}.${methodName}`,
 				);
 			}
 		}
 	}
+}
+
+function withDefaultTargets(
+	definition: McpHandlerDefinition,
+	classTargets: readonly string[] | undefined,
+): McpHandlerDefinition {
+	if (definition.options.servers !== undefined || classTargets === undefined) return definition;
+	if (definition.kind === "tool") {
+		return Object.freeze({
+			kind: "tool",
+			options: Object.freeze({ ...definition.options, servers: classTargets }),
+		});
+	}
+	if (definition.kind === "prompt") {
+		return Object.freeze({
+			kind: "prompt",
+			options: Object.freeze({ ...definition.options, servers: classTargets }),
+		});
+	}
+	return Object.freeze({
+		kind: "resource",
+		options: Object.freeze({ ...definition.options, servers: classTargets }),
+	});
 }

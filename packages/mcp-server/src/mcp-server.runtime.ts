@@ -269,7 +269,8 @@ export class McpServerRuntime implements AsyncDisposable {
 
 	#reportError(error: Error): void {
 		try {
-			this.#definition.onError?.(error);
+			const result = this.#definition.onError?.(error);
+			void Promise.resolve(result).catch(() => undefined);
 		} catch {
 			// Reporting must never change protocol behavior.
 		}
