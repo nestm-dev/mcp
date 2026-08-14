@@ -16,6 +16,7 @@ import type {
 	ResultTypeMap,
 	ServerCapabilities,
 	StandardSchemaV1,
+	Tool,
 } from "@modelcontextprotocol/client";
 import type {
 	MaybePromise,
@@ -32,6 +33,15 @@ import type { McpClientTransportDefinition, McpClientTransportFactory } from "./
 
 export type McpClientConnectionState =
 	"disconnected" | "connecting" | "connected" | "disconnecting" | "failed";
+
+/** Official MCP tool shape returned by client discovery. */
+export type McpClientTool = Tool;
+
+/** Official JSON Schema shape accepted for MCP tool input. */
+export type McpClientToolInputSchema = McpClientTool["inputSchema"];
+
+/** Official JSON Schema shape accepted for MCP tool structured output. */
+export type McpClientToolOutputSchema = NonNullable<McpClientTool["outputSchema"]>;
 
 /** An exact method/params pair accepted by the official protocol request funnel. */
 export type McpClientProtocolRequest<Method extends RequestMethod = RequestMethod> =

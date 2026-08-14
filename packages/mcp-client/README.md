@@ -22,6 +22,7 @@ client SDK `>=2 <3`.
 - Method-keyed protocol requests, schema-validated extension requests, and notifications
 - Runtime-owned modern listen streams plus explicit legacy resource subscriptions
 - Direct typed access to each connected official SDK `Client`
+- Dependency-neutral Standard Schema projection for dynamically discovered tool schemas
 
 ## Install
 
@@ -68,6 +69,23 @@ const result = await runtime.callTool("knowledge", {
 
 await runtime.close();
 ```
+
+When a host dynamically composes tools for another Standard Schema consumer, use the public
+projection instead of asserting the remote JSON Schema into that consumer's package-local type:
+
+```ts
+import { createMcpClientToolSchema } from "@nestm/mcp-client";
+
+const { tools } = await runtime.listTools("knowledge");
+const inputSchema = createMcpClientToolSchema(tools[0]!.inputSchema);
+```
+
+The projection does not import the consumer's Standard Schema package, so compatible consumers
+can resolve their own version without creating nominal type conflicts. Construction compiles the
+remote schema once with the official MCP AJV validator and fails closed for an invalid or
+unsupported schema. Standard Schema consumers therefore validate tool input against the exact
+discovered schema; structured-output validation stays on the exact `McpClientRuntime.callTool()`
+path with the discovered `toolDefinition`.
 
 `middleware` uses the official SDK's `applyMiddlewares` implementation. A custom `fetch` can be
 provided as the base of that chain. Authentication is passed directly to

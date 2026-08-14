@@ -5,13 +5,46 @@ import type {
 	McpClientProtocolRequest,
 	McpClientRuntime,
 	McpClientTransformOptions,
+	McpClientTool,
+	McpClientToolInputSchema,
+	McpClientToolOutputSchema,
 	ReadResourceResult,
 } from "../src/index.ts";
-import { createMcpClientPassthroughMiddleware } from "../src/index.ts";
+import { createMcpClientPassthroughMiddleware, createMcpClientToolSchema } from "../src/index.ts";
 import { defineMcpClientTransform } from "../src/index.ts";
 
 type IsAssignable<Source, Target> = [Source] extends [Target] ? true : false;
 type AssertFalse<Value extends false> = Value;
+
+const discoveredTool = {
+	name: "echo",
+	inputSchema: { type: "object", properties: { value: { type: "string" } } },
+	outputSchema: { type: "object", properties: { value: { type: "string" } } },
+} satisfies McpClientTool;
+const discoveredInputSchema: McpClientToolInputSchema = discoveredTool.inputSchema;
+const discoveredOutputSchema: McpClientToolOutputSchema = discoveredTool.outputSchema;
+
+void discoveredInputSchema;
+void discoveredOutputSchema;
+
+const portableToolSchema = createMcpClientToolSchema(discoveredTool.inputSchema);
+
+declare function consumeStructurallyCompatibleStandardSchema(schema: {
+	readonly "~standard": {
+		readonly version: 1;
+		readonly vendor: string;
+		readonly validate: (
+			value: unknown,
+		) => Promise<
+			{ readonly value: unknown } | { readonly issues: readonly { readonly message: string }[] }
+		>;
+		readonly jsonSchema?: {
+			readonly input: (options: { readonly target: "draft-07" }) => Record<string, unknown>;
+		};
+	};
+}): void;
+
+consumeStructurallyCompatibleStandardSchema(portableToolSchema);
 
 type MismatchedResourceRequest = {
 	readonly method: "resources/read";

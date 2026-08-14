@@ -95,6 +95,13 @@ export type { McpClientRuntimeErrorCode } from "./errors.ts";
 
 export { McpClientRuntime } from "./runtime.ts";
 
+export { createMcpClientToolSchema } from "./tool-schema.ts";
+export type {
+	McpClientToolSchemaIssue,
+	McpClientToolSchemaResult,
+	McpClientToolStandardSchema,
+} from "./tool-schema.ts";
+
 export { createMcpClientPassthroughMiddleware, defineMcpClientTransform } from "./middleware.ts";
 
 export {
@@ -138,6 +145,9 @@ export type {
 	McpClientTransformInput,
 	McpClientTransformOptions,
 	McpClientTransformResult,
+	McpClientTool,
+	McpClientToolInputSchema,
+	McpClientToolOutputSchema,
 	McpSdkClientFactory,
 	McpSdkClientFactoryContext,
 } from "./types.ts";
