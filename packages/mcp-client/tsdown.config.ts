@@ -10,6 +10,6 @@ export default defineConfig({
 	clean: true,
 	fixedExtension: true,
 	deps: {
-		neverBundle: [/^@modelcontextprotocol\//, /^@nestm\/mcp-core(\/|$)/],
+		neverBundle: [/^@modelcontextprotocol\//, /^@nestm\/mcp-core(\/|$)/, /^zod(\/|$)/],
 	},
 });

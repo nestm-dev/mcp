@@ -4,22 +4,23 @@ NestJS 12 integration for the official Model Context Protocol TypeScript SDK v2.
 
 The package root is intentionally Nest-focused. Import framework-neutral runtime, transport,
 gateway, authentication, and observability APIs from their owning `@nestm/mcp-*` packages.
+Install Zod 4.2 or newer alongside the package when using the recommended schema authoring style
+below.
 
 ```ts
 import { Injectable, Module } from "@nestjs/common";
-import { McpClientModule, McpModule, Tool, fromJsonSchema } from "@nestm/mcp";
+import { McpClientModule, McpModule, Tool } from "@nestm/mcp";
+import { z } from "zod/v4";
+
+const artifactReadInput = z.object({ id: z.string() });
 
 @Injectable()
 class ArtifactTools {
 	@Tool({
 		name: "artifact.read",
-		inputSchema: fromJsonSchema<{ id: string }>({
-			type: "object",
-			properties: { id: { type: "string" } },
-			required: ["id"],
-		}),
+		inputSchema: artifactReadInput,
 	})
-	read({ id }: { id: string }) {
+	read({ id }: z.output<typeof artifactReadInput>) {
 		return { content: [{ type: "text" as const, text: id }] };
 	}
 }
@@ -50,6 +51,12 @@ class ArtifactTools {
 })
 export class AppModule {}
 ```
+
+Zod 4.2 or newer is the recommended authoring experience, while the public contract remains the
+official `StandardSchemaWithJSON` interface so ArkType, Valibot, and other compatible schemas still
+work. A DTO created by `@nestm/standard-schema` can be reused as `MyDto.schema` when its carried
+schema also implements Standard JSON Schema conversion, as Zod 4.2+ does. The DTO class itself is
+an HTTP metadata carrier rather than an MCP schema.
 
 Configure upstream clients asynchronously with normal Nest imports and injection, then import that
 configured client module through the MCP server root:

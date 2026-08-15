@@ -1,27 +1,23 @@
 # @nestm/mcp-server
 
 Framework-neutral MCP v2 server runtime built on the official `@modelcontextprotocol/server`
-2.x SDK.
+2.x SDK. Install Zod 4.2 or newer alongside it when using the recommended schema authoring style
+below.
 
 ```ts
-import { McpServerRuntime, fromJsonSchema } from "@nestm/mcp-server";
+import { McpServerRuntime } from "@nestm/mcp-server";
+import { z } from "zod/v4";
+
+const artifactReadInput = z.object({ id: z.string() });
 
 const runtime = new McpServerRuntime({
 	name: "artifact-tools",
 	serverInfo: { name: "artifact-tools", version: "1.0.0" },
 	features: [
 		(server) => {
-			server.registerTool(
-				"artifact.read",
-				{
-					inputSchema: fromJsonSchema<{ id: string }>({
-						type: "object",
-						properties: { id: { type: "string" } },
-						required: ["id"],
-					}),
-				},
-				async ({ id }) => ({ content: [{ type: "text", text: id }] }),
-			);
+			server.registerTool("artifact.read", { inputSchema: artifactReadInput }, async ({ id }) => ({
+				content: [{ type: "text", text: id }],
+			}));
 		},
 	],
 });

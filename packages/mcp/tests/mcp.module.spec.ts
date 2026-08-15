@@ -102,11 +102,7 @@ class ToolsProvider {
 		name: "greet",
 		servers: "artifact",
 		description: "Greet an agent",
-		inputSchema: fromJsonSchema<{ name: string }>({
-			type: "object",
-			properties: { name: { type: "string" } },
-			required: ["name"],
-		}),
+		inputSchema: z.object({ name: z.string() }),
 	})
 	greet({ name }: { name: string }) {
 		return { content: [{ type: "text" as const, text: `Hello ${name}` }] };
@@ -490,8 +486,13 @@ describe("McpModule", () => {
 		);
 
 		const result = await client.callTool({ name: "greet", arguments: { name: "Ada" } });
+		const invalidResult = await client.callTool({ name: "greet", arguments: { name: 42 } });
 
 		expect(result.content).toEqual([{ type: "text", text: "Hello Ada" }]);
+		expect(invalidResult).toMatchObject({
+			isError: true,
+			content: [{ type: "text", text: expect.stringContaining("Input validation error") }],
+		});
 		expect(authorize).toHaveBeenCalledWith(
 			expect.objectContaining({
 				input: expect.objectContaining({

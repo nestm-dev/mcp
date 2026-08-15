@@ -1,3 +1,6 @@
+import type { StandardSchemaWithJSON } from "@modelcontextprotocol/client";
+import type { ZodType } from "zod/v4";
+
 import type {
 	CallToolResult,
 	GetPromptResult,
@@ -8,6 +11,9 @@ import type {
 	McpClientTool,
 	McpClientToolInputSchema,
 	McpClientToolOutputSchema,
+	McpClientToolSchemaIssue,
+	McpClientToolSchemaResult,
+	McpClientToolStandardSchema,
 	ReadResourceResult,
 } from "../src/index.ts";
 import { createMcpClientPassthroughMiddleware, createMcpClientToolSchema } from "../src/index.ts";
@@ -28,23 +34,24 @@ void discoveredInputSchema;
 void discoveredOutputSchema;
 
 const portableToolSchema = createMcpClientToolSchema(discoveredTool.inputSchema);
+const zodToolSchema: ZodType = portableToolSchema;
+const standardToolSchema: StandardSchemaWithJSON = portableToolSchema;
+const legacyStandardToolSchema: McpClientToolStandardSchema = portableToolSchema;
+const legacyToolSchemaIssue: McpClientToolSchemaIssue = { message: "invalid" };
+const legacyToolSchemaResult: McpClientToolSchemaResult = { issues: [legacyToolSchemaIssue] };
+const legacyValidation: Promise<McpClientToolSchemaResult> = portableToolSchema[
+	"~standard"
+].validate({});
+const legacyProjection: Record<string, unknown> = portableToolSchema["~standard"].jsonSchema.input(
+	{},
+);
 
-declare function consumeStructurallyCompatibleStandardSchema(schema: {
-	readonly "~standard": {
-		readonly version: 1;
-		readonly vendor: string;
-		readonly validate: (
-			value: unknown,
-		) => Promise<
-			{ readonly value: unknown } | { readonly issues: readonly { readonly message: string }[] }
-		>;
-		readonly jsonSchema?: {
-			readonly input: (options: { readonly target: "draft-07" }) => Record<string, unknown>;
-		};
-	};
-}): void;
-
-consumeStructurallyCompatibleStandardSchema(portableToolSchema);
+void zodToolSchema;
+void standardToolSchema;
+void legacyStandardToolSchema;
+void legacyToolSchemaResult;
+void legacyValidation;
+void legacyProjection;
 
 type MismatchedResourceRequest = {
 	readonly method: "resources/read";

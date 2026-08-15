@@ -1,4 +1,5 @@
 import { fromJsonSchema } from "@nestm/mcp-server";
+import { z } from "zod/v4";
 import { Prompt, Resource, Tool, createMcpHandlerPassthroughMiddleware } from "../src/index.ts";
 import type {
 	McpHandlerInvocationInput,
@@ -51,11 +52,17 @@ const inputSchema = fromJsonSchema<{ name: string }>({
 	properties: { name: { type: "string" } },
 	required: ["name"],
 });
+const zodInputSchema = z.object({ count: z.coerce.number() });
 
 class ValidDecoratedHandlers {
 	@Tool({ name: "greet", inputSchema })
 	greet({ name }: { name: string }) {
 		return { content: [{ type: "text" as const, text: name }] };
+	}
+
+	@Tool({ name: "count", inputSchema: zodInputSchema })
+	count({ count }: z.output<typeof zodInputSchema>) {
+		return { content: [{ type: "text" as const, text: String(count) }] };
 	}
 
 	@Prompt({ name: "summarize", argsSchema: inputSchema })
@@ -76,6 +83,12 @@ class InvalidDecoratedHandlers {
 	@Tool({ name: "invalid", inputSchema })
 	invalid({ name }: { name: number }) {
 		return { content: [{ type: "text" as const, text: String(name) }] };
+	}
+
+	// @ts-expect-error Zod coercion produces a number for the handler.
+	@Tool({ name: "invalid-zod", inputSchema: zodInputSchema })
+	invalidZod({ count }: { count: string }) {
+		return { content: [{ type: "text" as const, text: count }] };
 	}
 }
 

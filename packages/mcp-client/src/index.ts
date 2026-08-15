@@ -97,6 +97,7 @@ export { McpClientRuntime } from "./runtime.ts";
 
 export { createMcpClientToolSchema } from "./tool-schema.ts";
 export type {
+	McpClientToolSchema,
 	McpClientToolSchemaIssue,
 	McpClientToolSchemaResult,
 	McpClientToolStandardSchema,

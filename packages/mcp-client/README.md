@@ -22,7 +22,7 @@ client SDK `>=2 <3`.
 - Method-keyed protocol requests, schema-validated extension requests, and notifications
 - Runtime-owned modern listen streams plus explicit legacy resource subscriptions
 - Direct typed access to each connected official SDK `Client`
-- Dependency-neutral Standard Schema projection for dynamically discovered tool schemas
+- Zod v4 projection for dynamically discovered tool schemas, with Standard Schema compatibility
 
 ## Install
 
@@ -70,22 +70,26 @@ const result = await runtime.callTool("knowledge", {
 await runtime.close();
 ```
 
-When a host dynamically composes tools for another Standard Schema consumer, use the public
-projection instead of asserting the remote JSON Schema into that consumer's package-local type:
+When a host dynamically composes discovered tools, convert the remote JSON Schema into a real Zod
+v4 schema instead of asserting it into a package-local type:
 
 ```ts
 import { createMcpClientToolSchema } from "@nestm/mcp-client";
 
 const { tools } = await runtime.listTools("knowledge");
 const inputSchema = createMcpClientToolSchema(tools[0]!.inputSchema);
+const parsed = inputSchema.parse(candidateArguments);
 ```
 
-The projection does not import the consumer's Standard Schema package, so compatible consumers
-can resolve their own version without creating nominal type conflicts. Construction compiles the
-remote schema once with the official MCP AJV validator and fails closed for an invalid or
-unsupported schema. Standard Schema consumers therefore validate tool input against the exact
-discovered schema; structured-output validation stays on the exact `McpClientRuntime.callTool()`
-path with the discovered `toolDefinition`.
+Zod v4 implements Standard Schema and Standard JSON Schema, so the returned schema also works
+directly with vendor-neutral consumers. The schema's Zod refinement delegates the validation
+predicate to the official MCP validator. This retains every Draft 2020-12 constraint, does not
+apply annotations such as `default` as transforms, and returns successful values unchanged. The
+detached remote definition is preserved as immutable Zod metadata and through the Standard JSON
+Schema hook. Explicit non-2020-12 declarations fail during construction, and the returned schema's
+projection methods reject requests for another target instead of relabelling 2020-12 keywords.
+Structured-output validation stays on the exact `McpClientRuntime.callTool()` path with the
+discovered `toolDefinition`.
 
 `middleware` uses the official SDK's `applyMiddlewares` implementation. A custom `fetch` can be
 provided as the base of that chain. Authentication is passed directly to

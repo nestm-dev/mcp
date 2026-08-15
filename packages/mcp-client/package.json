@@ -63,7 +63,8 @@
 		"prepack": "pnpm run build"
 	},
 	"dependencies": {
-		"@nestm/mcp-core": "workspace:^"
+		"@nestm/mcp-core": "workspace:^",
+		"zod": "^4.4.3"
 	},
 	"peerDependencies": {
 		"@modelcontextprotocol/client": ">=2.0.0 <3.0.0"
