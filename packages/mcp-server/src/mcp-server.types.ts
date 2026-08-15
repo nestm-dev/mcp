@@ -12,6 +12,7 @@ import type {
 	McpOperationContext,
 	McpOperationMiddleware,
 } from "@nestm/mcp-core";
+import type { McpHttpSecurityOptions } from "./security/mcp-http-security.ts";
 
 export type MaybePromise<T> = T | PromiseLike<T>;
 
@@ -39,6 +40,7 @@ export type McpServerRuntimePhase =
 	| "build:success"
 	| "build:error"
 	| "handler:error"
+	| "request:rejected"
 	| "close:start"
 	| "close:success"
 	| "close:error";
@@ -51,6 +53,8 @@ export interface McpServerRuntimeEvent {
 	readonly durationMs?: number;
 	readonly era?: McpRequestContext["era"];
 	readonly error?: Error;
+	/** HTTP status of a pre-dispatch security rejection (`request:rejected` only). */
+	readonly status?: number;
 }
 
 export type McpServerRuntimeObserver = (event: McpServerRuntimeEvent) => void | PromiseLike<void>;
@@ -96,6 +100,13 @@ export interface McpServerDefinition {
 	readonly serverOptions?: ServerOptions;
 	readonly features?: readonly McpServerFeature[];
 	readonly http?: Omit<CreateMcpHandlerOptions, "onerror">;
+	/**
+	 * HTTP pre-dispatch security posture (Origin/Host validation, CORS, body
+	 * cap). Applies to `fetch()`, `toNodeHandler()`, and every host built on
+	 * them; omitting it keeps the safe defaults (routable browser origins
+	 * denied, CORS for localhost-class origins, 1 MiB body cap).
+	 */
+	readonly httpSecurity?: McpHttpSecurityOptions;
 	/** Maximum time close waits for accepted wrapper middleware/build work. Defaults to 30 seconds. */
 	readonly shutdownTimeoutMs?: number;
 	/** Projects verified subject/tenant claims; arbitrary AuthInfo.extra values are never copied. */

@@ -18,6 +18,15 @@ import type {
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import type { ServeStdioOptions, StdioServerHandle } from "@modelcontextprotocol/server/stdio";
 import { McpServerRuntimeError } from "./mcp-server.errors.ts";
+import {
+	applyMcpCorsHeaders,
+	isMcpRequestSecured,
+	limitMcpRequestBody,
+	mcpHttpSecurityRejection,
+	resolveMcpHttpSecurity,
+} from "./security/mcp-http-security.ts";
+import type { McpHttpSecurityPolicy } from "./security/mcp-http-security.ts";
+import { withMcpNodeBodyLimit } from "./security/mcp-node-body-limit.ts";
 import type {
 	McpServerBuildContext,
 	McpServerDefinition,
@@ -35,6 +44,8 @@ export class McpServerRuntime implements AsyncDisposable {
 	readonly name: string;
 	readonly notify: ServerNotifier;
 	readonly bus: ServerEventBus;
+	/** Resolved HTTP security posture applied ahead of every HTTP dispatch. */
+	readonly httpSecurity: McpHttpSecurityPolicy;
 
 	readonly #definition: McpServerDefinition;
 	readonly #handler: McpHttpHandler;
@@ -57,6 +68,7 @@ export class McpServerRuntime implements AsyncDisposable {
 		};
 		this.#shutdownTimeoutMs = definition.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
 		this.name = definition.name;
+		this.httpSecurity = resolveMcpHttpSecurity(definition.httpSecurity);
 		this.#handler = createMcpHandler((context) => this.createServer(context), {
 			...definition.http,
 			onerror: (error) => {
@@ -146,10 +158,34 @@ export class McpServerRuntime implements AsyncDisposable {
 
 	fetch(request: Request, options?: McpHandlerRequestOptions): Promise<Response> {
 		this.#assertOpen();
-		const task = this.#createRequestOperation(request, options).then((operation) =>
-			this.#requestPipeline(operation),
-		);
+		const task = this.#serveHttp(request, options);
 		return trackTask(this.#fetchTasks, task);
+	}
+
+	async #serveHttp(request: Request, options?: McpHandlerRequestOptions): Promise<Response> {
+		// An outer hardened facade (controller seam, hardenMcpFetch) already
+		// gated this request under its own policy; defer to it entirely.
+		if (isMcpRequestSecured(request)) {
+			const operation = await this.#createRequestOperation(request, options);
+			return this.#requestPipeline(operation);
+		}
+		// Security gating runs outside definition middleware and lifecycle
+		// observation: a rejected request never reaches application composition.
+		const rejection = mcpHttpSecurityRejection(request, this.httpSecurity);
+		if (rejection !== undefined) {
+			if (rejection.status >= 400) {
+				this.#observe({ phase: "request:rejected", status: rejection.status });
+			}
+			return rejection;
+		}
+		const limited = await limitMcpRequestBody(request, this.httpSecurity);
+		if (limited instanceof Response) {
+			this.#observe({ phase: "request:rejected", status: limited.status });
+			return applyMcpCorsHeaders(request, limited, this.httpSecurity);
+		}
+		const operation = await this.#createRequestOperation(limited, options);
+		const response = await this.#requestPipeline(operation);
+		return applyMcpCorsHeaders(request, response, this.httpSecurity);
 	}
 
 	toNodeHandler(options?: ToNodeHandlerOptions): NodeMcpRequestHandler {
@@ -157,12 +193,27 @@ export class McpServerRuntime implements AsyncDisposable {
 		// Adapt the runtime fetch face, not the raw SDK handler. This preserves
 		// operation middleware, authorization, and lifecycle observation for
 		// Express, Fastify, and plain Node hosts as well as web-standard hosts.
-		return toNodeHandler(
-			{
-				fetch: (request, requestOptions) => this.fetch(request, requestOptions),
-			},
-			options,
+		// The Node-level body cap runs before the SDK converts the request,
+		// where an unbounded stream would otherwise be buffered in full.
+		return withMcpNodeBodyLimit(
+			toNodeHandler(
+				{
+					fetch: (request, requestOptions) => this.fetch(request, requestOptions),
+				},
+				options,
+			),
+			this.httpSecurity,
+			{ onRejected: (status) => this.reportRequestRejected(status) },
 		);
+	}
+
+	/**
+	 * Reports a pre-dispatch security rejection detected by an outer hardened
+	 * layer (a Nest controller seam, a hand-composed facade) so it still surfaces
+	 * as a `request:rejected` runtime observer event.
+	 */
+	reportRequestRejected(status: number): void {
+		if (status >= 400) this.#observe({ phase: "request:rejected", status });
 	}
 
 	/** Start a stdio connection backed by this runtime's feature factory. */

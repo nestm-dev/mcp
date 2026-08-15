@@ -50,6 +50,32 @@ The `@nestm/mcp-server/auth` subpath adds fail-closed bearer-token verification 
 9728/RFC 8414 metadata. It treats the MCP server as an OAuth resource server; use a dedicated
 identity provider to issue tokens.
 
+## HTTP security posture
+
+Every runtime gates HTTP dispatch through `definition.httpSecurity` before middleware and the SDK
+handler run. The defaults are safe without configuration: browser requests from routable origins
+are rejected (requests without an `Origin` header always pass), CORS answers the preflights the
+2026-07-28 revision requires for `Mcp-Method`/`Mcp-Name`, and request bodies are capped at 1 MiB on
+both the Node stream and the fetch layer.
+
+```ts
+const runtime = new McpServerRuntime({
+	name: "artifact",
+	serverInfo: { name: "artifact", version: "1.0.0" },
+	httpSecurity: {
+		allowedOriginHostnames: ["app.example.com"],
+		cors: { additionalAllowedHeaders: ["x-tenant"] },
+		maxBodyBytes: 262_144,
+	},
+});
+```
+
+Pre-dispatch rejections surface to the runtime observer as `request:rejected` events with the HTTP
+status. `@nestm/mcp-server/security` also exports the building blocks (`resolveMcpHttpSecurity`,
+`hardenMcpFetch`, `McpHardenedServer`, `withMcpNodeBodyLimit`) for hand-wired compositions; an
+outer hardened facade owns the posture for requests it admits, and the runtime's inner gate defers
+to it.
+
 ## Multi-round input
 
 The package re-exports the official v2 `inputRequired`, `acceptedContent`, and `inputResponse`
