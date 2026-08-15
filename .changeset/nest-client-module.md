@@ -5,9 +5,9 @@
 ---
 
 Add a standalone Nest-owned `McpClientModule` and injectable `McpClientService` with synchronous
-and asynchronous configuration, module-local collaborators, optional bootstrap connection, failed
-bootstrap rollback, and deterministic shutdown. The framework-neutral `McpClientRuntime` remains
-directly constructible from `@nestm/mcp-client`.
+and asynchronous configuration, module-local collaborators, optional `bootstrap.connectAll`
+connection, failed bootstrap rollback, and deterministic shutdown. The framework-neutral
+`McpClientRuntime` remains directly constructible from `@nestm/mcp-client`.
 
 Compose outbound clients into `McpModule` through Nest module imports instead of embedding raw
 client runtime options in the inbound server root. Resolve callback-bearing client, gateway, and

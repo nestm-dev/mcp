@@ -141,7 +141,9 @@ class AgentGatewayPolicy implements McpGatewayPolicy {
 			imports: [
 				McpClientModule.forRoot({
 					servers: upstreamServers,
-					connectOnApplicationBootstrap: true,
+					bootstrap: {
+						connectAll: true,
+					},
 				}),
 			],
 			collaborators: { providers: [AgentGatewayPolicy] },
@@ -206,7 +208,9 @@ class ArtifactTools {
 			imports: [
 				McpClientModule.forRoot({
 					servers: upstreamServers,
-					connectOnApplicationBootstrap: true,
+					bootstrap: {
+						connectAll: true,
+					},
 				}),
 			],
 			collaborators: { providers: [AgentGatewayPolicy] },
@@ -242,7 +246,9 @@ McpModule.forRoot({
 			inject: [RuntimeConfigService],
 			useFactory: (config: RuntimeConfigService) => ({
 				servers: config.mcpServers(),
-				connectOnApplicationBootstrap: true,
+				bootstrap: {
+					connectAll: true,
+				},
 			}),
 		}),
 	],

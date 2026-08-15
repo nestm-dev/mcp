@@ -57,7 +57,7 @@ export class McpClientService
 	}
 
 	async #performBootstrap(): Promise<void> {
-		if (this.moduleOptions.connectOnApplicationBootstrap !== true) return;
+		if (this.moduleOptions.bootstrap?.connectAll !== true) return;
 		try {
 			await this.connectAll();
 		} catch (bootstrapError) {

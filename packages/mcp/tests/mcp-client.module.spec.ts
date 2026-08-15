@@ -750,7 +750,32 @@ describe("McpClientModule", () => {
 		);
 	});
 
-	it("closes the runtime when connect-on-bootstrap fails", async () => {
+	it("does not connect during application bootstrap by default", async () => {
+		const testingModule = await Test.createTestingModule({
+			imports: [
+				McpClientModule.forRoot({
+					collaborators: { providers: [RejectingTransportFactory] },
+					servers: [
+						{
+							name: "deferred",
+							transport: { kind: "http", url: "https://deferred.example.test/mcp" },
+						},
+					],
+					runtime: { transportFactory: RejectingTransportFactory },
+				}),
+			],
+		}).compile();
+		application = testingModule.createNestApplication();
+		const service = application.get(McpClientService);
+		const transportFactory = application.get(RejectingTransportFactory);
+
+		await application.init();
+
+		expect(transportFactory.calls).toHaveLength(0);
+		expect(service.snapshot("deferred").state).toBe("disconnected");
+	});
+
+	it("closes the runtime when bootstrap.connectAll fails", async () => {
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpClientModule.forRoot({
@@ -762,7 +787,7 @@ describe("McpClientModule", () => {
 						},
 					],
 					runtime: { transportFactory: RejectingTransportFactory },
-					connectOnApplicationBootstrap: true,
+					bootstrap: { connectAll: true },
 				}),
 			],
 		}).compile();

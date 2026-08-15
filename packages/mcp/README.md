@@ -36,7 +36,9 @@ class ArtifactTools {
 							transport: { kind: "http", url: "https://mcp.example.com/mcp" },
 						},
 					],
-					connectOnApplicationBootstrap: true,
+					bootstrap: {
+						connectAll: true,
+					},
 				}),
 			],
 			servers: [
@@ -69,7 +71,9 @@ McpModule.forRoot({
 			inject: [RuntimeConfigService],
 			useFactory: (config: RuntimeConfigService) => ({
 				servers: config.mcpServers(),
-				connectOnApplicationBootstrap: true,
+				bootstrap: {
+					connectAll: true,
+				},
 			}),
 		}),
 	],
@@ -108,7 +112,9 @@ class KnowledgeAgent {
 	imports: [
 		McpClientModule.forRoot({
 			servers: upstreamServers,
-			connectOnApplicationBootstrap: true,
+			bootstrap: {
+				connectAll: true,
+			},
 		}),
 	],
 	providers: [KnowledgeAgent],
@@ -558,7 +564,9 @@ McpModule.forRoot({
 	imports: [
 		McpClientModule.forRoot({
 			servers: upstreamServers,
-			connectOnApplicationBootstrap: true,
+			bootstrap: {
+				connectAll: true,
+			},
 		}),
 	],
 	collaborators: { providers: [AgentGatewayPolicy] },

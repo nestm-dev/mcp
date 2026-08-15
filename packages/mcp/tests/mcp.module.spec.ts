@@ -882,7 +882,7 @@ describe("McpModule", () => {
 								},
 							],
 							runtime: { transportFactory },
-							connectOnApplicationBootstrap: true,
+							bootstrap: { connectAll: true },
 						}),
 					],
 					servers: [
@@ -1286,7 +1286,7 @@ describe("McpModule", () => {
 								},
 							],
 							runtime: { transportFactory },
-							connectOnApplicationBootstrap: true,
+							bootstrap: { connectAll: true },
 						}),
 					],
 				}),

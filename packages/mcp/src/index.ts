@@ -44,6 +44,7 @@ export type {
 export { McpClientService } from "./client/mcp-client.service.ts";
 export type {
 	McpClientAttributesResolverProvider,
+	McpClientBootstrapOptions,
 	McpClientClock,
 	McpClientConfiguratorProvider,
 	McpClientFetchMiddlewareProvider,

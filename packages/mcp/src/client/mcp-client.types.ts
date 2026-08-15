@@ -156,13 +156,18 @@ export interface McpNestClientRuntimeOptions extends Omit<
 	readonly clock?: McpProviderToken<McpClientClock>;
 }
 
+export interface McpClientBootstrapOptions {
+	/** Establish all configured upstreams during application bootstrap. Defaults to false. */
+	readonly connectAll?: boolean;
+}
+
 export interface McpClientModuleOptions {
 	/** Named upstream servers owned by this Nest module. */
 	readonly servers?: readonly McpNestClientDefinition[];
 	/** Shared client policy, telemetry, factories, identity, and timing. */
 	readonly runtime?: McpNestClientRuntimeOptions;
-	/** Establish all configured upstreams during application bootstrap. Defaults to false. */
-	readonly connectOnApplicationBootstrap?: boolean;
+	/** Nest application-bootstrap behavior for module-owned clients. */
+	readonly bootstrap?: McpClientBootstrapOptions;
 }
 
 export interface McpClientModuleExtras {
