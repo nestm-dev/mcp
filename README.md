@@ -5,7 +5,7 @@ NestM MCP is an alpha-stage Model Context Protocol runtime for NestJS applicatio
 The primary use case is an artifact or agent runtime that needs to expose trusted application capabilities and consume many MCP servers through one controlled NestJS layer. The runtime is intended to make authentication, authorization, routing, lifecycle ownership, and telemetry explicit rather than hiding them behind a global SDK singleton.
 
 > [!WARNING]
-> This repository currently targets NestJS `12.0.0-alpha.5`, TypeScript `7.0.2`, MCP SDK `2.0.0`, and Node.js `>=22.13.0`. Every package is `0.1.0-alpha.0`. Expect breaking changes while NestJS 12 and these packages remain alpha.
+> This repository currently targets NestJS `12.0.0-alpha.5`, TypeScript `7.0.2`, MCP SDK `2.0.0`, and Node.js `>=22.13.0`. Every package is `0.1.0-alpha.1`. Expect breaking changes while NestJS 12 and these packages remain alpha.
 
 ## Packages
 
@@ -98,13 +98,20 @@ Discovery verdicts may be reused through the official SDK's `PriorDiscovery` sup
 
 The runtime also exposes typed general requests, completion, manual modern `input_required` rounds, and runtime-owned modern `listen()` handles. Manual multi-round APIs return the official continuation instead of invoking configured auto-fulfilment handlers; each resumed leg re-enters runtime middleware and lifecycle observation. Disconnecting an upstream closes its active subscriptions before the official client and transport. The older `resources/subscribe` and `resources/unsubscribe` delegates are explicitly legacy-only.
 
+`McpClientRuntime` remains framework-neutral and directly constructible. In a Nest application,
+`@nestm/mcp` supplies `McpClientModule` and its injectable `McpClientService` subclass, which resolve
+client collaborators through Nest, optionally connect during application bootstrap, and close during
+module shutdown. An outbound-only agent host can import `McpClientModule.forRoot()` directly and
+inject `McpClientService`; a server or gateway root imports the configured client module through
+`McpModule` as shown below.
+
 ## Build an artifact or agent gateway
 
 `@nestm/mcp-gateway` projects tools, prompts, concrete resources, resource templates, and completion from named upstream clients into one MCP server. Names and resource routes are reversible and collision-safe, discovery is isolated by authorization context, and the required capability-specific policy runs during listing and again immediately before execution.
 
 ```ts
 import { Injectable, Module } from "@nestjs/common";
-import { McpModule, allowMcpOperation, denyMcpOperation } from "@nestm/mcp";
+import { McpClientModule, McpModule, allowMcpOperation, denyMcpOperation } from "@nestm/mcp";
 import type { McpGatewayPolicy } from "@nestm/mcp-gateway";
 
 @Injectable()
@@ -131,9 +138,13 @@ class AgentGatewayPolicy implements McpGatewayPolicy {
 @Module({
 	imports: [
 		McpModule.forRoot({
+			imports: [
+				McpClientModule.forRoot({
+					servers: upstreamServers,
+					connectOnApplicationBootstrap: true,
+				}),
+			],
 			collaborators: { providers: [AgentGatewayPolicy] },
-			clients: upstreamServers,
-			connectClientsOnBootstrap: true,
 			servers: [
 				{
 					name: "agent-gateway",
@@ -155,7 +166,15 @@ Gateway servers are therefore dedicated in this alpha: put local/decorated capab
 separate named server rather than composing semantics that cannot be honored for every projected
 capability.
 
-Protect the downstream HTTP handler as an OAuth resource server and keep every upstream credential owned by its client definition. The gateway never forwards the downstream bearer token automatically. Prompt, resource, and resource-template policy hooks are fail closed when omitted, so adding an upstream capability cannot expose it through an existing tool-only policy. In a Nest application, string and `{ clientName }` gateway entries use module-owned named clients as service identities. For delegated, token-exchanged, or user-owned upstream credentials, place a complete `{ name, client: resolver }` entry in the same declarative `gateway.upstreams` array; the resolver receives the verified request context and must return an authorization-isolated client.
+Protect the downstream HTTP handler as an OAuth resource server and keep every upstream credential owned by its client definition. The gateway never forwards the downstream bearer token automatically. Prompt, resource, and resource-template policy hooks are fail closed when omitted, so adding an upstream capability cannot expose it through an existing tool-only policy. In a Nest application, string and `{ clientName }` gateway entries use module-owned named clients as service identities. For delegated, token-exchanged, or user-owned upstream credentials, register an `McpGatewayClientProvider` and reference it with `{ name, clientProvider: ProviderToken }`; its `resolveClient()` method receives the verified request context and must return an authorization-isolated client.
+
+Within `McpModule`, callback-bearing server and gateway collaborators are DI tokens rather than raw
+functions or stateful objects. This includes the server JSON Schema validator, request-state
+verifier, event bus, gateway codecs, discovery cache, authorization-context resolver, middleware,
+lifecycle observer, and observer-error reporter. Register their singleton implementations under
+`collaborators.providers`; keep timeouts, limits, cache hints, and other passive values inline. The
+framework-neutral `@nestm/mcp-server` and `@nestm/mcp-gateway` APIs continue to accept raw
+implementations directly.
 
 Resource-template discovery/read and prompt/template completion are supported. Transparent multi-round `input_required` relaying and upstream-to-downstream notification bridging are not: those require sealed route-bound request state and a long-lived, authorization-partitioned subscription coordinator. Until that coordinator exists, the gateway does not claim list-change or resource-subscription support for projected capabilities.
 
@@ -163,7 +182,7 @@ Resource-template discovery/read and prompt/template completion are supported. T
 
 ```ts
 import { Injectable, Module } from "@nestjs/common";
-import { McpModule, Tool, fromJsonSchema } from "@nestm/mcp";
+import { McpClientModule, McpModule, Tool, fromJsonSchema } from "@nestm/mcp";
 
 @Injectable()
 class ArtifactTools {
@@ -184,6 +203,12 @@ class ArtifactTools {
 @Module({
 	imports: [
 		McpModule.forRoot({
+			imports: [
+				McpClientModule.forRoot({
+					servers: upstreamServers,
+					connectOnApplicationBootstrap: true,
+				}),
+			],
 			collaborators: { providers: [AgentGatewayPolicy] },
 			servers: [
 				{
@@ -199,8 +224,6 @@ class ArtifactTools {
 					},
 				},
 			],
-			clients: upstreamServers,
-			connectClientsOnBootstrap: true,
 		}),
 	],
 	providers: [ArtifactTools],
@@ -208,24 +231,30 @@ class ArtifactTools {
 export class AppModule {}
 ```
 
-Use `forRootAsync` when client/server definitions come from application configuration:
+Use `McpClientModule.forRootAsync()` when upstream definitions come from application
+configuration, and import the result through `McpModule`:
 
 ```ts
-McpModule.forRootAsync({
-	imports: [RuntimeConfigModule],
-	inject: [RuntimeConfigService],
-	useFactory: (config: RuntimeConfigService) => ({
-		clients: config.mcpServers(),
-		connectClientsOnBootstrap: true,
-	}),
+McpModule.forRoot({
+	imports: [
+		McpClientModule.forRootAsync({
+			imports: [RuntimeConfigModule],
+			inject: [RuntimeConfigService],
+			useFactory: (config: RuntimeConfigService) => ({
+				servers: config.mcpServers(),
+				connectOnApplicationBootstrap: true,
+			}),
+		}),
+	],
 });
 ```
 
-The module is local by default. Import `forRoot()` or `forRootAsync()` exactly once per Nest
-application and configure every MCP client and server in that shared root. Set `isGlobal: true`
-only when application-wide injection is intentional.
+Use `McpModule.forRootAsync()` separately for asynchronous inbound server definitions. Both modules
+are local by default. Import the MCP server root exactly once per Nest application because decorator
+discovery is application-wide; configure `McpClientModule` independently. Set `isGlobal: true` on
+either module only when application-wide injection is intentional.
 
-After Nest application bootstrap, inject `McpRuntimeService`. Use `runtime.server("artifact-tools")` for the local inbound server, `runtime.clients` or `runtime.client(name)` for configured upstreams, and `runtime.gateway("agent-gateway")` to inspect or invalidate the dedicated server's aggregate discovery cache. Shutdown closes inbound server handlers before closing upstream clients. The Nest destroy hook contains cleanup failures so framework adapter disposal can continue; inspect `runtime.shutdownError` or call `runtime.close()` explicitly when the host must fail on cleanup errors.
+After Nest application bootstrap, inject `McpRuntimeService`. Use `runtime.server("artifact-tools")` for the local inbound server, `runtime.clients` or `runtime.client(name)` for upstreams from the imported client module, and `runtime.gateway("agent-gateway")` to inspect or invalidate the dedicated server's aggregate discovery cache. Inject `McpClientService` directly in client-only application services. Shutdown closes inbound server handlers before closing upstream clients. The Nest destroy hook contains cleanup failures so framework adapter disposal can continue; inspect `runtime.shutdownError` or call `runtime.close()` explicitly when the host must fail on cleanup errors.
 
 Call `app.enableShutdownHooks()` during bootstrap when SIGTERM/SIGINT should trigger Nest lifecycle cleanup. A failed MCP bootstrap automatically rolls back any clients and servers that were already initialized.
 

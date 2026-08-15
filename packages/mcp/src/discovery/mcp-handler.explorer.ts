@@ -23,7 +23,7 @@ export class McpHandlerExplorer {
 		if (rootCount === 1) return;
 		throw new McpModuleError(
 			"INVALID_OPTIONS",
-			"McpModule.forRoot() or forRootAsync() must be imported exactly once per Nest application. Configure every MCP client and server in that shared root.",
+			"McpModule.forRoot() or forRootAsync() must be imported exactly once per Nest application. Configure every inbound MCP server in that shared root and import one McpClientModule when named upstreams are needed.",
 		);
 	}
 

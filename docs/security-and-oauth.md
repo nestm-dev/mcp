@@ -166,11 +166,13 @@ Safe default: never forward the downstream `Authorization` header to an upstream
 - user-owned upstream OAuth provider keyed by user, issuer, and resource; or
 - no upstream credential for a public server.
 
-Nest named-client gateway entries implement the service-identity strategy. For delegation, pass a
-complete `{ name, client: resolver }` upstream in the server's gateway configuration. That resolver
-receives the verified request context and should return a client partitioned by issuer, resource,
-tenant, principal, and credential fingerprint. It must not reuse a user-specific client across
-authorization contexts.
+Nest named-client gateway entries implement the service-identity strategy. For delegation,
+register an `McpGatewayClientProvider` and pass `{ name, clientProvider: ProviderToken }` in the
+server's gateway configuration. The provider's `resolveClient()` method receives the verified
+request context and should return a client partitioned by issuer, resource, tenant, principal, and
+credential fingerprint. It must not reuse a user-specific client across authorization contexts.
+Framework-neutral callers can pass a complete `{ name, client: resolver }` directly to
+`McpGateway` from `@nestm/mcp-gateway`.
 
 Record which strategy was selected without logging the credential. Capability discovery caches must be partitioned by any identity or scope that can change the advertised capability set.
 

@@ -7,7 +7,7 @@ gateway, authentication, and observability APIs from their owning `@nestm/mcp-*`
 
 ```ts
 import { Injectable, Module } from "@nestjs/common";
-import { McpModule, Tool, fromJsonSchema } from "@nestm/mcp";
+import { McpClientModule, McpModule, Tool, fromJsonSchema } from "@nestm/mcp";
 
 @Injectable()
 class ArtifactTools {
@@ -27,19 +27,23 @@ class ArtifactTools {
 @Module({
 	imports: [
 		McpModule.forRoot({
+			imports: [
+				McpClientModule.forRoot({
+					servers: [
+						{
+							name: "knowledge",
+							transport: { kind: "http", url: "https://mcp.example.com/mcp" },
+						},
+					],
+					connectOnApplicationBootstrap: true,
+				}),
+			],
 			servers: [
 				{
 					name: "artifact",
 					serverInfo: { name: "artifact", version: "1.0.0" },
 				},
 			],
-			clients: [
-				{
-					name: "knowledge",
-					transport: { kind: "http", url: "https://mcp.example.com/mcp" },
-				},
-			],
-			connectClientsOnBootstrap: true,
 		}),
 	],
 	providers: [ArtifactTools],
@@ -47,28 +51,95 @@ class ArtifactTools {
 export class AppModule {}
 ```
 
-Async configuration supports normal Nest imports and injection:
+Configure upstream clients asynchronously with normal Nest imports and injection, then import that
+configured client module through the MCP server root:
 
 ```ts
-McpModule.forRootAsync({
-	imports: [RuntimeConfigModule],
-	inject: [RuntimeConfigService],
-	useFactory: (config: RuntimeConfigService) => ({
-		clients: config.mcpServers(),
-		connectClientsOnBootstrap: true,
-	}),
+McpModule.forRoot({
+	imports: [
+		McpClientModule.forRootAsync({
+			imports: [RuntimeConfigModule],
+			inject: [RuntimeConfigService],
+			useFactory: (config: RuntimeConfigService) => ({
+				servers: config.mcpServers(),
+				connectOnApplicationBootstrap: true,
+			}),
+		}),
+	],
 });
 ```
 
-The module is local by default. Import `forRoot()` or `forRootAsync()` exactly once per Nest
-application and configure every MCP client and server in that shared root. Set `isGlobal: true`
-only when application-wide injection is intentional.
+Use `McpModule.forRootAsync()` separately when inbound server definitions are asynchronous.
+`McpModule` and `McpClientModule` are both local by default. Import the MCP server root exactly once
+per Nest application because decorator discovery is application-wide. Configure the client module
+independently and include it in `McpModule`'s `imports` when gateways or `McpRuntimeService` need its
+named upstreams. Set `isGlobal: true` on either module only when application-wide injection is
+intentional.
 
 After Nest application bootstrap, inject `McpRuntimeService`. Mount
 `runtime.server("artifact").toNodeHandler()` at the desired route, access the named upstream with
 `runtime.client("knowledge")`, or use `runtime.clients` for registry operations. The module closes
 inbound server handlers before upstream clients during Nest shutdown. For Nest-native routing,
 guards, interceptors, prefixes, and versioning, prefer `McpHttpControllerFor()` below.
+
+For an outbound-only agent host, import `McpClientModule` directly and inject `McpClientService`:
+
+```ts
+import { Injectable, Module } from "@nestjs/common";
+import { McpClientModule, McpClientService } from "@nestm/mcp";
+
+@Injectable()
+class KnowledgeAgent {
+	constructor(private readonly clients: McpClientService) {}
+
+	listTools() {
+		return this.clients.listTools("knowledge");
+	}
+}
+
+@Module({
+	imports: [
+		McpClientModule.forRoot({
+			servers: upstreamServers,
+			connectOnApplicationBootstrap: true,
+		}),
+	],
+	providers: [KnowledgeAgent],
+})
+export class AgentHostModule {}
+```
+
+`McpClientService` extends the framework-neutral `McpClientRuntime`, so it exposes the same typed
+registry and protocol operations while adding Nest bootstrap and shutdown ownership. Client
+factories, transports, authentication, middleware, observers, and resolvers are referenced by
+provider token and registered under `McpClientModule`'s `collaborators`; the module resolves and
+binds them before constructing the runtime. Outside Nest, continue constructing `McpClientRuntime`
+directly from `@nestm/mcp-client`.
+
+The client adapter resolves these provider-token seams:
+
+| Client option                                 | Provider contract                                      |
+| --------------------------------------------- | ------------------------------------------------------ |
+| `runtime.clientFactory`                       | `createClient`                                         |
+| `runtime.transportFactory` / server factory   | `createTransport`                                      |
+| `runtime.middleware[]`                        | `handle`                                               |
+| `runtime.observer`                            | `onEvent`                                              |
+| `runtime.lifecycle.clock` / `runtime.clock`   | `now`                                                  |
+| `runtime.lifecycle.errorReporter`             | `report`                                               |
+| `runtime.principalResolver`                   | `resolvePrincipal`                                     |
+| `runtime.attributesResolver`                  | `resolveAttributes`                                    |
+| `runtime.operationIdFactory`                  | `createOperationId`                                    |
+| `servers[].configureClient`                   | `configure`                                            |
+| `servers[].clientOptions.jsonSchemaValidator` | `getValidator`                                         |
+| `servers[].clientOptions.responseCacheStore`  | `get`, `set`, `delete`, `evict`, `clear`               |
+| `servers[].connectOptions.progressObserver`   | `onProgress`                                           |
+| HTTP `authProvider`                           | `token`, or the complete `OAuthClientProvider` methods |
+| HTTP `fetch` / `middleware[]` / reconnection  | `fetch` / `handle` / `schedule`                        |
+| HTTP `requestInit` / stdio `stderrStream`     | provider-owned value                                   |
+
+Static connect configuration intentionally excludes `AbortSignal`; pass cancellation to an
+imperative client operation instead. Passive URL, timeout, retry, stdio mode, and environment data
+stays inline.
 
 Decorated singleton providers with static dependency trees are compiled once. The official SDK
 still creates a fresh cheap server instance for every modern HTTP request. `@Tool`, `@Prompt`, and
@@ -152,21 +223,40 @@ Contributors are the Nest boundary for low-level official SDK registration; raw 
 callbacks remain in `@nestm/mcp-server`. Contributors must use the default singleton scope and
 cannot share a dedicated gateway or catalog-projected server.
 
-All Nest server collaborators are provider tokens resolved once during bootstrap:
+All callback-bearing Nest server settings are provider tokens resolved once during bootstrap:
 
-| Server option              | Required provider method                                                                  |
-| -------------------------- | ----------------------------------------------------------------------------------------- |
-| `principalClaims`          | `resolvePrincipalClaims`                                                                  |
-| `middleware[]`             | `handle`                                                                                  |
-| `lifecycleObserver`        | `onEvent`                                                                                 |
-| `observer`                 | `observe`                                                                                 |
-| `onError`                  | `report`                                                                                  |
-| `handlerAuthorization`     | `authorize`                                                                               |
-| `handlerMiddleware[]`      | `handle`                                                                                  |
-| `handlerLifecycleObserver` | `onEvent`                                                                                 |
-| `contributors[]`           | `contribute`                                                                              |
-| `catalogExposure.policy`   | `resolve`                                                                                 |
-| `gateway.policy`           | `authorize`; optional `authorizePrompt`, `authorizeResource`, `authorizeResourceTemplate` |
+| Server option                         | Required provider method(s) |
+| ------------------------------------- | --------------------------- |
+| `serverOptions.jsonSchemaValidator`   | `getValidator`              |
+| `serverOptions.requestState.verifier` | `verify`                    |
+| `http.eventBus`                       | `publish`, `subscribe`      |
+| `principalClaims`                     | `resolvePrincipalClaims`    |
+| `middleware[]`                        | `handle`                    |
+| `lifecycleObserver`                   | `onEvent`                   |
+| `observer`                            | `observe`                   |
+| `onError`                             | `report`                    |
+| `handlerAuthorization`                | `authorize`                 |
+| `handlerMiddleware[]`                 | `handle`                    |
+| `handlerLifecycleObserver`            | `onEvent`                   |
+| `contributors[]`                      | `contribute`                |
+| `catalogExposure.policy`              | `resolve`                   |
+
+The declarative Nest gateway follows the same rule:
+
+| Gateway option                         | Required provider method(s)                                                               |
+| -------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `gateway.upstreams[].clientProvider`   | `resolveClient`                                                                           |
+| `gateway.policy`                       | `authorize`; optional `authorizePrompt`, `authorizeResource`, `authorizeResourceTemplate` |
+| `gateway.nameCodec`                    | `encode`, `decode`, `tryDecode`                                                           |
+| `gateway.promptNameCodec`              | `encode`, `decode`, `tryDecode`                                                           |
+| `gateway.resourceUriCodec`             | `encode`, `decode`, `tryDecode`                                                           |
+| `gateway.resourceTemplateUriCodec`     | `encode`, `decode`, `tryDecode`                                                           |
+| `gateway.resourceTemplateNameCodec`    | `encode`, `decode`, `tryDecode`                                                           |
+| `gateway.discoveryCache`               | `get`, `set`, `delete`, `clear`                                                           |
+| `gateway.authorizationContextResolver` | `resolveAuthorizationContext`                                                             |
+| `gateway.middleware[]`                 | `handle`                                                                                  |
+| `gateway.lifecycleObserver`            | `onEvent`                                                                                 |
+| `gateway.onObserverError`              | `report`                                                                                  |
 
 Use a class token, string token, symbol token, or abstract-class token registered under
 `McpModule`'s `collaborators.providers`. Use `collaborators.imports` for modules that supply their
@@ -175,6 +265,11 @@ ownership prevents an identically named private provider elsewhere in the applic
 selected and keeps collaborator initialization/teardown ordered around the runtimes they serve.
 Collaborators must use the default singleton scope with a static dependency tree; bootstrap fails
 before serving traffic when a token is missing, scoped, or does not implement its required method.
+The Nest option names make token ownership explicit: `http.eventBus` maps to the official handler's
+`bus`, and `serverOptions.requestState.verifier` supplies its `verify` callback. Passive data such as
+timeouts, limits, cache hints, and other scalar server or gateway settings remains inline. When
+constructing `McpServerRuntime` or `McpGateway` outside Nest, pass the raw callback-bearing options
+defined by `@nestm/mcp-server` and `@nestm/mcp-gateway` instead.
 
 ## Per-request capability visibility
 
@@ -380,36 +475,57 @@ Bind a named runtime to a normal Nest controller when MCP should participate in 
 HTTP route pipeline:
 
 ```ts
-import { Controller, Module, UseGuards } from "@nestjs/common";
-import { McpHttpControllerFor, McpModule } from "@nestm/mcp";
+import { Controller, Injectable, Module, UseGuards } from "@nestjs/common";
+import type { AuthInfo, OAuthTokenVerifier } from "@modelcontextprotocol/server";
+import { McpHttpControllerFor, McpModule, McpRuntimeService } from "@nestm/mcp";
+import type { McpServerRuntime } from "@nestm/mcp-server";
 import { McpResourceServer } from "@nestm/mcp-server/auth";
 import { McpValidatedServer } from "@nestm/mcp-server/security";
 
-const ArtifactMcpControllerBase = McpHttpControllerFor("artifact", {
-	handler: (runtime) =>
-		new McpValidatedServer(
-			new McpResourceServer(runtime, resourceServerOptions),
-			requestValidationOptions,
-		),
-});
+@Injectable()
+class ArtifactTokenVerifier implements OAuthTokenVerifier {
+	verifyAccessToken(token: string): Promise<AuthInfo> {
+		return verifyArtifactAccessToken(token);
+	}
+}
+
+const ArtifactMcpControllerBase = McpHttpControllerFor("artifact");
 
 @Controller({ path: "mcp", version: "1" })
 @UseGuards(ArtifactRouteGuard)
-class ArtifactMcpController extends ArtifactMcpControllerBase {}
+class ArtifactMcpController extends ArtifactMcpControllerBase {
+	constructor(
+		runtimeService: McpRuntimeService,
+		private readonly verifier: ArtifactTokenVerifier,
+	) {
+		super(runtimeService);
+	}
+
+	protected override createMcpHttpHandler(runtime: McpServerRuntime) {
+		return new McpValidatedServer(
+			new McpResourceServer(runtime, {
+				bearerAuth: { verifier: this.verifier, requiredScopes: ["mcp:invoke"] },
+			}),
+			requestValidationOptions,
+		);
+	}
+}
 
 @Module({
 	imports: [McpModule.forRoot(runtimeOptions)],
 	controllers: [ArtifactMcpController],
+	providers: [ArtifactTokenVerifier],
 })
 export class AppModule {}
 ```
 
 The inherited catch-all route works with Express and Fastify and preserves Nest global prefixes,
 versioning, guards, and interceptors while leaving HTTP method semantics to the MCP handler. Prefer
-Nest guards for application route policy. The optional `handler` factory can construct the
-framework-neutral `McpResourceServer` and `McpValidatedServer` facades when protocol-level OAuth
-metadata, bearer verification, or host/origin validation is required. `nodeAdapter` configures only
-the Node/Web conversion layer.
+Nest guards for application route policy. `McpHttpControllerFor()` accepts only the named runtime;
+the concrete controller composes framework-neutral `McpResourceServer` and `McpValidatedServer`
+facades by overriding `createMcpHttpHandler()` with Nest-injected collaborators. Override
+`getNodeAdapterOptions()` to observe failures in the Node/Web conversion layer through an injected
+reporter.
 
 For a Nest-native request-level short circuit, override `interceptMcpRequest()`. Returning a value
 lets Nest serialize it through the normal response pipeline; returning `undefined` delegates to MCP.
@@ -432,9 +548,13 @@ the same module-owned client registry and unknown client names fail during boots
 
 ```ts
 McpModule.forRoot({
+	imports: [
+		McpClientModule.forRoot({
+			servers: upstreamServers,
+			connectOnApplicationBootstrap: true,
+		}),
+	],
 	collaborators: { providers: [AgentGatewayPolicy] },
-	clients: upstreamServers,
-	connectClientsOnBootstrap: true,
 	servers: [
 		{
 			name: "agent-gateway",
@@ -449,7 +569,12 @@ McpModule.forRoot({
 ```
 
 `AgentGatewayPolicy` is a default-scope provider implementing `McpGatewayPolicy`; register it under
-`McpModule`'s `collaborators.providers`. The gateway resolves that token once during bootstrap.
+`McpModule`'s `collaborators.providers`. The gateway resolves that token once during bootstrap. The
+same applies to configured name/URI codecs, the discovery cache, authorization-context resolver,
+middleware, lifecycle observer, and observer-error reporter: the `gateway` definition contains their
+tokens, while `collaborators.providers` owns their singleton implementations. Numeric limits and
+other passive gateway data stay inline. Raw implementations remain valid when constructing
+`McpGateway` directly from `@nestm/mcp-gateway`.
 
 Gateway servers are dedicated in this alpha. Do not target the same server with `@Tool`, `@Prompt`,
 or `@Resource`, or configure a `contributor` that owns projected capability handlers/list-change
@@ -463,11 +588,12 @@ handler. This keeps the dedicated gateway out of the handler's target set.
 
 The string and `{ clientName }` forms deliberately treat each named `McpClientRuntime` connection
 as an upstream service identity; they never forward the downstream bearer token. The same
-declarative `upstreams` array can instead contain a complete `{ name, client: resolver }` gateway
-upstream when an application needs authorization-aware token exchange or a tenant/user-owned
-connection. The resolver receives the verified downstream request context; it must perform an
-audience-checked exchange or select an already isolated client rather than forwarding the bearer
-token unchanged.
+declarative `upstreams` array can instead contain `{ name, clientProvider: ProviderToken }` when an
+application needs authorization-aware token exchange or a tenant/user-owned connection. Register
+an `McpGatewayClientProvider` under that token; its `resolveClient()` method receives the verified
+downstream request context and must perform an audience-checked exchange or select an already
+isolated client rather than forwarding the bearer token unchanged. Framework-neutral callers can
+still pass a complete raw upstream directly to `McpGateway` from `@nestm/mcp-gateway`.
 
 After bootstrap, `McpRuntimeService.gateway(serverName)` returns the gateway owned by that inbound
 server, including `invalidateDiscovery()`. `listGateways()` provides a frozen operational snapshot.
@@ -484,9 +610,10 @@ require sealed route-bound state and long-lived, authorization-partitioned subsc
 coordination.
 
 `@nestm/mcp-observability` provides bounded structured-log and metrics observers plus tracing
-middleware. Import it directly, then adapt its observers behind the injectable server collaborator
-tokens or pass them to `clientRuntime`. Its default attribute projection excludes principals,
-payloads, request/session identifiers, error messages, stacks, and credentials.
+middleware. Import it directly, then adapt its observers behind injectable server or client
+collaborator tokens. Client observers are referenced from `McpClientModule`'s `runtime.observer`
+option. The default attribute projection excludes principals, payloads, request/session identifiers,
+error messages, stacks, and credentials.
 
 For HTTP bearer authentication and protected-resource metadata, construct `McpResourceServer` from
 `@nestm/mcp-server/auth` around the mounted runtime. OAuth authentication establishes identity;

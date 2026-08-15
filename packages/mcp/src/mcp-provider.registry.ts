@@ -1,6 +1,12 @@
-import { Scope, type OnApplicationBootstrap } from "@nestjs/common";
+import {
+	Scope,
+	type DynamicModule,
+	type OnApplicationBootstrap,
+	type Provider,
+} from "@nestjs/common";
 import { ModuleRef } from "@nestjs/core";
 import { McpModuleError } from "./mcp.errors.ts";
+import type { McpNestCollaborators } from "./mcp-provider.types.ts";
 
 export type McpRuntimeProviderToken = string | symbol | Function;
 
@@ -38,6 +44,82 @@ export class McpProviderScopeGuard implements OnApplicationBootstrap {
 			);
 		}
 	}
+}
+
+/** Adds module-local collaborator providers, aliases, resolution, and scope validation. */
+export function withMcpCollaborators(
+	definition: DynamicModule,
+	collaborators: McpNestCollaborators | undefined,
+): DynamicModule {
+	const collaboratorProviders = [...(collaborators?.providers ?? [])];
+	const entries = collaboratorEntries(collaboratorProviders);
+	const aliasProviders = entries.map(({ alias, token }) => ({
+		provide: alias,
+		useExisting: token,
+	}));
+	const scopeGuardToken = Symbol("@nestm/mcp:collaborator-scope-guard");
+	return {
+		...definition,
+		imports: uniqueImports(definition.imports, collaborators?.imports),
+		providers: [
+			...(definition.providers ?? []),
+			...collaboratorProviders,
+			...aliasProviders,
+			{
+				provide: McpProviderRegistry,
+				inject: entries.map(({ alias }) => alias),
+				useFactory: (...instances: unknown[]) =>
+					new McpProviderRegistry(
+						entries.map(({ token }, index) => [token, instances[index]] as const),
+					),
+			},
+			{
+				provide: scopeGuardToken,
+				inject: [ModuleRef],
+				useFactory: (moduleRef: ModuleRef) => new McpProviderScopeGuard(moduleRef, entries),
+			},
+		],
+	};
+}
+
+function collaboratorEntries(providers: readonly Provider[]): readonly McpCollaboratorEntry[] {
+	const seen = new Set<McpRuntimeProviderToken>();
+	return providers.map((provider, index) => {
+		const token = collaboratorProviderToken(provider);
+		if (seen.has(token)) {
+			throw new McpModuleError(
+				"INVALID_OPTIONS",
+				`MCP collaborators contain duplicate provider token ${mcpProviderTokenName(token)}.`,
+			);
+		}
+		seen.add(token);
+		return Object.freeze({
+			alias: Symbol(`@nestm/mcp:collaborator:${String(index)}`),
+			token,
+		});
+	});
+}
+
+function collaboratorProviderToken(provider: Provider): McpRuntimeProviderToken {
+	const token =
+		typeof provider === "function"
+			? provider
+			: typeof provider === "object" && provider !== null && "provide" in provider
+				? provider.provide
+				: undefined;
+	if (!isMcpRuntimeProviderToken(token)) {
+		throw new McpModuleError(
+			"INVALID_OPTIONS",
+			`MCP collaborator provider uses unsupported token ${mcpProviderTokenName(token)}.`,
+		);
+	}
+	return token;
+}
+
+function uniqueImports(
+	...groups: readonly (DynamicModule["imports"] | undefined)[]
+): NonNullable<DynamicModule["imports"]> {
+	return [...new Set(groups.flatMap((group) => group ?? []))];
 }
 
 export function isMcpRuntimeProviderToken(value: unknown): value is McpRuntimeProviderToken {

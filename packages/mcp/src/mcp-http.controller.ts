@@ -11,22 +11,6 @@ import type { AuthInfo } from "@modelcontextprotocol/server";
 import type { McpServerRuntime } from "@nestm/mcp-server";
 import { McpRuntimeService } from "./mcp-runtime.service.ts";
 
-/** Builds the fetch handler mounted by a Nest HTTP controller. */
-export type McpHttpHandlerFactory = (runtime: McpServerRuntime) => FetchLikeMcpHandler;
-
-export interface McpHttpControllerOptions {
-	/**
-	 * Optionally wrap the named runtime before it is mounted.
-	 *
-	 * Use this seam for framework-neutral `McpResourceServer` and
-	 * `McpValidatedServer` wrappers. Returning the runtime unchanged is
-	 * equivalent to omitting the factory.
-	 */
-	readonly handler?: McpHttpHandlerFactory;
-	/** Error observation for failures in the Node/Web request conversion layer. */
-	readonly nodeAdapter?: Readonly<ToNodeHandlerOptions>;
-}
-
 /** Constructor returned by {@link McpHttpControllerFor}. */
 export type McpHttpControllerClass = abstract new (
 	runtimeService: McpRuntimeService,
@@ -105,29 +89,18 @@ export abstract class McpHttpController {
  * @UseGuards(ArtifactGuard)
  * export class ArtifactMcpController extends ArtifactMcpControllerBase {}
  * ```
+ *
+ * Override `createMcpHttpHandler()` or `getNodeAdapterOptions()` on the concrete
+ * controller when composition requires additional Nest-injected providers.
  */
-export function McpHttpControllerFor(
-	serverName: string,
-	options: McpHttpControllerOptions = {},
-): McpHttpControllerClass {
+export function McpHttpControllerFor(serverName: string): McpHttpControllerClass {
 	if (typeof serverName !== "string" || serverName.trim().length === 0) {
 		throw new TypeError("MCP HTTP controller server name must be a non-empty string.");
 	}
-	const handlerFactory = options.handler;
-	const nodeAdapterOptions =
-		options.nodeAdapter === undefined ? undefined : Object.freeze({ ...options.nodeAdapter });
 
 	abstract class NamedMcpHttpController extends McpHttpController {
 		protected override get mcpServerName(): string {
 			return serverName;
-		}
-
-		protected override createMcpHttpHandler(runtime: McpServerRuntime): FetchLikeMcpHandler {
-			return handlerFactory?.(runtime) ?? runtime;
-		}
-
-		protected override getNodeAdapterOptions(): Readonly<ToNodeHandlerOptions> | undefined {
-			return nodeAdapterOptions;
 		}
 	}
 

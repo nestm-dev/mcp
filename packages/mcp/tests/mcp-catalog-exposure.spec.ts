@@ -661,6 +661,12 @@ describe("authorization-safe MCP catalog exposure", () => {
 		const contributor = testValueProviderToken("custom-feature-catalog contributor", {
 			contribute: customFeature,
 		} satisfies McpServerContributor);
+		const gatewayClient = testValueProviderToken("gateway-catalog client", {
+			resolveClient: () => ({
+				listTools: () => ({ tools: [] }),
+				callTool: () => ({ content: [] }),
+			}),
+		});
 		await expectBootstrapFailure(
 			[
 				{
@@ -677,15 +683,7 @@ describe("authorization-safe MCP catalog exposure", () => {
 				{
 					...catalogServer("gateway-catalog", () => ({ kind: "eager" })),
 					gateway: {
-						upstreams: [
-							{
-								name: "empty",
-								client: {
-									listTools: () => ({ tools: [] }),
-									callTool: () => ({ content: [] }),
-								},
-							},
-						],
+						upstreams: [{ name: "empty", clientProvider: gatewayClient }],
 						policy: testValueProviderToken("gateway-catalog policy", allowAllMcpGatewayPolicy()),
 					},
 				},

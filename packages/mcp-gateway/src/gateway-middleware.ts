@@ -63,6 +63,21 @@ export function isExactMcpGatewayTransform(middleware: McpGatewayMiddleware): bo
 }
 
 /**
+ * Binds provider-owned middleware without erasing exact-transform identity.
+ *
+ * Exact transforms carry runtime-only identity used to keep their typed
+ * continuation behind broad middleware. Since `Function.bind()` creates a new
+ * function, exact transforms must remain unchanged; their defining adapter
+ * already closes over the supplied transform callback.
+ */
+export function bindMcpGatewayMiddleware(
+	middleware: McpGatewayMiddleware,
+	receiver: object,
+): McpGatewayMiddleware {
+	return isExactMcpGatewayTransform(middleware) ? middleware : middleware.bind(receiver);
+}
+
+/**
  * Creates gateway middleware that returns the exact downstream result. The
  * callback can run before and after `next()`, but the result remains opaque so
  * it cannot accidentally cross operation-discriminator boundaries.

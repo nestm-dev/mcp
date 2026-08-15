@@ -3,6 +3,7 @@ import {
 	CanActivate,
 	Controller,
 	ExecutionContext,
+	Inject,
 	INestApplication,
 	Injectable,
 	NestInterceptor,
@@ -15,12 +16,13 @@ import { ExpressAdapter } from "@nestjs/platform-express";
 import { FastifyAdapter } from "@nestjs/platform-fastify";
 import type { Observable } from "rxjs";
 import type { AuthInfo, OAuthTokenVerifier } from "@modelcontextprotocol/server";
-import type { McpServerMiddleware } from "@nestm/mcp-server";
+import type { McpServerMiddleware, McpServerRuntime } from "@nestm/mcp-server";
 import { McpResourceServer } from "@nestm/mcp-server/auth";
 import { McpValidatedServer } from "@nestm/mcp-server/security";
 import { describe, expect, it, vi } from "vitest";
 import { McpModule } from "../src/mcp.module.ts";
 import { McpHttpControllerFor } from "../src/mcp-http.controller.ts";
+import { McpRuntimeService } from "../src/mcp-runtime.service.ts";
 
 type NestPlatform = "express" | "fastify";
 
@@ -77,6 +79,7 @@ describe("McpHttpController", () => {
 		"mounts through Nest %s with path, version, global guard, and fetch wrappers intact",
 		async (platform) => {
 			const middlewareToken = Symbol(`HTTP_MIDDLEWARE_${platform}`);
+			const verifierToken = Symbol(`HTTP_TOKEN_VERIFIER_${platform}`);
 			const guardPaths: string[] = [];
 			const guard: CanActivate = {
 				canActivate(context) {
@@ -109,22 +112,39 @@ describe("McpHttpController", () => {
 				});
 			};
 
-			const ControllerBase = McpHttpControllerFor("controller-server", {
-				handler: (runtime) =>
-					new McpValidatedServer(
+			@Injectable()
+			class HttpHandlerComposition {
+				constructor(@Inject(verifierToken) private readonly tokenVerifier: OAuthTokenVerifier) {}
+
+				create(runtime: McpServerRuntime): McpValidatedServer {
+					return new McpValidatedServer(
 						new McpResourceServer(runtime, {
-							bearerAuth: { verifier, requiredScopes: ["mcp:invoke"] },
+							bearerAuth: { verifier: this.tokenVerifier, requiredScopes: ["mcp:invoke"] },
 						}),
 						{
 							allowedHostnames: ["127.0.0.1"],
 							allowedOriginHostnames: ["127.0.0.1"],
 						},
-					),
-			});
+					);
+				}
+			}
+
+			const ControllerBase = McpHttpControllerFor("controller-server");
 
 			@Controller({ path: "agents/mcp", version: "1" })
 			@UseInterceptors(ControllerTraceInterceptor)
-			class HostedMcpController extends ControllerBase {}
+			class HostedMcpController extends ControllerBase {
+				constructor(
+					runtimeService: McpRuntimeService,
+					private readonly composition: HttpHandlerComposition,
+				) {
+					super(runtimeService);
+				}
+
+				protected override createMcpHttpHandler(runtime: McpServerRuntime): McpValidatedServer {
+					return this.composition.create(runtime);
+				}
+			}
 
 			const testingModule = await Test.createTestingModule({
 				imports: [
@@ -143,7 +163,12 @@ describe("McpHttpController", () => {
 					}),
 				],
 				controllers: [HostedMcpController],
-				providers: [ControllerTraceInterceptor, { provide: APP_GUARD, useValue: guard }],
+				providers: [
+					ControllerTraceInterceptor,
+					HttpHandlerComposition,
+					{ provide: APP_GUARD, useValue: guard },
+					{ provide: verifierToken, useValue: verifier },
+				],
 			}).compile();
 			const application = createApplication(testingModule, platform);
 			application.setGlobalPrefix("api");

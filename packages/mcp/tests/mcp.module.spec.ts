@@ -20,19 +20,35 @@ import {
 	fromJsonSchema,
 } from "@modelcontextprotocol/server";
 import { allowMcpOperation } from "@nestm/mcp-core";
-import { allowAllMcpGatewayPolicy } from "@nestm/mcp-gateway";
+import {
+	GatewayNameCodec,
+	GatewayPromptNameCodec,
+	GatewayResourceTemplateUriCodec,
+	GatewayResourceUriCodec,
+	InMemoryMcpGatewayDiscoveryCache,
+	allowAllMcpGatewayPolicy,
+} from "@nestm/mcp-gateway";
 import type { McpGatewayClientResolver, McpGatewayPolicy } from "@nestm/mcp-gateway";
 import { McpServerRegistry, McpServerRuntime } from "@nestm/mcp-server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
+	McpClientModule,
 	McpModule,
 	McpRuntimeService,
 	Tool,
 	acceptedContent,
 	inputRequired,
 } from "../src/index.ts";
-import type { CallToolResult, InputRequiredResult, ServerContext } from "../src/index.ts";
+import type {
+	CallToolResult,
+	InputRequiredResult,
+	McpGatewayAuthorizationContextProvider,
+	McpGatewayLifecycleObserverProvider,
+	McpGatewayMiddlewareProvider,
+	McpGatewayObserverErrorReporter,
+	ServerContext,
+} from "../src/index.ts";
 import { createMcpServerTestFetch } from "../src/testing/index.ts";
 
 const MCP_TEST_CONFIGURATION = Symbol("MCP_TEST_CONFIGURATION");
@@ -41,6 +57,14 @@ const ALLOW_ALL_GATEWAY_POLICY_PROVIDER = {
 	provide: ALLOW_ALL_GATEWAY_POLICY,
 	useValue: allowAllMcpGatewayPolicy(),
 };
+
+function providerBackedGatewayUpstream(name: string, resolveClient: McpGatewayClientResolver) {
+	const token = Symbol(`${name.toUpperCase()}_GATEWAY_CLIENT`);
+	return {
+		definition: { name, clientProvider: token },
+		provider: { provide: token, useValue: { resolveClient } },
+	} as const;
+}
 
 @Module({
 	providers: [{ provide: MCP_TEST_CONFIGURATION, useValue: "async-server" }],
@@ -359,6 +383,32 @@ describe("McpModule", () => {
 		expect(result.content).toEqual([{ type: "text", text: "async-server" }]);
 	});
 
+	it("does not forward raw lower-runtime feature callbacks supplied through untyped input", async () => {
+		const rawFeature = vi.fn();
+		const rawDefinition: import("../src/index.ts").McpNestServerDefinition = {
+			name: "raw-feature",
+			serverInfo: { name: "raw-feature", version: "1.0.0" },
+		};
+		Reflect.set(rawDefinition, "features", [rawFeature]);
+		const testingModule = await Test.createTestingModule({
+			imports: [
+				McpModule.forRoot({
+					autoDiscover: false,
+					servers: [rawDefinition],
+				}),
+			],
+		}).compile();
+		application = testingModule.createNestApplication();
+		await application.init();
+		const server = await application
+			.get(McpRuntimeService)
+			.server("raw-feature")
+			.createServer({ era: "modern" });
+
+		expect(rawFeature).not.toHaveBeenCalled();
+		await server.close();
+	});
+
 	it("discovers decorated providers and serves them through MCP v2", async () => {
 		const principalClaimsToken = Symbol("ARTIFACT_PRINCIPAL_CLAIMS");
 		const authorizationToken = Symbol("ARTIFACT_HANDLER_AUTHORIZATION");
@@ -419,7 +469,7 @@ describe("McpModule", () => {
 		application = testingModule.createNestApplication();
 		await application.init();
 		const runtimeService = application.get(McpRuntimeService);
-		expect(runtimeService.clients.size).toBe(0);
+		expect(() => runtimeService.clients).toThrow(/No McpClientModule/);
 		expect(runtimeService.listGateways()).toEqual([]);
 		expect(() => runtimeService.gateway("artifact")).toThrow(/No MCP gateway/);
 		const runtime = runtimeService.server("artifact");
@@ -542,36 +592,30 @@ describe("McpModule", () => {
 	});
 
 	it("preserves class gateway policy this binding for optional capability hooks", async () => {
+		const gatewayUpstream = providerBackedGatewayUpstream("stateful-upstream", () => ({
+			listTools: () => ({ tools: [] }),
+			callTool: () => ({ content: [] }),
+			listPrompts: () => ({ prompts: [{ name: "status" }] }),
+			getPrompt: () => ({ messages: [] }),
+			listResources: () => ({
+				resources: [{ name: "guide", uri: "docs://guide" }],
+			}),
+			readResource: () => ({ contents: [] }),
+			listResourceTemplates: () => ({
+				resourceTemplates: [{ name: "section", uriTemplate: "docs://sections/{id}" }],
+			}),
+		}));
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpModule.forRoot({
-					collaborators: { providers: [StatefulGatewayPolicy] },
+					collaborators: { providers: [StatefulGatewayPolicy, gatewayUpstream.provider] },
 					servers: [
 						{
 							name: "stateful-gateway",
 							serverInfo: { name: "stateful-gateway", version: "1.0.0" },
 							gateway: {
 								policy: StatefulGatewayPolicy,
-								upstreams: [
-									{
-										name: "stateful-upstream",
-										client: {
-											listTools: () => ({ tools: [] }),
-											callTool: () => ({ content: [] }),
-											listPrompts: () => ({ prompts: [{ name: "status" }] }),
-											getPrompt: () => ({ messages: [] }),
-											listResources: () => ({
-												resources: [{ name: "guide", uri: "docs://guide" }],
-											}),
-											readResource: () => ({ contents: [] }),
-											listResourceTemplates: () => ({
-												resourceTemplates: [
-													{ name: "section", uriTemplate: "docs://sections/{id}" },
-												],
-											}),
-										},
-									},
-								],
+								upstreams: [gatewayUpstream.definition],
 							},
 						},
 					],
@@ -592,7 +636,154 @@ describe("McpModule", () => {
 		]);
 	});
 
+	it("resolves every gateway runtime seam through Nest collaborator tokens", async () => {
+		const nameCodecToken = Symbol("GATEWAY_NAME_CODEC");
+		const promptNameCodecToken = Symbol("GATEWAY_PROMPT_NAME_CODEC");
+		const resourceUriCodecToken = Symbol("GATEWAY_RESOURCE_URI_CODEC");
+		const resourceTemplateUriCodecToken = Symbol("GATEWAY_RESOURCE_TEMPLATE_URI_CODEC");
+		const resourceTemplateNameCodecToken = Symbol("GATEWAY_RESOURCE_TEMPLATE_NAME_CODEC");
+		const discoveryCacheToken = Symbol("GATEWAY_DISCOVERY_CACHE");
+		const authorizationContextToken = Symbol("GATEWAY_AUTHORIZATION_CONTEXT");
+		const middlewareToken = Symbol("GATEWAY_MIDDLEWARE");
+		const lifecycleObserverToken = Symbol("GATEWAY_LIFECYCLE_OBSERVER");
+		const observerErrorReporterToken = Symbol("GATEWAY_OBSERVER_ERROR_REPORTER");
+		const discoveryCache = new InMemoryMcpGatewayDiscoveryCache();
+		const cacheGet = vi.spyOn(discoveryCache, "get");
+		const cacheSet = vi.spyOn(discoveryCache, "set");
+		const authorizationContextProvider: McpGatewayAuthorizationContextProvider & {
+			value: string;
+			calls: number;
+		} = {
+			value: "tenant:test",
+			calls: 0,
+			resolveAuthorizationContext() {
+				this.calls += 1;
+				return this.value;
+			},
+		};
+		const gatewayMiddleware: McpGatewayMiddlewareProvider & { calls: number } = {
+			calls: 0,
+			async handle(_operation, next) {
+				this.calls += 1;
+				return next();
+			},
+		};
+		const lifecycleObserver: McpGatewayLifecycleObserverProvider & { events: string[] } = {
+			events: [] as string[],
+			onEvent(event) {
+				this.events.push(event.type);
+				throw new Error("gateway telemetry unavailable");
+			},
+		};
+		const observerErrorReporter: McpGatewayObserverErrorReporter & { errors: unknown[] } = {
+			errors: [] as unknown[],
+			report(error: unknown) {
+				this.errors.push(error);
+			},
+		};
+		const gatewayUpstream = providerBackedGatewayUpstream("provider-upstream", () => ({
+			listTools: () => ({
+				tools: [{ name: "search", inputSchema: { type: "object" } }],
+			}),
+			callTool: () => ({ content: [] }),
+			listPrompts: () => ({ prompts: [{ name: "summarize" }] }),
+			getPrompt: () => ({ messages: [] }),
+			listResources: () => ({
+				resources: [{ name: "guide", uri: "docs://guide" }],
+			}),
+			readResource: () => ({ contents: [] }),
+			listResourceTemplates: () => ({
+				resourceTemplates: [{ name: "section", uriTemplate: "docs://sections/{id}" }],
+			}),
+		}));
+
+		const testingModule = await Test.createTestingModule({
+			imports: [
+				McpModule.forRoot({
+					collaborators: {
+						providers: [
+							ALLOW_ALL_GATEWAY_POLICY_PROVIDER,
+							{ provide: nameCodecToken, useValue: new GatewayNameCodec("nesttool") },
+							{
+								provide: promptNameCodecToken,
+								useValue: new GatewayPromptNameCodec("nestprompt"),
+							},
+							{
+								provide: resourceUriCodecToken,
+								useValue: new GatewayResourceUriCodec({ scheme: "nest-resource" }),
+							},
+							{
+								provide: resourceTemplateUriCodecToken,
+								useValue: new GatewayResourceTemplateUriCodec({ scheme: "nest-template" }),
+							},
+							{
+								provide: resourceTemplateNameCodecToken,
+								useValue: new GatewayNameCodec("nesttemplate"),
+							},
+							{ provide: discoveryCacheToken, useValue: discoveryCache },
+							{ provide: authorizationContextToken, useValue: authorizationContextProvider },
+							{ provide: middlewareToken, useValue: gatewayMiddleware },
+							{ provide: lifecycleObserverToken, useValue: lifecycleObserver },
+							{ provide: observerErrorReporterToken, useValue: observerErrorReporter },
+							gatewayUpstream.provider,
+						],
+					},
+					servers: [
+						{
+							name: "provider-gateway",
+							serverInfo: { name: "provider-gateway", version: "1.0.0" },
+							gateway: {
+								policy: ALLOW_ALL_GATEWAY_POLICY,
+								nameCodec: nameCodecToken,
+								promptNameCodec: promptNameCodecToken,
+								resourceUriCodec: resourceUriCodecToken,
+								resourceTemplateUriCodec: resourceTemplateUriCodecToken,
+								resourceTemplateNameCodec: resourceTemplateNameCodecToken,
+								discoveryCache: discoveryCacheToken,
+								authorizationContextResolver: authorizationContextToken,
+								middleware: [middlewareToken],
+								lifecycleObserver: lifecycleObserverToken,
+								onObserverError: observerErrorReporterToken,
+								upstreams: [gatewayUpstream.definition],
+							},
+						},
+					],
+				}),
+			],
+		}).compile();
+		application = testingModule.createNestApplication();
+		await application.init();
+
+		const gateway = application.get(McpRuntimeService).gateway("provider-gateway");
+		const tools = await gateway.listProjectedTools();
+		const prompts = await gateway.listProjectedPrompts();
+		const resources = await gateway.listProjectedResources();
+		const templates = await gateway.listProjectedResourceTemplates();
+
+		expect(tools[0]?.projectedName).toMatch(/^nesttool\./);
+		expect(prompts[0]?.projectedName).toMatch(/^nestprompt\./);
+		expect(resources[0]?.projectedUri).toMatch(/^nest-resource:\/\/v1\//);
+		expect(templates[0]?.projectedName).toMatch(/^nesttemplate\./);
+		expect(templates[0]?.projectedTemplateUri).toMatch(/^nest-template:\/\/v1\//);
+		expect(cacheGet).toHaveBeenCalled();
+		expect(cacheSet).toHaveBeenCalledOnce();
+		expect(authorizationContextProvider.calls).toBe(4);
+		expect(gatewayMiddleware.calls).toBe(4);
+		expect(lifecycleObserver.events).toEqual([
+			"operation.started",
+			"operation.succeeded",
+			"operation.started",
+			"operation.succeeded",
+			"operation.started",
+			"operation.succeeded",
+			"operation.started",
+			"operation.succeeded",
+		]);
+		expect(observerErrorReporter.errors).toHaveLength(lifecycleObserver.events.length);
+	});
+
 	it("builds an aggregate gateway from Nest-owned named clients", async () => {
+		const transportFactory = Symbol("KNOWLEDGE_TRANSPORT_FACTORY");
 		const upstreamRuntime = new McpServerRuntime({
 			name: "knowledge",
 			serverInfo: { name: "knowledge", version: "1.0.0" },
@@ -668,21 +859,31 @@ describe("McpModule", () => {
 			imports: [
 				McpModule.forRoot({
 					collaborators: { providers: [ALLOW_ALL_GATEWAY_POLICY_PROVIDER] },
-					clients: [
-						{
-							name: "knowledge",
-							transport: { kind: "http", url: "http://knowledge.test/mcp" },
-						},
+					imports: [
+						McpClientModule.forRoot({
+							collaborators: {
+								providers: [
+									{
+										provide: transportFactory,
+										useValue: {
+											createTransport: () =>
+												new StreamableHTTPClientTransport(new URL("http://knowledge.test/mcp"), {
+													fetch: createMcpServerTestFetch(upstreamRuntime),
+												}),
+										},
+									},
+								],
+							},
+							servers: [
+								{
+									name: "knowledge",
+									transport: { kind: "http", url: "http://knowledge.test/mcp" },
+								},
+							],
+							runtime: { transportFactory },
+							connectOnApplicationBootstrap: true,
+						}),
 					],
-					clientRuntime: {
-						transportFactory: {
-							createTransport: () =>
-								new StreamableHTTPClientTransport(new URL("http://knowledge.test/mcp"), {
-									fetch: createMcpServerTestFetch(upstreamRuntime),
-								}),
-						},
-					},
-					connectClientsOnBootstrap: true,
 					servers: [
 						{
 							name: "agent-gateway",
@@ -792,12 +993,14 @@ describe("McpModule", () => {
 				callTool: () => ({ content: [{ type: "text", text: "delegated" }] }),
 			};
 		};
+		const gatewayUpstream = providerBackedGatewayUpstream("delegated", resolveClient);
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpModule.forRoot({
 					collaborators: {
 						providers: [
 							ALLOW_ALL_GATEWAY_POLICY_PROVIDER,
+							gatewayUpstream.provider,
 							{
 								provide: principalClaimsToken,
 								useValue: {
@@ -815,7 +1018,7 @@ describe("McpModule", () => {
 							serverInfo: { name: "delegated-gateway", version: "1.0.0" },
 							principalClaims: principalClaimsToken,
 							gateway: {
-								upstreams: [{ name: "delegated", client: resolveClient }],
+								upstreams: [gatewayUpstream.definition],
 								policy: ALLOW_ALL_GATEWAY_POLICY,
 							},
 						},
@@ -862,6 +1065,7 @@ describe("McpModule", () => {
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpModule.forRoot({
+					imports: [McpClientModule.forRoot()],
 					collaborators: { providers: [ALLOW_ALL_GATEWAY_POLICY_PROVIDER] },
 					servers: [
 						{
@@ -877,29 +1081,55 @@ describe("McpModule", () => {
 			],
 		}).compile();
 		application = testingModule.createNestApplication();
+		const runtime = application.get(McpRuntimeService);
 
 		await expect(application.init()).rejects.toThrow(/unknown MCP client "missing"/);
+		expect(runtime.clients.closed).toBe(true);
 	});
 
-	it("rejects decorated handlers on a dedicated gateway server during bootstrap", async () => {
+	it("fails bootstrap when a provider-backed gateway upstream is not registered", async () => {
+		const missingClientProvider = Symbol("MISSING_GATEWAY_CLIENT_PROVIDER");
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpModule.forRoot({
 					collaborators: { providers: [ALLOW_ALL_GATEWAY_POLICY_PROVIDER] },
 					servers: [
 						{
+							name: "provider-gateway",
+							serverInfo: { name: "provider-gateway", version: "1.0.0" },
+							gateway: {
+								upstreams: [{ name: "delegated", clientProvider: missingClientProvider }],
+								policy: ALLOW_ALL_GATEWAY_POLICY,
+							},
+						},
+					],
+				}),
+			],
+		}).compile();
+		application = testingModule.createNestApplication();
+
+		await expect(application.init()).rejects.toThrow(
+			/MISSING_GATEWAY_CLIENT_PROVIDER.*implement resolveClient\(\)/,
+		);
+	});
+
+	it("rejects decorated handlers on a dedicated gateway server during bootstrap", async () => {
+		const gatewayUpstream = providerBackedGatewayUpstream("empty", () => ({
+			listTools: () => ({ tools: [] }),
+			callTool: () => ({ content: [] }),
+		}));
+		const testingModule = await Test.createTestingModule({
+			imports: [
+				McpModule.forRoot({
+					collaborators: {
+						providers: [ALLOW_ALL_GATEWAY_POLICY_PROVIDER, gatewayUpstream.provider],
+					},
+					servers: [
+						{
 							name: "artifact",
 							serverInfo: { name: "artifact", version: "1.0.0" },
 							gateway: {
-								upstreams: [
-									{
-										name: "empty",
-										client: {
-											listTools: () => ({ tools: [] }),
-											callTool: () => ({ content: [] }),
-										},
-									},
-								],
+								upstreams: [gatewayUpstream.definition],
 								policy: ALLOW_ALL_GATEWAY_POLICY,
 							},
 						},
@@ -914,24 +1144,23 @@ describe("McpModule", () => {
 	});
 
 	it("closes inbound servers, then gateways, then their upstream clients", async () => {
+		const gatewayUpstream = providerBackedGatewayUpstream("upstream", () => ({
+			listTools: () => ({ tools: [] }),
+			callTool: () => ({ content: [] }),
+		}));
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpModule.forRoot({
-					collaborators: { providers: [ALLOW_ALL_GATEWAY_POLICY_PROVIDER] },
+					imports: [McpClientModule.forRoot()],
+					collaborators: {
+						providers: [ALLOW_ALL_GATEWAY_POLICY_PROVIDER, gatewayUpstream.provider],
+					},
 					servers: [
 						{
 							name: "gateway",
 							serverInfo: { name: "gateway", version: "1.0.0" },
 							gateway: {
-								upstreams: [
-									{
-										name: "upstream",
-										client: {
-											listTools: () => ({ tools: [] }),
-											callTool: () => ({ content: [] }),
-										},
-									},
-								],
+								upstreams: [gatewayUpstream.definition],
 								policy: ALLOW_ALL_GATEWAY_POLICY,
 							},
 						},
@@ -962,7 +1191,7 @@ describe("McpModule", () => {
 
 	it("publishes one stable runtime close promise before child cleanup can re-enter", async () => {
 		const testingModule = await Test.createTestingModule({
-			imports: [McpModule.forRoot()],
+			imports: [McpModule.forRoot({ imports: [McpClientModule.forRoot()] })],
 		}).compile();
 		application = testingModule.createNestApplication();
 		await application.init();
@@ -983,7 +1212,7 @@ describe("McpModule", () => {
 
 	it("contains cleanup failures so Nest can finish disposing its adapters", async () => {
 		const testingModule = await Test.createTestingModule({
-			imports: [McpModule.forRoot()],
+			imports: [McpModule.forRoot({ imports: [McpClientModule.forRoot()] })],
 		}).compile();
 		application = testingModule.createNestApplication();
 		await application.init();
@@ -1004,6 +1233,7 @@ describe("McpModule", () => {
 	});
 
 	it("rolls back a partially connected client set when bootstrap fails", async () => {
+		const transportFactory = Symbol("PARTIAL_CONNECT_TRANSPORT_FACTORY");
 		const healthyServer = new McpServerRuntime({
 			name: "healthy",
 			serverInfo: { name: "healthy", version: "1.0.0" },
@@ -1017,31 +1247,47 @@ describe("McpModule", () => {
 		const testingModule = await Test.createTestingModule({
 			imports: [
 				McpModule.forRoot({
-					clients: [
-						{ name: "healthy", transport: { kind: "http", url: "http://healthy.test/mcp" } },
-						{ name: "broken", transport: { kind: "http", url: "http://broken.test/mcp" } },
-					],
-					clientRuntime: {
-						transportFactory: {
-							createTransport: async (definition) => {
-								if (definition.kind !== "http") {
-									throw new Error("Expected an HTTP test transport.");
-								}
-								if (String(definition.url).includes("broken")) {
-									await vi.waitFor(() =>
-										expect(runtime?.clients.snapshot("healthy").state).toBe("connected"),
-									);
-									healthyWasConnected = true;
-									throw new Error("broken upstream");
-								}
-								[healthyClientTransport, healthyServerTransport] =
-									InMemoryTransport.createLinkedPair();
-								await healthyMcpServer.connect(healthyServerTransport);
-								return healthyClientTransport;
+					imports: [
+						McpClientModule.forRoot({
+							collaborators: {
+								providers: [
+									{
+										provide: transportFactory,
+										useValue: {
+											createTransport: async (definition: { kind: string; url?: string | URL }) => {
+												if (definition.kind !== "http") {
+													throw new Error("Expected an HTTP test transport.");
+												}
+												if (String(definition.url).includes("broken")) {
+													await vi.waitFor(() =>
+														expect(runtime?.clients.snapshot("healthy").state).toBe("connected"),
+													);
+													healthyWasConnected = true;
+													throw new Error("broken upstream");
+												}
+												[healthyClientTransport, healthyServerTransport] =
+													InMemoryTransport.createLinkedPair();
+												await healthyMcpServer.connect(healthyServerTransport);
+												return healthyClientTransport;
+											},
+										},
+									},
+								],
 							},
-						},
-					},
-					connectClientsOnBootstrap: true,
+							servers: [
+								{
+									name: "healthy",
+									transport: { kind: "http", url: "http://healthy.test/mcp" },
+								},
+								{
+									name: "broken",
+									transport: { kind: "http", url: "http://broken.test/mcp" },
+								},
+							],
+							runtime: { transportFactory },
+							connectOnApplicationBootstrap: true,
+						}),
+					],
 				}),
 			],
 		}).compile();
