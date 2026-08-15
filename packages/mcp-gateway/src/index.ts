@@ -11,6 +11,7 @@ export { GatewayResourceUriCodec } from "./gateway-resource-uri-codec.ts";
 export type { GatewayResourceUriCodecOptions } from "./gateway-resource-uri-codec.ts";
 
 export {
+	bindMcpGatewayMiddleware,
 	createMcpGatewayPassthroughMiddleware,
 	defineMcpGatewayTransform,
 } from "./gateway-middleware.ts";

@@ -68,6 +68,21 @@ export function isExactMcpClientTransform<Principal>(
 }
 
 /**
+ * Binds provider-owned middleware without erasing exact-transform identity.
+ *
+ * Exact transforms carry runtime-only identity used to keep their typed
+ * continuation behind broad middleware. Since `Function.bind()` creates a new
+ * function, exact transforms must remain unchanged; their defining adapter
+ * already closes over the supplied transform callback.
+ */
+export function bindMcpClientMiddleware<Principal>(
+	middleware: McpClientMiddleware<Principal>,
+	receiver: object,
+): McpClientMiddleware<Principal> {
+	return isExactMcpClientTransform(middleware) ? middleware : middleware.bind(receiver);
+}
+
+/**
  * Creates client middleware that always returns the exact downstream result.
  * The callback can run before and after `next()`, but cannot inspect, replace,
  * or swallow a method-specific result.

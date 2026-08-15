@@ -1,27 +1,37 @@
 import {
 	Inject,
 	Injectable,
+	Optional,
 	type OnApplicationBootstrap,
 	type OnModuleDestroy,
 } from "@nestjs/common";
 import { McpClientRuntime } from "@nestm/mcp-client";
-import { McpGateway, createMcpClientRuntimeUpstream } from "@nestm/mcp-gateway";
+import {
+	McpGateway,
+	bindMcpGatewayMiddleware,
+	createMcpClientRuntimeUpstream,
+} from "@nestm/mcp-gateway";
 import type { McpGatewayPolicy } from "@nestm/mcp-gateway";
 import { McpServerRegistry, type McpServerFeature, type McpServerRuntime } from "@nestm/mcp-server";
 import { McpCapabilitiesService } from "./mcp-capabilities.service.ts";
 import type { McpCatalogExposurePolicy } from "./mcp-catalog-exposure.ts";
 import { McpModuleError } from "./mcp.errors.ts";
 import { McpProviderRegistry, mcpProviderTokenName } from "./mcp-provider.registry.ts";
+import type { McpProviderToken } from "./mcp-provider.types.ts";
 import { assertMcpCatalogExposureOptions } from "./mcp-catalog.runtime.ts";
 import { MCP_MODULE_OPTIONS } from "./mcp.tokens.ts";
 import type {
 	McpHandlerAuthorizationPolicy,
 	McpHandlerLifecycleObserver,
 	McpHandlerMiddlewareProvider,
+	McpGatewayAuthorizationContextProvider,
+	McpGatewayClientProvider,
+	McpGatewayLifecycleObserverProvider,
+	McpGatewayMiddlewareProvider,
+	McpGatewayObserverErrorReporter,
 	McpModuleOptions,
 	McpNestGatewayOptions,
 	McpNestGatewayUpstreamDefinition,
-	McpProviderToken,
 	McpServerContributor,
 	McpServerErrorReporter,
 	McpServerLifecycleObserver,
@@ -31,6 +41,11 @@ import type {
 } from "./mcp.types.ts";
 import { McpHandlerExplorer } from "./discovery/mcp-handler.explorer.ts";
 import { McpHandlerRegistry } from "./discovery/mcp-handler.registry.ts";
+import { McpClientService } from "./client/mcp-client.service.ts";
+import {
+	resolveMcpNestServerHttpOptions,
+	resolveMcpNestServerOptions,
+} from "./server/mcp-server-options.ts";
 
 @Injectable()
 export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestroy {
@@ -42,7 +57,9 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 
 	constructor(
 		@Inject(MCP_MODULE_OPTIONS) private readonly options: McpModuleOptions,
-		readonly clients: McpClientRuntime,
+		@Inject(McpClientService)
+		@Optional()
+		private readonly clientService: McpClientService | undefined,
 		private readonly servers: McpServerRegistry,
 		private readonly explorer: McpHandlerExplorer,
 		private readonly handlerRegistry: McpHandlerRegistry,
@@ -97,13 +114,18 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 					handlerLifecycleObserver: handlerLifecycleObserverToken,
 					handlerMiddleware: handlerMiddlewareTokens,
 					handlerVisibilityTimeoutMs,
+					http: httpOptions,
 					lifecycleObserver: lifecycleObserverToken,
 					middleware: middlewareTokens,
 					observer: observerToken,
 					onError: errorReporterToken,
 					principalClaims: principalClaimsToken,
+					serverOptions,
 					...serverDefinition
 				} = definition;
+				Reflect.deleteProperty(serverDefinition, "features");
+				const resolvedServerOptions = resolveMcpNestServerOptions(serverOptions, this.providers);
+				const resolvedHttpOptions = resolveMcpNestServerHttpOptions(httpOptions, this.providers);
 				const contributors = this.#providerTokenList(
 					contributorTokens,
 					definition.name,
@@ -251,6 +273,8 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 				}
 				this.servers.register({
 					...serverDefinition,
+					...(resolvedServerOptions === undefined ? {} : { serverOptions: resolvedServerOptions }),
+					...(resolvedHttpOptions === undefined ? {} : { http: resolvedHttpOptions }),
 					...(principalClaimsProvider === undefined
 						? {}
 						: {
@@ -282,9 +306,6 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 					}
 				},
 			);
-			if (this.options.connectClientsOnBootstrap === true) {
-				await this.clients.connectAll();
-			}
 			this.#ready = true;
 		} catch (bootstrapError) {
 			try {
@@ -310,6 +331,17 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 	client(name: string): ReturnType<McpClientRuntime["requireClient"]> {
 		this.#assertReady();
 		return this.clients.requireClient(name);
+	}
+
+	/** Named client runtime imported through `McpClientModule`. */
+	get clients(): McpClientRuntime {
+		if (this.clientService === undefined) {
+			throw new McpModuleError(
+				"UNKNOWN_CLIENT",
+				"No McpClientModule is imported by this MCP root.",
+			);
+		}
+		return this.clientService;
 	}
 
 	/** Returns the aggregate gateway owned by one configured inbound server. */
@@ -373,10 +405,12 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 		for (const result of gatewayResults) {
 			if (result.status === "rejected") errors.push(result.reason);
 		}
-		try {
-			await this.clients.close();
-		} catch (error) {
-			errors.push(error);
+		if (this.clientService !== undefined) {
+			try {
+				await this.clientService.closeFromAggregate();
+			} catch (error) {
+				errors.push(error);
+			}
 		}
 		this.#gateways.clear();
 		if (errors.length > 0) {
@@ -395,7 +429,21 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 	}
 
 	#createGatewayFeature(serverName: string, options: McpNestGatewayOptions) {
-		const { policy: policyToken, upstreams: upstreamDefinitions, ...gatewayOptions } = options;
+		const {
+			authorizationContextResolver: authorizationContextResolverToken,
+			discoveryCache: discoveryCacheToken,
+			lifecycleObserver: lifecycleObserverToken,
+			middleware: middlewareTokens,
+			nameCodec: nameCodecToken,
+			onObserverError: observerErrorReporterToken,
+			policy: policyToken,
+			promptNameCodec: promptNameCodecToken,
+			resourceTemplateNameCodec: resourceTemplateNameCodecToken,
+			resourceTemplateUriCodec: resourceTemplateUriCodecToken,
+			resourceUriCodec: resourceUriCodecToken,
+			upstreams: upstreamDefinitions,
+			...gatewayOptions
+		} = options;
 		const policy = this.#bindGatewayPolicy(
 			this.#resolveProvider<McpGatewayPolicy>(
 				policyToken,
@@ -405,6 +453,82 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 			),
 			serverName,
 		);
+		const nameCodec = this.#resolveOptionalProvider(
+			nameCodecToken,
+			serverName,
+			"gateway name codec",
+			["encode", "decode", "tryDecode"],
+		);
+		const promptNameCodec = this.#resolveOptionalProvider(
+			promptNameCodecToken,
+			serverName,
+			"gateway prompt name codec",
+			["encode", "decode", "tryDecode"],
+		);
+		const resourceUriCodec = this.#resolveOptionalProvider(
+			resourceUriCodecToken,
+			serverName,
+			"gateway resource URI codec",
+			["encode", "decode", "tryDecode"],
+		);
+		const resourceTemplateUriCodec = this.#resolveOptionalProvider(
+			resourceTemplateUriCodecToken,
+			serverName,
+			"gateway resource-template URI codec",
+			["encode", "decode", "tryDecode"],
+		);
+		const resourceTemplateNameCodec = this.#resolveOptionalProvider(
+			resourceTemplateNameCodecToken,
+			serverName,
+			"gateway resource-template name codec",
+			["encode", "decode", "tryDecode"],
+		);
+		const discoveryCache = this.#resolveOptionalProvider(
+			discoveryCacheToken,
+			serverName,
+			"gateway discovery cache",
+			["get", "set", "delete", "clear"],
+		);
+		const authorizationContextProvider =
+			authorizationContextResolverToken === undefined
+				? undefined
+				: this.#resolveProvider<McpGatewayAuthorizationContextProvider>(
+						authorizationContextResolverToken,
+						serverName,
+						"gateway authorization context resolver",
+						"resolveAuthorizationContext",
+					);
+		const middleware = this.#providerTokenList(
+			middlewareTokens,
+			serverName,
+			"gateway middleware",
+		).map((token) => {
+			const provider = this.#resolveProvider<McpGatewayMiddlewareProvider>(
+				token,
+				serverName,
+				"gateway middleware",
+				"handle",
+			);
+			return bindMcpGatewayMiddleware(provider.handle, provider);
+		});
+		const lifecycleObserver =
+			lifecycleObserverToken === undefined
+				? undefined
+				: this.#resolveProvider<McpGatewayLifecycleObserverProvider>(
+						lifecycleObserverToken,
+						serverName,
+						"gateway lifecycle observer",
+						"onEvent",
+					);
+		const observerErrorReporter =
+			observerErrorReporterToken === undefined
+				? undefined
+				: this.#resolveProvider<McpGatewayObserverErrorReporter>(
+						observerErrorReporterToken,
+						serverName,
+						"gateway observer error reporter",
+						"report",
+					);
 		if (!Array.isArray(upstreamDefinitions)) {
 			throw new McpModuleError(
 				"INVALID_OPTIONS",
@@ -412,7 +536,24 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 			);
 		}
 		const upstreams = upstreamDefinitions.map((definition) => {
-			if (isResolvedGatewayUpstream(definition)) return definition;
+			if (isProviderGatewayUpstream(definition)) {
+				if (typeof definition.name !== "string" || definition.name.trim().length === 0) {
+					throw new McpModuleError(
+						"INVALID_OPTIONS",
+						"Nest gateway provider-backed upstream names must be non-empty strings.",
+					);
+				}
+				const clientProvider = this.#resolveProvider<McpGatewayClientProvider>(
+					definition.clientProvider,
+					serverName,
+					`gateway client provider for upstream "${definition.name}"`,
+					"resolveClient",
+				);
+				return Object.freeze({
+					name: definition.name,
+					client: clientProvider.resolveClient.bind(clientProvider),
+				});
+			}
 			const normalized = normalizeGatewayUpstream(definition);
 			if (!this.clients.has(normalized.clientName)) {
 				throw new McpModuleError(
@@ -426,9 +567,43 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 				normalized.gatewayName,
 			);
 		});
-		const gateway = new McpGateway({ ...gatewayOptions, policy, upstreams });
+		const gateway = new McpGateway({
+			...gatewayOptions,
+			policy,
+			upstreams,
+			...(nameCodec === undefined ? {} : { nameCodec }),
+			...(promptNameCodec === undefined ? {} : { promptNameCodec }),
+			...(resourceUriCodec === undefined ? {} : { resourceUriCodec }),
+			...(resourceTemplateUriCodec === undefined ? {} : { resourceTemplateUriCodec }),
+			...(resourceTemplateNameCodec === undefined ? {} : { resourceTemplateNameCodec }),
+			...(discoveryCache === undefined ? {} : { discoveryCache }),
+			...(authorizationContextProvider === undefined
+				? {}
+				: {
+						authorizationContextResolver:
+							authorizationContextProvider.resolveAuthorizationContext.bind(
+								authorizationContextProvider,
+							),
+					}),
+			...(middleware.length === 0 ? {} : { middleware }),
+			...(lifecycleObserver === undefined ? {} : { lifecycleObserver }),
+			...(observerErrorReporter === undefined
+				? {}
+				: { onObserverError: observerErrorReporter.report.bind(observerErrorReporter) }),
+		});
 		this.#gateways.set(serverName, gateway);
 		return gateway.asServerFeature();
+	}
+
+	#resolveOptionalProvider<Value>(
+		token: McpProviderToken<Value> | undefined,
+		serverName: string,
+		role: string,
+		methods: readonly string[],
+	): Value | undefined {
+		return token === undefined
+			? undefined
+			: this.#resolveProviderMethods(token, serverName, role, methods);
 	}
 
 	#resolveProvider<Value>(
@@ -437,14 +612,25 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 		role: string,
 		method: string,
 	): Value {
+		return this.#resolveProviderMethods(token, serverName, role, [method]);
+	}
+
+	#resolveProviderMethods<Value>(
+		token: McpProviderToken<Value>,
+		serverName: string,
+		role: string,
+		methods: readonly string[],
+	): Value {
 		try {
 			const provider = this.providers.get(token);
 			if (
 				(typeof provider !== "object" && typeof provider !== "function") ||
 				provider === null ||
-				typeof Reflect.get(provider, method) !== "function"
+				methods.some((method) => typeof Reflect.get(provider, method) !== "function")
 			) {
-				throw new TypeError(`resolved provider does not implement ${method}()`);
+				throw new TypeError(
+					`resolved provider does not implement ${methods.map((method) => `${method}()`).join(", ")}`,
+				);
 			}
 			// The configured contract for every collaborator is structural and method-based.
 			// oxlint-disable-next-line typescript/no-unsafe-type-assertion
@@ -452,7 +638,7 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 		} catch (cause) {
 			throw new McpModuleError(
 				"INVALID_OPTIONS",
-				`MCP ${role} ${mcpProviderTokenName(token)} for server "${serverName}" must be listed in McpModule collaborators.providers and implement ${method}().`,
+				`MCP ${role} ${mcpProviderTokenName(token)} for server "${serverName}" must be listed in McpModule collaborators.providers and implement ${methods.map((method) => `${method}()`).join(", ")}.`,
 				{ cause },
 			);
 		}
@@ -513,25 +699,42 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 	}
 }
 
-function isResolvedGatewayUpstream(
+function isProviderGatewayUpstream(
 	definition: McpNestGatewayUpstreamDefinition,
-): definition is Extract<McpNestGatewayUpstreamDefinition, { readonly client: unknown }> {
-	return typeof definition === "object" && definition !== null && "client" in definition;
+): definition is Extract<McpNestGatewayUpstreamDefinition, { readonly clientProvider: unknown }> {
+	return typeof definition === "object" && definition !== null && "clientProvider" in definition;
 }
 
 function normalizeGatewayUpstream(definition: McpNestGatewayUpstreamDefinition): {
 	readonly clientName: string;
 	readonly gatewayName: string;
 } {
-	if (isResolvedGatewayUpstream(definition)) {
+	if (isProviderGatewayUpstream(definition)) {
 		throw new McpModuleError(
 			"INVALID_OPTIONS",
-			"A resolved gateway upstream cannot be normalized as a named client alias.",
+			"A provider-backed gateway upstream cannot be normalized as a named client alias.",
 		);
 	}
-	const clientName = typeof definition === "string" ? definition : definition.clientName;
+	if (typeof definition !== "string" && (typeof definition !== "object" || definition === null)) {
+		throw new McpModuleError(
+			"INVALID_OPTIONS",
+			"Nest gateway upstreams must be named client aliases or provider-backed descriptors.",
+		);
+	}
+	const clientName =
+		typeof definition === "string"
+			? definition
+			: typeof definition.clientName === "string"
+				? definition.clientName
+				: "";
 	const gatewayName =
-		typeof definition === "string" ? definition : (definition.gatewayName ?? clientName);
+		typeof definition === "string"
+			? definition
+			: definition.gatewayName === undefined
+				? clientName
+				: typeof definition.gatewayName === "string"
+					? definition.gatewayName
+					: "";
 	if (clientName.trim().length === 0 || gatewayName.trim().length === 0) {
 		throw new McpModuleError(
 			"INVALID_OPTIONS",

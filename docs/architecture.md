@@ -23,7 +23,7 @@ flowchart TB
     observability["@nestm/mcp-observability\nlogs + metrics + tracing"]
   end
 
-  nest["@nestm/mcp\nNest module + discovery"]
+  nest["@nestm/mcp\nMcpClientModule + McpModule"]
   sdkClient["@modelcontextprotocol/client v2"]
   sdkServer["@modelcontextprotocol/server v2"]
   sdkNode["@modelcontextprotocol/node v2"]
@@ -55,7 +55,7 @@ Core defines immutable operation envelopes, role and operation metadata, onion m
 
 ### `@nestm/mcp-client`
 
-The client runtime owns a registry of named upstream definitions and an independent official `Client` and transport for each connected server. It provides:
+The client runtime owns a registry of named upstream definitions and an independent official `Client` and transport for each connected server. This package remains framework-neutral: it imports no Nest APIs and retains direct construction and explicit async disposal for non-Nest hosts. It provides:
 
 - Streamable HTTP and Node stdio definitions;
 - injectable SDK client and transport factories;
@@ -90,7 +90,7 @@ The gateway composes client and server roles rather than implementing a second p
 - a structural client interface plus an adapter for `McpClientRuntime`; and
 - middleware and payload-safe lifecycle hooks around discovery and invocation.
 
-It does not forward arbitrary JSON-RPC or downstream bearer tokens. The first-party named-runtime adapter uses the credential configured for that upstream, so named Nest gateway entries are a service-identity model. Delegated identity, token exchange, or user-owned connections require an application-supplied authorization-aware client resolver; Nest accepts that complete framework-neutral upstream beside its shorter named-client entries.
+It does not forward arbitrary JSON-RPC or downstream bearer tokens. The first-party named-runtime adapter uses the credential configured for that upstream, so named Nest gateway entries are a service-identity model. Delegated identity, token exchange, or user-owned connections require an application-supplied authorization-aware client resolver. Framework-neutral callers pass that resolver in a complete gateway upstream; Nest applications register an `McpGatewayClientProvider` and reference its token from the declarative upstream.
 
 Resource templates and prompt/template completion are projected. Multi-round `input_required` responses and upstream notifications are not transparently bridged. Those require sealed route-bound request state plus long-lived subscription ownership, reconnection, cache invalidation, downstream notifier integration, and authorization-domain partitioning. Until that coordinator exists, the gateway does not claim list-change or resource-subscription support for projected capabilities.
 
@@ -107,27 +107,49 @@ Payloads, principals, request/session identifiers, error messages, stacks, and c
 
 ### `@nestm/mcp`
 
-The Nest adapter owns `McpModule.forRoot()`/`forRootAsync()`, named upstream client configuration,
-discovery, decorators, DI tokens, bootstrap readiness, rollback, and shutdown. Applications import
-exactly one shared root; a second root fails bootstrap because decorator discovery is intentionally
-application-wide. The module is local by default, and `isGlobal: true` is an explicit opt-in.
-Ordinary Nest modules own decorated capability providers and their imports/exports. Runtime
-collaborators are explicitly owned by the dynamic
-module through `collaborators.providers` and `collaborators.imports`, which preserves module
-isolation and lifecycle ordering. Decorator generics preserve the official schema-inferred callback
-contracts at compile time. Decorated singleton providers with static dependency trees are
-discovered once; their handlers are installed on each fresh request server. Low-level extensions
-are registered as injectable `McpServerContributor` providers instead of raw feature callbacks in
-the Nest definition.
+The Nest adapter exposes two dynamic modules with separate ownership. `McpClientModule.forRoot()` or
+`forRootAsync()` owns named upstream configuration and provides `McpClientService`, an injectable
+subclass of the framework-neutral `McpClientRuntime`. It resolves callback-bearing client options
+from singleton Nest collaborator tokens, optionally connects every upstream during application
+bootstrap, rolls back failed connection waves, and owns standalone shutdown. Client-only agent
+hosts import this module directly.
 
-A Nest server's optional `gateway` definition resolves short upstream names against the module-owned
-`McpClientRuntime`, accepts complete context-aware upstream resolvers for delegated identity, and
-resolves its policy from a singleton Nest provider token before building the framework-neutral
-gateway. Unknown clients or policy providers fail during bootstrap. Gateway servers are dedicated
-in this alpha because official list/call/read handlers and list-change/subscription capability bits
-are server-wide; Nest rejects decorated local handlers targeting the same server instead of
-advertising semantics the combined server cannot honor. `McpRuntimeService.gateway(serverName)`
-retains the operational gateway for cache invalidation and inspection.
+`McpModule.forRoot()` or `forRootAsync()` owns inbound servers, discovery, decorators, bootstrap
+readiness, gateways, and aggregate shutdown. When an inbound gateway or `McpRuntimeService` needs
+named upstreams, the configured `McpClientModule` is included in `McpModule`'s `imports`; clients are
+not flattened into the server module's options. Applications import exactly one `McpModule` server
+root because decorator discovery is intentionally application-wide. Each module is local by
+default, and `isGlobal: true` is an explicit opt-in.
+
+Ordinary Nest modules own decorated capability providers and their imports/exports. Server and
+client runtime collaborators are explicitly owned by their respective dynamic module through
+`collaborators.providers` and `collaborators.imports`, preserving module isolation and lifecycle
+ordering. Decorator generics preserve the official schema-inferred callback contracts at compile
+time. Decorated singleton providers with static dependency trees are discovered once; their
+handlers are installed on each fresh request server. Low-level extensions are registered as
+injectable `McpServerContributor` providers instead of raw feature callbacks in the Nest definition.
+
+That boundary also covers callback-bearing official server options. The Nest server definition uses
+tokens for its JSON Schema validator, request-state verifier, and long-lived HTTP event bus; bootstrap
+resolves those providers into the raw `getValidator`, `verify`, and `publish`/`subscribe` contracts
+expected by `@nestm/mcp-server` and the official SDK. Passive configuration remains ordinary data.
+Consequently, application state and lifecycle stay in Nest DI without making the lower server
+runtime depend on Nest.
+
+A Nest server's optional `gateway` definition resolves short upstream names against the imported
+`McpClientService`. Because that service extends `McpClientRuntime`, the framework-neutral gateway
+adapter remains unchanged. For delegated identity, the definition accepts a
+`{ name, clientProvider }` descriptor and resolves the referenced singleton provider's
+context-aware `resolveClient()` method before building the framework-neutral gateway. Its policy,
+name and URI codecs, discovery cache, authorization-context
+resolver, middleware, lifecycle observer, and observer-error reporter are likewise singleton
+provider tokens. Nest resolves and binds these collaborators once during bootstrap; raw callback
+objects remain the direct-construction API of `@nestm/mcp-gateway`. A missing client module, unknown
+client, or missing collaborator provider fails during bootstrap. Gateway servers are dedicated in
+this alpha because official list/call/read handlers and list-change/subscription capability bits are
+server-wide; Nest rejects decorated local handlers targeting the same server instead of advertising
+semantics the combined server cannot honor. `McpRuntimeService.gateway(serverName)` retains the
+operational gateway for cache invalidation and inspection.
 
 Each configured Nest server can reference singleton providers through `handlerAuthorization`,
 `handlerMiddleware`, and `handlerLifecycleObserver`. The official SDK first validates arguments and
@@ -182,7 +204,13 @@ session.
 
 Modern HTTP scales behind an ordinary load balancer without session affinity. Cross-node notifications still require a distributed `ServerEventBus`; the official in-process bus cannot publish from node A to a stream held by node B.
 
-Nest shutdown first closes inbound server handlers and only then closes upstream client connections. Both phases still run when the first reports a cleanup failure. Because Nest aborts later adapter disposal when a destroy hook rejects, the lifecycle hook contains the aggregate in `McpRuntimeService.shutdownError`; the explicit `close()` API preserves rejecting cleanup semantics for hosts that need it.
+Standalone `McpClientModule` shutdown closes its owned runtime and contains destroy-hook failures in
+`McpClientService.shutdownError`. When the client module is imported through `McpModule`, the
+aggregate runtime takes shutdown ownership: it closes inbound server handlers, then gateways, then
+upstream client connections. Every phase still runs when an earlier phase reports a cleanup failure.
+Because Nest aborts later adapter disposal when a destroy hook rejects, the aggregate hook contains
+the error in `McpRuntimeService.shutdownError`; the explicit `close()` API preserves rejecting
+cleanup semantics for hosts that need it.
 
 ## Operation flow
 
@@ -246,9 +274,13 @@ The gateway's discovery cache is separate from protocol-era negotiation. It stor
 
 ## Extension points
 
-Existing seams include client/transport factories, client configuration callbacks,
-framework-neutral server and gateway features, operation and Nest handler middleware, lifecycle
-observers, authorization policies, request error callbacks, bearer verifiers, discovery caches,
-telemetry sinks/tracers, and Nest contributor providers.
+Existing seams include framework-neutral client/transport factories and client configuration
+callbacks; Nest provider-token adapters for client factories, transports, authentication, fetch,
+middleware, observers, resolvers, clocks, and caches; Nest provider-token adapters for server schema
+validation, request-state verification, event buses, and gateway policies, codecs, caches, resolvers,
+middleware, lifecycle observation, and observer-error reporting; framework-neutral server and
+gateway features; operation and Nest handler middleware; lifecycle observers; authorization
+policies; request error callbacks; bearer verifiers; discovery caches; telemetry sinks/tracers; and
+Nest contributor providers.
 
 The implemented observability package remains backend-neutral. OpenTelemetry SDK bindings, persistent encrypted OAuth provider state, RFC 8693-style token exchange, distributed event buses/caches, external policy engines, and artifact-specific catalogs can be added as adapters without forcing a telemetry backend, database, identity provider, cache, or Nest deployment shape into core.

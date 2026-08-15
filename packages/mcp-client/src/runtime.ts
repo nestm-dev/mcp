@@ -78,10 +78,11 @@ import type {
 	McpClientSubscription,
 	McpSdkClientFactory,
 } from "./types.ts";
+import packageMetadata from "../package.json" with { type: "json" };
 
 const DEFAULT_CLIENT_INFO = Object.freeze({
 	name: "@nestm/mcp-client",
-	version: "0.1.0-alpha.0",
+	version: packageMetadata.version,
 }) satisfies Implementation;
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;

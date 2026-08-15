@@ -319,6 +319,7 @@ describe("MCP capability registry public API", () => {
 	});
 
 	it("publishes targeted list changes exactly once and publishes nothing for rejected mutations", async () => {
+		const gatewayClientToken = Symbol("NOTIFY_GATEWAY_CLIENT");
 		application = await bootstrapMcp(
 			[
 				serverDefinition("notify-alpha"),
@@ -330,10 +331,7 @@ describe("MCP capability registry public API", () => {
 						upstreams: [
 							{
 								name: "empty",
-								client: {
-									listTools: () => ({ tools: [] }),
-									callTool: () => ({ content: [] }),
-								},
+								clientProvider: gatewayClientToken,
 							},
 						],
 						policy: ALLOW_ALL_GATEWAY_POLICY,
@@ -343,7 +341,18 @@ describe("MCP capability registry public API", () => {
 			[],
 			{
 				autoDiscover: false,
-				collaborators: [ALLOW_ALL_GATEWAY_POLICY_PROVIDER],
+				collaborators: [
+					ALLOW_ALL_GATEWAY_POLICY_PROVIDER,
+					{
+						provide: gatewayClientToken,
+						useValue: {
+							resolveClient: () => ({
+								listTools: () => ({ tools: [] }),
+								callTool: () => ({ content: [] }),
+							}),
+						},
+					},
+				],
 			},
 		);
 		const capabilities = application.get(McpRuntimeService).capabilities;

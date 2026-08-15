@@ -102,7 +102,11 @@ export type {
 	McpClientToolStandardSchema,
 } from "./tool-schema.ts";
 
-export { createMcpClientPassthroughMiddleware, defineMcpClientTransform } from "./middleware.ts";
+export {
+	bindMcpClientMiddleware,
+	createMcpClientPassthroughMiddleware,
+	defineMcpClientTransform,
+} from "./middleware.ts";
 
 export {
 	composeMcpFetchMiddleware,

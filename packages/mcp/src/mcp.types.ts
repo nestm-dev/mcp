@@ -20,10 +20,23 @@ import type {
 	McpServerRuntimeEvent,
 	ReadResourceResult,
 } from "@nestm/mcp-server";
-import type { InjectionToken, ModuleMetadata, Provider } from "@nestjs/common";
-import type { McpClientRuntimeOptions, McpClientServerDefinition } from "@nestm/mcp-client";
-import type { McpGatewayOptions, McpGatewayPolicy, McpGatewayUpstream } from "@nestm/mcp-gateway";
+import type { ModuleMetadata } from "@nestjs/common";
+import type {
+	McpGatewayAuthorizationContextResolver,
+	McpGatewayClientResolver,
+	McpGatewayDiscoveryCache,
+	McpGatewayLifecycleObserver,
+	McpGatewayMiddleware,
+	McpGatewayNameCodec,
+	McpGatewayOptions,
+	McpGatewayPolicy,
+	McpGatewayPromptNameCodec,
+	McpGatewayResourceTemplateUriCodec,
+	McpGatewayResourceUriCodec,
+} from "@nestm/mcp-gateway";
 import type { McpCatalogExposurePolicy } from "./mcp-catalog-exposure.ts";
+import type { McpNestCollaborators, McpProviderToken } from "./mcp-provider.types.ts";
+import type { McpNestServerHttpOptions, McpNestServerOptions } from "./server/mcp-server.types.ts";
 
 export interface McpHandlerInvocationInput {
 	readonly kind: "tool" | "resource" | "prompt";
@@ -85,35 +98,79 @@ export interface McpServerContributor {
 	contribute(server: McpServer, context: McpServerBuildContext): MaybePromise<void>;
 }
 
-/** Injection token for a Nest-owned MCP collaborator. */
-export type McpProviderToken<Value> = InjectionToken<Value>;
-
-/** Providers and dependency modules owned by the MCP dynamic module. */
-export interface McpNestCollaborators {
-	readonly imports?: ModuleMetadata["imports"];
-	readonly providers?: readonly Provider[];
-}
-
 export interface McpNestGatewayUpstream {
-	/** Name of a client configured in `McpModuleOptions.clients`. */
+	/** Name of a client configured in the imported `McpClientModule`. */
 	readonly clientName: string;
 	/** Optional public namespace exposed by the aggregate gateway. */
 	readonly gatewayName?: string;
 }
 
-/**
- * A module-owned client alias or a complete framework-neutral upstream.
- *
- * Supplying an `McpGatewayUpstream` is the explicit escape hatch for
- * authorization-aware connection selection such as token exchange or
- * tenant/user-owned clients.
- */
-export type McpNestGatewayUpstreamDefinition = string | McpNestGatewayUpstream | McpGatewayUpstream;
+/** Nest provider that selects an authorization-isolated gateway client per request. */
+export interface McpGatewayClientProvider {
+	resolveClient: McpGatewayClientResolver;
+}
+
+/** Context-aware upstream whose client selection is owned by a Nest provider. */
+export interface McpNestGatewayProviderUpstream {
+	readonly name: string;
+	readonly clientProvider: McpProviderToken<McpGatewayClientProvider>;
+}
+
+export type McpNestGatewayUpstreamDefinition =
+	string | McpNestGatewayUpstream | McpNestGatewayProviderUpstream;
+
+export interface McpGatewayNameCodecProvider extends McpGatewayNameCodec {}
+
+export interface McpGatewayPromptNameCodecProvider extends McpGatewayPromptNameCodec {}
+
+export interface McpGatewayResourceUriCodecProvider extends McpGatewayResourceUriCodec {}
+
+export interface McpGatewayResourceTemplateUriCodecProvider extends McpGatewayResourceTemplateUriCodec {}
+
+export interface McpGatewayDiscoveryCacheProvider extends McpGatewayDiscoveryCache {}
+
+export interface McpGatewayAuthorizationContextProvider {
+	resolveAuthorizationContext: McpGatewayAuthorizationContextResolver;
+}
+
+export interface McpGatewayMiddlewareProvider {
+	handle: McpGatewayMiddleware;
+}
+
+export interface McpGatewayLifecycleObserverProvider extends McpGatewayLifecycleObserver {}
+
+export interface McpGatewayObserverErrorReporter {
+	report(error: unknown): MaybePromise<void>;
+}
 
 /** Gateway options resolved against Nest-owned clients and an injectable policy. */
-export interface McpNestGatewayOptions extends Omit<McpGatewayOptions, "policy" | "upstreams"> {
+export interface McpNestGatewayOptions extends Omit<
+	McpGatewayOptions,
+	| "authorizationContextResolver"
+	| "discoveryCache"
+	| "lifecycleObserver"
+	| "middleware"
+	| "nameCodec"
+	| "onObserverError"
+	| "policy"
+	| "promptNameCodec"
+	| "resourceTemplateNameCodec"
+	| "resourceTemplateUriCodec"
+	| "resourceUriCodec"
+	| "upstreams"
+> {
 	readonly upstreams: readonly McpNestGatewayUpstreamDefinition[];
 	readonly policy: McpProviderToken<McpGatewayPolicy>;
+	readonly nameCodec?: McpProviderToken<McpGatewayNameCodecProvider>;
+	readonly promptNameCodec?: McpProviderToken<McpGatewayPromptNameCodecProvider>;
+	readonly resourceUriCodec?: McpProviderToken<McpGatewayResourceUriCodecProvider>;
+	readonly resourceTemplateUriCodec?: McpProviderToken<McpGatewayResourceTemplateUriCodecProvider>;
+	readonly resourceTemplateNameCodec?: McpProviderToken<McpGatewayNameCodecProvider>;
+	readonly discoveryCache?: McpProviderToken<McpGatewayDiscoveryCacheProvider>;
+	readonly authorizationContextResolver?: McpProviderToken<McpGatewayAuthorizationContextProvider>;
+	readonly middleware?: readonly McpProviderToken<McpGatewayMiddlewareProvider>[];
+	readonly lifecycleObserver?: McpProviderToken<McpGatewayLifecycleObserverProvider>;
+	readonly onObserverError?: McpProviderToken<McpGatewayObserverErrorReporter>;
 }
 
 export interface McpNestCatalogExposureOptions {
@@ -124,8 +181,17 @@ export interface McpNestCatalogExposureOptions {
 /** Nest-owned server configuration. Raw feature callbacks remain in `@nestm/mcp-server`. */
 export interface McpNestServerDefinition extends Omit<
 	McpServerDefinition,
-	"features" | "lifecycleObserver" | "middleware" | "observer" | "onError" | "principalClaims"
+	| "features"
+	| "http"
+	| "lifecycleObserver"
+	| "middleware"
+	| "observer"
+	| "onError"
+	| "principalClaims"
+	| "serverOptions"
 > {
+	readonly serverOptions?: McpNestServerOptions;
+	readonly http?: McpNestServerHttpOptions;
 	/** Injectable low-level contributors resolved once during application bootstrap. */
 	readonly contributors?: readonly McpProviderToken<McpServerContributor>[];
 	/** Injectable projection of verified provider claims onto the safe MCP principal. */
@@ -151,12 +217,6 @@ export interface McpNestServerDefinition extends Omit<
 export interface McpModuleOptions {
 	/** Server runtimes compiled at application bootstrap. */
 	readonly servers?: readonly McpNestServerDefinition[];
-	/** Named upstream servers consumed by the client runtime. */
-	readonly clients?: readonly McpClientServerDefinition[];
-	/** Shared client middleware, identity, observers, and transport factories. */
-	readonly clientRuntime?: Omit<McpClientRuntimeOptions, "servers">;
-	/** Establish every configured upstream during application bootstrap. Defaults to false. */
-	readonly connectClientsOnBootstrap?: boolean;
 	/** Discover decorated Nest providers and attach them to matching servers. Defaults to true. */
 	readonly autoDiscover?: boolean;
 }
@@ -164,6 +224,8 @@ export interface McpModuleOptions {
 export interface McpModuleExtras {
 	/** Make the runtime services globally injectable. Defaults to false. */
 	readonly isGlobal?: boolean;
+	/** Nest modules whose exported providers are consumed by the MCP root. */
+	readonly imports?: ModuleMetadata["imports"];
 	/** Singleton collaborators whose lifecycle must surround the MCP runtimes they serve. */
 	readonly collaborators?: McpNestCollaborators;
 }

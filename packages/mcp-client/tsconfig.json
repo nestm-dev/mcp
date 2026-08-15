@@ -6,6 +6,6 @@
 		"outDir": "dist-tsc",
 		"tsBuildInfoFile": "dist-tsc/tsconfig.tsbuildinfo"
 	},
-	"include": ["src", "tests", "*.config.ts"],
+	"include": ["src", "tests", "*.config.ts", "package.json"],
 	"references": [{ "path": "../mcp-core" }]
 }

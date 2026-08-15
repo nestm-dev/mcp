@@ -1,5 +1,6 @@
 export { McpModuleError } from "./mcp.errors.ts";
 export type { McpModuleErrorCode } from "./mcp.errors.ts";
+export type { McpNestCollaborators, McpProviderToken } from "./mcp-provider.types.ts";
 export {
 	MCP_CATALOG_SCHEMAS_TOOL_NAME,
 	MCP_CATALOG_SEARCH_TOOL_NAME,
@@ -32,13 +33,38 @@ export type {
 	ToolOptions,
 } from "./decorators/mcp-handler.decorators.ts";
 export { McpHttpController, McpHttpControllerFor } from "./mcp-http.controller.ts";
-export type {
-	McpHttpControllerClass,
-	McpHttpControllerOptions,
-	McpHttpHandlerFactory,
-} from "./mcp-http.controller.ts";
+export type { McpHttpControllerClass } from "./mcp-http.controller.ts";
 export { McpModule } from "./mcp.module.ts";
 export type { McpForRootAsyncOptions, McpForRootOptions } from "./mcp.module-definition.ts";
+export { McpClientModule } from "./client/mcp-client.module.ts";
+export type {
+	McpClientForRootAsyncOptions,
+	McpClientForRootOptions,
+} from "./client/mcp-client.module-definition.ts";
+export { McpClientService } from "./client/mcp-client.service.ts";
+export type {
+	McpClientAttributesResolverProvider,
+	McpClientClock,
+	McpClientConfiguratorProvider,
+	McpClientFetchMiddlewareProvider,
+	McpClientFetchProvider,
+	McpClientLifecycleErrorReporter,
+	McpClientMiddlewareProvider,
+	McpClientModuleExtras,
+	McpClientModuleOptions,
+	McpClientOperationIdFactory,
+	McpClientPrincipalResolverProvider,
+	McpClientProgressObserver,
+	McpClientReconnectionSchedulerProvider,
+	McpNestClientConnectOptions,
+	McpNestClientDefinition,
+	McpNestClientLifecycleOptions,
+	McpNestClientOptions,
+	McpNestClientRuntimeOptions,
+	McpNestClientTransportDefinition,
+	McpNestHttpClientTransportDefinition,
+	McpNestStdioClientTransportDefinition,
+} from "./client/mcp-client.types.ts";
 export { McpCapabilitiesService } from "./mcp-capabilities.service.ts";
 export { McpRuntimeService } from "./mcp-runtime.service.ts";
 export { createMcpHandlerPassthroughMiddleware } from "./mcp-handler.middleware.ts";
@@ -63,15 +89,24 @@ export type {
 	McpHandlerMiddlewareProvider,
 	McpHandlerOperationContext,
 	McpHandlerPassthroughMiddleware,
+	McpGatewayAuthorizationContextProvider,
+	McpGatewayClientProvider,
+	McpGatewayDiscoveryCacheProvider,
+	McpGatewayLifecycleObserverProvider,
+	McpGatewayMiddlewareProvider,
+	McpGatewayNameCodecProvider,
+	McpGatewayObserverErrorReporter,
+	McpGatewayPromptNameCodecProvider,
+	McpGatewayResourceTemplateUriCodecProvider,
+	McpGatewayResourceUriCodecProvider,
 	McpModuleExtras,
 	McpModuleOptions,
 	McpNestCatalogExposureOptions,
-	McpNestCollaborators,
 	McpNestGatewayOptions,
+	McpNestGatewayProviderUpstream,
 	McpNestGatewayUpstream,
 	McpNestGatewayUpstreamDefinition,
 	McpNestServerDefinition,
-	McpProviderToken,
 	McpServerContributor,
 	McpServerErrorReporter,
 	McpServerLifecycleObserver,
@@ -79,6 +114,11 @@ export type {
 	McpServerPrincipalClaimsProvider,
 	McpServerRuntimeObserverProvider,
 } from "./mcp.types.ts";
+export type {
+	McpNestServerHttpOptions,
+	McpNestServerOptions,
+	McpRequestStateVerifier,
+} from "./server/mcp-server.types.ts";
 
 export { allowMcpOperation, denyMcpOperation } from "@nestm/mcp-core";
 export type { McpAuthorizationDecision } from "@nestm/mcp-core";
