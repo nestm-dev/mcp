@@ -540,6 +540,14 @@ facades by overriding `createMcpHttpHandler()` with Nest-injected collaborators.
 `getNodeAdapterOptions()` to observe failures in the Node/Web conversion layer through an injected
 reporter.
 
+The route inherits the runtime's HTTP security posture (`httpSecurity` on the server definition):
+routable browser origins are denied by default, MCP CORS preflights are answered, and bodies are
+capped at 1 MiB. Override `getHttpSecurityOptions()` on the concrete controller to replace the
+posture for one route — it is enforced outside `createMcpHttpHandler()` composition, so rejected
+requests never reach a composed facade. When Nest owns CORS app-wide instead, pass
+`mcpCorsOptions({ origins: ["https://app.example.com"] })` to `app.enableCors()` and set
+`httpSecurity: { cors: false }` so each route keeps a single CORS owner.
+
 For a Nest-native request-level short circuit, override `interceptMcpRequest()`. Returning a value
 lets Nest serialize it through the normal response pipeline; returning `undefined` delegates to MCP.
 Capability calls still use `handlerAuthorization`, `handlerMiddleware`, and

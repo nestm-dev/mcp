@@ -2,13 +2,23 @@ import { All, Inject, Req, Res } from "@nestjs/common";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import type {
 	FetchLikeMcpHandler,
-	NodeIncomingMessageLike,
 	NodeMcpRequestHandler,
-	NodeServerResponseLike,
 	ToNodeHandlerOptions,
 } from "@modelcontextprotocol/node";
-import type { AuthInfo } from "@modelcontextprotocol/server";
 import type { McpServerRuntime } from "@nestm/mcp-server";
+import {
+	hardenMcpFetch,
+	resolveMcpHttpSecurity,
+	withMcpNodeBodyLimit,
+} from "@nestm/mcp-server/security";
+import type { McpHttpSecurityOptions } from "@nestm/mcp-server/security";
+import {
+	forwardValidatedAuth,
+	hijackFastifyReply,
+	parsedBodyOf,
+	toNodeRequest,
+	toNodeResponse,
+} from "./http/node-bridge.ts";
 import { McpRuntimeService } from "./mcp-runtime.service.ts";
 
 /** Constructor returned by {@link McpHttpControllerFor}. */
@@ -59,9 +69,13 @@ export abstract class McpHttpController {
 		return undefined;
 	}
 
-	/** Override to compose another fetch-shaped facade around the named runtime. */
+	/**
+	 * Override to compose another fetch-shaped facade around the named runtime.
+	 * The default applies any configured `oauth` resource-server protection and
+	 * otherwise returns the runtime untouched.
+	 */
 	protected createMcpHttpHandler(runtime: McpServerRuntime): FetchLikeMcpHandler {
-		return runtime;
+		return this.runtimeService.composeHttpHandler(this.mcpServerName, runtime);
 	}
 
 	/** Override to observe conversion-layer failures handled as HTTP 500 responses. */
@@ -69,11 +83,32 @@ export abstract class McpHttpController {
 		return undefined;
 	}
 
+	/**
+	 * Override to replace the runtime's configured HTTP security posture for
+	 * this route. The posture is enforced outside `createMcpHttpHandler()`
+	 * composition, so a rejected request never reaches a composed facade.
+	 */
+	protected getHttpSecurityOptions(): McpHttpSecurityOptions | undefined {
+		return undefined;
+	}
+
 	#getNodeHandler(): NodeMcpRequestHandler {
-		this.#nodeHandler ??= toNodeHandler(
-			this.createMcpHttpHandler(this.runtimeService.server(this.mcpServerName)),
-			this.getNodeAdapterOptions(),
-		);
+		if (this.#nodeHandler === undefined) {
+			const runtime = this.runtimeService.server(this.mcpServerName);
+			const override = this.getHttpSecurityOptions();
+			const policy =
+				override === undefined ? runtime.httpSecurity : resolveMcpHttpSecurity(override);
+			// Rejections detected outside the runtime still surface as observer events.
+			const hooks = { onRejected: (status: number) => runtime.reportRequestRejected(status) };
+			this.#nodeHandler = withMcpNodeBodyLimit(
+				toNodeHandler(
+					hardenMcpFetch(this.createMcpHttpHandler(runtime), policy, hooks),
+					this.getNodeAdapterOptions(),
+				),
+				policy,
+				hooks,
+			);
+		}
 		return this.#nodeHandler;
 	}
 }
@@ -105,100 +140,4 @@ export function McpHttpControllerFor(serverName: string): McpHttpControllerClass
 	}
 
 	return NamedMcpHttpController;
-}
-
-interface RawCarrier {
-	readonly raw: unknown;
-}
-
-interface BodyCarrier {
-	readonly body: unknown;
-}
-
-interface FastifyReplyLike extends RawCarrier {
-	hijack(): unknown;
-}
-
-function toNodeRequest(request: unknown): NodeIncomingMessageLike {
-	const candidate = hasRaw(request) ? request.raw : request;
-	if (!isNodeRequest(candidate)) {
-		throw new TypeError("Nest MCP HTTP controller requires a Node-compatible HTTP request.");
-	}
-	return candidate;
-}
-
-function toNodeResponse(response: unknown): NodeServerResponseLike {
-	const candidate = hasRaw(response) ? response.raw : response;
-	if (!isNodeResponse(candidate)) {
-		throw new TypeError("Nest MCP HTTP controller requires a Node-compatible HTTP response.");
-	}
-	return candidate;
-}
-
-function parsedBodyOf(request: unknown): unknown {
-	return hasBody(request) ? request.body : undefined;
-}
-
-function hijackFastifyReply(response: unknown, rawResponse: NodeServerResponseLike): void {
-	if (!isFastifyReply(response) || response.raw !== rawResponse) return;
-	response.hijack();
-}
-
-function forwardValidatedAuth(request: unknown, rawRequest: NodeIncomingMessageLike): void {
-	if (request === rawRequest || !isObject(request) || rawRequest.auth !== undefined) return;
-	const auth = Reflect.get(request, "auth");
-	if (isAuthInfo(auth)) rawRequest.auth = auth;
-}
-
-function isAuthInfo(value: unknown): value is AuthInfo {
-	if (!isObject(value)) return false;
-	const token = Reflect.get(value, "token");
-	const clientId = Reflect.get(value, "clientId");
-	const scopes = Reflect.get(value, "scopes");
-	const expiresAt = Reflect.get(value, "expiresAt");
-	const resource = Reflect.get(value, "resource");
-	const extra = Reflect.get(value, "extra");
-	return (
-		typeof token === "string" &&
-		typeof clientId === "string" &&
-		Array.isArray(scopes) &&
-		scopes.every((scope) => typeof scope === "string") &&
-		(expiresAt === undefined || typeof expiresAt === "number") &&
-		(resource === undefined || resource instanceof URL) &&
-		(extra === undefined || isObject(extra))
-	);
-}
-
-function hasRaw(value: unknown): value is RawCarrier {
-	return isObject(value) && "raw" in value;
-}
-
-function hasBody(value: unknown): value is BodyCarrier {
-	return isObject(value) && "body" in value;
-}
-
-function isFastifyReply(value: unknown): value is FastifyReplyLike {
-	return hasRaw(value) && typeof Reflect.get(value, "hijack") === "function";
-}
-
-function isNodeRequest(value: unknown): value is NodeIncomingMessageLike {
-	return (
-		isObject(value) &&
-		isObject(Reflect.get(value, "headers")) &&
-		typeof Reflect.get(value, Symbol.asyncIterator) === "function"
-	);
-}
-
-function isNodeResponse(value: unknown): value is NodeServerResponseLike {
-	return (
-		isObject(value) &&
-		typeof Reflect.get(value, "writeHead") === "function" &&
-		typeof Reflect.get(value, "write") === "function" &&
-		typeof Reflect.get(value, "end") === "function" &&
-		typeof Reflect.get(value, "on") === "function"
-	);
-}
-
-function isObject(value: unknown): value is object {
-	return typeof value === "object" && value !== null;
 }

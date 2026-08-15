@@ -26,6 +26,9 @@ import { McpRuntimeService } from "../src/mcp-runtime.service.ts";
 
 type NestPlatform = "express" | "fastify";
 
+const echoBodyMiddleware: McpServerMiddleware = async (operation) =>
+	new Response(await operation.input.request.text(), { status: 202 });
+
 @Injectable()
 class ControllerTraceInterceptor implements NestInterceptor {
 	readonly paths: string[] = [];
@@ -243,6 +246,120 @@ describe("McpHttpController", () => {
 					"/api/v1/agents/mcp",
 					"/api/v1/agents/mcp",
 				]);
+			} finally {
+				await application.close();
+			}
+		},
+	);
+	it.each<NestPlatform>(["express", "fastify"])(
+		"applies the default HTTP security posture and honors controller overrides on %s",
+		async (platform) => {
+			const middlewareToken = Symbol(`HTTP_SECURITY_MIDDLEWARE_${platform}`);
+
+			const DefaultBase = McpHttpControllerFor("posture-server");
+			@Controller("default/mcp")
+			class DefaultPostureController extends DefaultBase {}
+
+			const CappedBase = McpHttpControllerFor("capped-server");
+			@Controller("capped/mcp")
+			class CappedController extends CappedBase {}
+
+			const OverrideBase = McpHttpControllerFor("posture-server");
+			@Controller("override/mcp")
+			class OverrideController extends OverrideBase {
+				protected override getHttpSecurityOptions() {
+					return { allowedOriginHostnames: ["partner.example"] };
+				}
+			}
+
+			const testingModule = await Test.createTestingModule({
+				imports: [
+					McpModule.forRoot({
+						autoDiscover: false,
+						collaborators: {
+							providers: [{ provide: middlewareToken, useValue: { handle: echoBodyMiddleware } }],
+						},
+						servers: [
+							{
+								name: "posture-server",
+								serverInfo: { name: "posture-server", version: "1.0.0" },
+								middleware: [middlewareToken],
+							},
+							{
+								name: "capped-server",
+								serverInfo: { name: "capped-server", version: "1.0.0" },
+								middleware: [middlewareToken],
+								httpSecurity: { maxBodyBytes: 64 },
+							},
+						],
+					}),
+				],
+				controllers: [DefaultPostureController, CappedController, OverrideController],
+			}).compile();
+			const application = createApplication(testingModule, platform);
+			await application.listen(0, "127.0.0.1");
+
+			try {
+				const baseUrl = await application.getUrl();
+
+				// Default posture: routable browser origins are denied with no config.
+				const deniedOrigin = await fetch(`${baseUrl}/default/mcp`, {
+					method: "POST",
+					headers: { "content-type": "application/json", origin: "https://evil.example" },
+					body: "{}",
+				});
+				expect(deniedOrigin.status).toBe(403);
+				expect(deniedOrigin.headers.get("access-control-allow-origin")).toBeNull();
+
+				// Default posture: localhost-class preflights succeed and never dispatch.
+				const preflight = await fetch(`${baseUrl}/default/mcp`, {
+					method: "OPTIONS",
+					headers: {
+						origin: "http://localhost:5173",
+						"access-control-request-method": "POST",
+						"access-control-request-headers": "mcp-method, content-type",
+					},
+				});
+				expect(preflight.status).toBe(200);
+				expect(preflight.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+				expect(preflight.headers.get("access-control-allow-headers")).toBe(
+					"mcp-method, content-type",
+				);
+
+				// Allowed origins get CORS decoration on actual responses.
+				const decorated = await fetch(`${baseUrl}/default/mcp`, {
+					method: "POST",
+					headers: { "content-type": "application/json", origin: "http://localhost:5173" },
+					body: '{"hello":"cors"}',
+				});
+				expect(decorated.status).toBe(202);
+				expect(decorated.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+				expect(await decorated.text()).toBe('{"hello":"cors"}');
+
+				// Platform-parsed oversize bodies are capped at the fetch layer.
+				const oversize = await fetch(`${baseUrl}/capped/mcp`, {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ payload: "x".repeat(1_024) }),
+				});
+				expect(oversize.status).toBe(413);
+
+				// The controller override replaces the runtime posture entirely.
+				const allowedByOverride = await fetch(`${baseUrl}/override/mcp`, {
+					method: "POST",
+					headers: { "content-type": "application/json", origin: "https://partner.example" },
+					body: '{"hello":"override"}',
+				});
+				expect(allowedByOverride.status).toBe(202);
+				expect(allowedByOverride.headers.get("access-control-allow-origin")).toBe(
+					"https://partner.example",
+				);
+				const deniedByOverride = await fetch(`${baseUrl}/override/mcp`, {
+					method: "POST",
+					headers: { "content-type": "application/json", origin: "http://localhost:5173" },
+					body: "{}",
+				});
+				expect(deniedByOverride.status).toBe(403);
 			} finally {
 				await application.close();
 			}

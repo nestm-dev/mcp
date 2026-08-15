@@ -20,6 +20,7 @@ flowchart TB
     client["@nestm/mcp-client\nmulti-server client"]
     server["@nestm/mcp-server\nper-request server"]
     gateway["@nestm/mcp-gateway\ncapability projection + policy"]
+    auth["@nestm/mcp-auth\nOAuth proxy + CIMD + tokens"]
     observability["@nestm/mcp-observability\nlogs + metrics + tracing"]
   end
 
@@ -36,11 +37,14 @@ flowchart TB
   gateway --> core
   gateway --> client
   gateway --> server
+  auth --> core
+  auth --> server
   observability --> core
   nest --> core
   nest --> server
   nest --> client
   nest --> gateway
+  nest --> auth
 ```
 
 Gateway composition remains framework-neutral. A plain `McpServerRuntime` can install a gateway as
@@ -93,6 +97,18 @@ The gateway composes client and server roles rather than implementing a second p
 It does not forward arbitrary JSON-RPC or downstream bearer tokens. The first-party named-runtime adapter uses the credential configured for that upstream, so named Nest gateway entries are a service-identity model. Delegated identity, token exchange, or user-owned connections require an application-supplied authorization-aware client resolver. Framework-neutral callers pass that resolver in a complete gateway upstream; Nest applications register an `McpGatewayClientProvider` and reference its token from the declarative upstream.
 
 Resource templates and prompt/template completion are projected. Multi-round `input_required` responses and upstream notifications are not transparently bridged. Those require sealed route-bound request state plus long-lived subscription ownership, reconnection, cache invalidation, downstream notifier integration, and authorization-domain partitioning. Until that coordinator exists, the gateway does not claim list-change or resource-subscription support for projected capabilities.
+
+### `@nestm/mcp-auth`
+
+The auth package is the framework-neutral OAuth toolkit for MCP servers acting as resource servers or as a scoped authorization-server proxy in front of a real identity provider. It depends only on `@nestm/mcp-core` and `@nestm/mcp-server`, and keeps `@modelcontextprotocol/client`, `@modelcontextprotocol/server`, and `jose` as peer dependencies so a non-Nest host can adopt one capability at a time. The `./cimd` and `./stores` subpaths never import `@nestm/mcp-server`, so a gateway or client host can take Client ID Metadata Document validation or the storage contract alone. It provides:
+
+- a Client ID Metadata Document resolver (SEP-991, the 2026-07-28 replacement for Dynamic Client Registration) with strict URL admission rules, document validation via `@modelcontextprotocol/core`'s schemas, an SSRF-hardened `node:https` fetcher that pins DNS resolution at connect time, positive-only caching, and per-host circuit breaking;
+- a bounded, TTL-first token/state storage contract (`McpOAuthStore`) that maps one-to-one onto Redis primitives, plus a memory implementation that rejects rather than evicts at capacity;
+- an asymmetric-by-default JWT issuer and verifier (EdDSA/ES256 via `node:crypto`, HS256 for single-node dev) with a JWKS-publishing key ring and algorithm pinning from the resolved key;
+- an `OAuthTokenVerifier` for the server's own minted tokens and a `jose`-backed verifier for external authorization servers; and
+- a token-free principal-claims projection that reads only the allowlisted claims placed on `AuthInfo.extra`.
+
+The Nest adapter consumes it through the per-server `oauth` option group: `oauth.resource` composes `McpResourceServer` bearer verification and RFC 9728/8414 metadata around the HTTP handler using injected provider tokens, with an optional fail-closed anonymous-access policy.
 
 ### `@nestm/mcp-observability`
 

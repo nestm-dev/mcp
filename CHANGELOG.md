@@ -28,7 +28,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Planned
 
-- Vendor-specific OpenTelemetry bindings, distributed event-bus and cache implementations, persistent OAuth token stores, token exchange, and external policy-engine adapters.
+- Vendor-specific OpenTelemetry bindings, distributed event-bus and cache implementations, and external policy-engine adapters.
 
 ## [0.1.0-alpha.0] - Unreleased
 
