@@ -12,7 +12,7 @@ OAuth behavior is different on each side of the protocol:
 | Server       | Act as an OAuth resource server: publish protected-resource metadata, verify bearer tokens, and enforce required scopes |
 | Gateway      | Authenticate the downstream caller as a resource server, then authenticate independently to each upstream as a client   |
 
-The MCP server should not become a general Authorization Server. For new deployments, use a dedicated identity provider. The official v1 Authorization Server helpers remain only in the frozen legacy package.
+The MCP server should not become a _general_ Authorization Server — issuing credentials from its own user database, hosting password or social login, or standing in as an identity provider. For new deployments, use a dedicated identity provider. A narrower, explicitly-configured **authorization-server proxy** in front of a real IdP is a supported pattern: it holds the upstream tokens server-side and mints its own audience-scoped access tokens, so the MCP client never receives an upstream credential. `@nestm/mcp-auth` provides the building blocks (see "Resource-server protection with @nestm/mcp-auth" below). The official v1 Authorization Server helpers remain only in the frozen legacy package.
 
 ## Client-side authentication
 
@@ -60,6 +60,122 @@ copy `AuthInfo.extra` wholesale into policy or telemetry context.
 Missing, malformed, or expired tokens should return `401 invalid_token`. A valid token missing required scopes should return `403 insufficient_scope`. Both responses should include the correct `WWW-Authenticate: Bearer` challenge and protected-resource metadata URL so a compliant client can begin or step up its OAuth flow.
 
 Do not rely on CORS, a session ID, a client-supplied identity header, or tool arguments as authentication.
+
+### Resource-server protection with @nestm/mcp-auth
+
+`@nestm/mcp-auth` supplies the framework-neutral pieces a resource server needs, and the Nest adapter
+wires them through the per-server `oauth` option group. Every extensibility point is a provider token,
+never a raw callback or inline secret:
+
+```ts
+McpModule.forRoot({
+	collaborators: { providers: [{ provide: TOKEN_VERIFIER, useValue: verifier }] },
+	servers: [
+		{
+			name: "artifact",
+			serverInfo: { name: "artifact", version: "1.0.0" },
+			oauth: {
+				resource: {
+					resourceServerUrl: "https://mcp.example.com/mcp",
+					requiredScopes: ["mcp:invoke"],
+					verifier: TOKEN_VERIFIER, // McpOAuthTokenVerifierProvider
+					metadata: { oauthMetadata }, // RFC 8414 AS metadata (no secrets)
+					anonymous: ANON_POLICY, // optional, fail-closed
+				},
+			},
+		},
+	],
+});
+```
+
+The verifier is any `OAuthTokenVerifier`: `createMcpProxyTokenVerifier` for tokens the deployment
+mints itself, or `createJwksTokenVerifier` for an external IdP. Tokens are RFC 9068 `at+jwt`,
+signed with **asymmetric keys by default** (EdDSA/ES256) so replicas and resource servers share only
+a public key published at a JWKS endpoint; the verifier pins the signature algorithm from the
+resolved key rather than the token header, closing algorithm-confusion downgrades. Access tokens
+carry a space-delimited `scope` string, a single audience bound to the RFC 8707 resource, and a
+grant id that acts as an instant server-side revocation lever.
+
+The `anonymous` policy is a provider, never a boolean: it is consulted only after bearer verification
+refuses a request, and returning `undefined` preserves the original `401`/`403`. Anonymous requests
+reach handlers with no principal, so `handlerAuthorization` still fails closed.
+
+### Client ID Metadata Documents (CIMD)
+
+CIMD (SEP-991) is the 2026-07-28 replacement for Dynamic Client Registration: a `client_id` is an
+HTTPS URL whose document describes the client. `@nestm/mcp-auth/cimd` resolves and validates these
+documents with a strict, fail-closed pipeline:
+
+- **URL admission before any I/O**: HTTPS only, path required, no dot-segments (checked on the raw
+  string, since `URL` silently resolves them), no fragment/userinfo, no query by default, bounded
+  length, and IP-literal/host-allowlist enforcement.
+- **SSRF-hardened fetch**: a `node:https` request with a connection-time `lookup` hook validates the
+  exact addresses the socket will use, so there is no DNS-rebinding window. Redirects are refused,
+  and loopback, RFC 1918/6598, link-local (`169.254.169.254`), NAT64 (`64:ff9b::/96`), 6to4, and
+  IPv4-mapped IPv6 ranges are blocked. Responses stream through a hard byte cap.
+- **Document validation** via `@modelcontextprotocol/core`'s schemas plus CIMD prohibitions: the
+  `client_id` must self-reference, `client_secret*` must be absent, the auth method must be `none` or
+  `private_key_jwt`, and redirect URIs must be HTTPS or loopback.
+- **Caching**: successful documents are cached (LRU, TTL clamped, `no-store` honored). Failures are
+  never cached (per CIMD §4.4); repeated failures open a per-host circuit breaker that rate-limits
+  rather than caching an error response.
+
+Because a CIMD `client_id` is a URL, hash it before using it as a metric label to keep telemetry
+low-cardinality, and never log the resolved document contents.
+
+### Acting as an authorization-server proxy
+
+`@nestm/mcp-auth`'s `McpOAuthProxy` (wired through the Nest `oauth.proxy` option group and served by
+`McpOAuthControllerFor`) fronts a real upstream IdP. It holds the upstream tokens server-side and
+mints its own audience-scoped access tokens, so the MCP client never receives an upstream
+credential. Every extensibility point is a provider token; no key material or client secret appears
+in module options (they arrive via a `ConfigService`-backed provider).
+
+Load-bearing invariants (each covered by tests):
+
+- **Token swap, never pass-through.** Issued access tokens are RFC 9068 `at+jwt`, signed with
+  asymmetric keys by default (EdDSA/ES256) and published at a JWKS endpoint; the audience is the
+  bound RFC 8707 resource, and a `gid` claim ties the token to a server-side grant for revocation.
+- **Two-tier PKCE.** The client↔proxy leg requires `S256` (no `plain`, no downgrade) and validates a
+  well-formed challenge at `/authorize` and the verifier at `/token`. The proxy↔upstream leg uses its
+  own verifier via the SDK; the client's challenge is never forwarded.
+- **Single-use, validate-before-consume.** Authorization codes and refresh handles are stored only as
+  `sha256(secret)` and consumed with an atomic `take` **after** the presenter is validated, so an
+  unauthenticated probe cannot burn a live artifact. A replayed code or reused refresh handle revokes
+  the whole grant family (deletes the grant and denies its outstanding access tokens by `gid`).
+- **Consent is mandatory and CSRF-protected.** A per-transaction `__Host-` session-binding cookie
+  plus a form CSRF token and a strict same-origin check gate the consent POST; the callback verifies
+  the session cookie before consuming the transaction. The consent page escapes and normalizes all
+  untrusted display text under a strict CSP and never fetches `logo_uri`.
+- **Upstream hardening.** Discovery metadata is validated against the configured issuer and an
+  endpoint-host policy (issuer host or a true subdomain — no registrable-domain heuristic) before any
+  secret is POSTed, and all upstream calls go through the SSRF-guarded fetch. The upstream `id_token`
+  is bound by issuer/audience/expiry before its subject seeds the (HKDF-pseudonymized) principal.
+- **Fail-closed operations.** Storage capacity or backend faults return `temporarily_unavailable`
+  rather than a 500; two proxies sharing an issuer + base path are refused at bootstrap.
+
+The upstream tokens behind a verified access token are reachable via `McpOAuthService.upstreamTokens`
+— the credential source for a gateway's user-delegated upstream calls.
+
+**Durable, encrypted storage.** `McpOAuthStore` implementations compose: wrap any store with
+`withEncryptedValues({ keys })` for AES-256-GCM at rest (a 128-bit tag pinned at decrypt, and AEAD
+additional data binding each ciphertext to its key id and storage key, so records cannot be
+relocated), and use `McpDiskOAuthStore` for single-node persistence — owner-only files, a per-key
+in-process lock plus `link`-based create so `setIfAbsent` yields a single winner, an atomic
+`rename`-based `take`, and a scheduled sweep that reclaims expired records and crash-orphaned staging
+files. List the active encryption key first and keep prior keys for decryption to rotate without
+downtime; an unknown key id or a failed authentication tag surfaces as a missing record, never as
+plaintext. At-rest encryption provides confidentiality, not integrity of _presence_: a store backend
+an attacker can write to must be access-controlled (deletion defeats revocation regardless of
+encryption). For stores backing security decisions, enable `strict: true` so a present-but-
+undecryptable record fails closed instead of reading as absent.
+
+**Token exchange (RFC 8693).** The proxy acts as its own security token service: a confidential,
+authenticated client presents a proxy-minted access token as `subject_token` and receives a new
+access token for a configured `resource`, with a subset of the grant's scopes and no refresh token.
+This is the mechanism a gateway uses to turn a caller's token into an audience-scoped credential for
+one upstream — for the upstream _IdP_ tokens themselves, prefer `McpOAuthService.upstreamTokens`,
+which never leaves the trust boundary.
 
 ## Authorization after authentication
 
@@ -208,9 +324,48 @@ Never interpolate tool input into a shell command. Prefer direct executable/argu
 
 ## HTTP server hardening
 
+Every `McpServerRuntime` applies a pre-dispatch security posture — configured through
+`McpServerDefinition.httpSecurity` — before definition middleware, authorization, or the SDK handler
+run. The posture covers `runtime.fetch()`, `runtime.toNodeHandler()`, the Nest HTTP controller, and
+web-standard hosts.
+
+| Concern           | Default                                                                                             | Option                                      |
+| ----------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Origin validation | **On** — only localhost-class browser origins pass; requests without an `Origin` header always pass | `allowedOriginHostnames: string[] \| false` |
+| Host validation   | Off — proxies rewrite `Host`, and the Origin rung already blocks DNS rebinding                      | `allowedHostnames: string[] \| false`       |
+| CORS              | On whenever origin validation is on                                                                 | `cors: McpCorsOptions \| boolean`           |
+| Body cap          | 1 MiB, enforced at the Node stream and at the fetch layer                                           | `maxBodyBytes: number \| false`             |
+
+Notes and caveats:
+
+- **Origin validation is the default-deny rung.** Routable browser origins are rejected until you
+  list their hostnames. Non-browser MCP clients send no `Origin` header and are unaffected. An empty
+  allowlist is a valid deny-all posture. Matching is hostname-only (port- and scheme-agnostic).
+- **CORS has exactly one owner per route.** The 2026-07-28 revision's `Mcp-Method`/`Mcp-Name` request
+  headers make every browser MCP POST CORS-preflighted, and the SDK handler itself answers preflights
+  with `405` — without this posture (or app-level CORS) browser clients cannot connect at all. When
+  Nest owns CORS for the whole app, pass `mcpCorsOptions({ origins })` from `@nestm/mcp` to
+  `app.enableCors()` and disable the built-in handling with `cors: false`; never run both.
+- **Credentialed CORS is off by default.** Cookie-authenticated MCP endpoints are CSRF-able; prefer
+  bearer tokens.
+- **Host validation and proxies.** `X-Forwarded-Host` is not consulted. Behind a rewriting proxy,
+  keep `allowedHostnames: false` (the default) or list the rewritten internal hostname.
+- **Body caps per path.** The Node-level cap protects raw `toNodeHandler()` mounts and non-JSON
+  content types that platform parsers skip; the fetch-layer cap covers platform-parsed bodies and
+  web-standard hosts. Platform limits (`express.json()` defaults to 100 KB, Fastify `bodyLimit` to
+  1 MiB) still apply first when the platform parses.
+- **Layering.** An outer hardened facade (the Nest controller's `getHttpSecurityOptions()` override,
+  `hardenMcpFetch`, or a `McpValidatedServer` you compose yourself) owns the posture for requests it
+  admits; the runtime's inner gate defers to it instead of double-gating.
+- Pre-dispatch rejections surface to runtime observers as `request:rejected` events with the HTTP
+  status; they never reach lifecycle observers or middleware.
+
+A health endpoint stays a plain Nest concern: register an ordinary controller (or Terminus) beside
+the MCP route — the MCP catch-all binds only its own controller path.
+
+Beyond the built-in posture:
+
 - Terminate TLS at a trusted boundary and preserve the original scheme/host safely.
-- Configure allowed hosts and origins when binding beyond loopback; defend against DNS rebinding.
-- Set request-body and concurrency limits before MCP parsing.
 - Rate limit by trusted principal and operation, not only IP address.
 - Propagate abort signals and deadlines to tools and upstream calls.
 - Return generic external errors while retaining structured internal audit context.
@@ -249,6 +404,8 @@ NestM lifecycle events omit inputs and outputs, and server/gateway operation pri
 - [ ] Stdio definitions are trusted, allowlisted, and sandboxed.
 - [ ] Payloads and secrets are redacted from logs and traces.
 - [ ] Timeouts, cancellation, concurrency, and size limits are configured.
+- [ ] `httpSecurity.allowedOriginHostnames` lists exactly the deployed browser clients (or stays at the localhost default), and each route has a single CORS owner.
+- [ ] The OAuth proxy's signing keys are asymmetric and rotated; the HKDF master secret is ≥32 bytes and delivered out-of-band; consent is CSRF-protected; refresh rotation with family revocation is enabled; and the well-known documents resolve at the origin root (excluded from any global prefix).
 - [ ] Destructive agent actions require an appropriate confirmation policy.
 - [ ] Multi-round state is signed, short-lived, principal/method-bound, and contains no secrets.
 - [ ] Shutdown closes inbound handlers before their gateway's upstream clients.

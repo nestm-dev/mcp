@@ -11,6 +11,7 @@
 		{ "path": "../mcp-core" },
 		{ "path": "../mcp-client" },
 		{ "path": "../mcp-server" },
+		{ "path": "../mcp-auth" },
 		{ "path": "../mcp-gateway" }
 	]
 }

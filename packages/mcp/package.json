@@ -78,5 +78,8 @@
 	"publishConfig": {
 		"access": "public",
 		"provenance": true
+	},
+	"devDependencies": {
+		"@nestm/mcp-auth": "workspace:*"
 	}
 }

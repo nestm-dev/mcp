@@ -1,0 +1,94 @@
+{
+	"name": "@nestm/mcp-auth",
+	"version": "0.1.0-alpha.1",
+	"description": "OAuth 2.1 authorization-server proxy, Client ID Metadata Documents, and token infrastructure for NestM MCP servers.",
+	"type": "module",
+	"sideEffects": false,
+	"author": "nestm",
+	"license": "BSD-3-Clause",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nestm-dev/mcp.git",
+		"directory": "packages/mcp-auth"
+	},
+	"homepage": "https://github.com/nestm-dev/mcp/tree/main/packages/mcp-auth#readme",
+	"bugs": {
+		"url": "https://github.com/nestm-dev/mcp/issues"
+	},
+	"keywords": [
+		"mcp",
+		"model-context-protocol",
+		"mcp-v2",
+		"oauth",
+		"cimd",
+		"authorization-server",
+		"esm",
+		"nestm"
+	],
+	"engines": {
+		"node": ">=22.13.0"
+	},
+	"types": "./dist/index.d.mts",
+	"files": [
+		"dist",
+		"README.md",
+		"CHANGELOG.md",
+		"LICENSE"
+	],
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs",
+			"default": "./dist/index.mjs"
+		},
+		"./cimd": {
+			"types": "./dist/cimd/index.d.mts",
+			"import": "./dist/cimd/index.mjs",
+			"default": "./dist/cimd/index.mjs"
+		},
+		"./stores": {
+			"types": "./dist/stores/index.d.mts",
+			"import": "./dist/stores/index.mjs",
+			"default": "./dist/stores/index.mjs"
+		},
+		"./testing": {
+			"types": "./dist/testing/index.d.mts",
+			"import": "./dist/testing/index.mjs",
+			"default": "./dist/testing/index.mjs"
+		},
+		"./package.json": "./package.json"
+	},
+	"dependencies": {
+		"@nestm/mcp-core": "workspace:^",
+		"@nestm/mcp-server": "workspace:^"
+	},
+	"peerDependencies": {
+		"@modelcontextprotocol/client": ">=2.0.0 <3.0.0",
+		"@modelcontextprotocol/core": ">=2.0.0 <3.0.0",
+		"@modelcontextprotocol/server": ">=2.0.0 <3.0.0",
+		"jose": ">=5.0.0 <7.0.0"
+	},
+	"peerDependenciesMeta": {
+		"jose": {
+			"optional": true
+		}
+	},
+	"scripts": {
+		"build": "tsdown",
+		"build:watch": "tsdown --watch src",
+		"typecheck": "tsc -b",
+		"lint": "oxlint --type-aware .",
+		"format": "prettier --write . --ignore-unknown",
+		"format:check": "prettier --check . --ignore-unknown",
+		"test": "vitest run",
+		"verify:pack": "pnpm run build && publint --strict",
+		"prepack": "pnpm run build"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"devDependencies": {
+		"jose": "^6.2.8"
+	}
+}

@@ -4,6 +4,7 @@ import {
 	requireBearerAuth,
 } from "@modelcontextprotocol/server";
 import type {
+	AuthInfo,
 	AuthMetadataOptions,
 	BearerAuthOptions,
 	McpHandlerRequestOptions,
@@ -21,6 +22,14 @@ export interface McpFetchHandler {
 export interface McpResourceServerOptions {
 	readonly bearerAuth: BearerAuthOptions;
 	readonly metadata?: AuthMetadataOptions;
+	/**
+	 * Fail-closed anonymous fallback. When bearer verification refuses a
+	 * request, this policy is consulted with the raw request; returning an
+	 * `AuthInfo` admits the request under that identity, and returning
+	 * `undefined` keeps the original `401`/`403`. Absent, every request must
+	 * carry a valid bearer token. Metadata (well-known) responses bypass it.
+	 */
+	readonly anonymous?: (request: Request) => AuthInfo | undefined | Promise<AuthInfo | undefined>;
 }
 
 /**
@@ -36,10 +45,12 @@ export class McpResourceServer implements McpFetchHandler {
 	readonly #handler: McpFetchHandler;
 	readonly #metadata: AuthMetadataOptions | undefined;
 	readonly #authorize: ReturnType<typeof requireBearerAuth>;
+	readonly #anonymous: McpResourceServerOptions["anonymous"];
 
 	constructor(handler: McpFetchHandler, options: McpResourceServerOptions) {
 		this.#handler = handler;
 		this.#metadata = options.metadata;
+		this.#anonymous = options.anonymous;
 		const resourceMetadataUrl =
 			options.bearerAuth.resourceMetadataUrl ??
 			(options.metadata === undefined
@@ -59,7 +70,12 @@ export class McpResourceServer implements McpFetchHandler {
 		if (metadataResponse !== undefined) return metadataResponse;
 
 		const authorization = await this.#authorize(request);
-		if (authorization instanceof Response) return authorization;
+		if (authorization instanceof Response) {
+			if (this.#anonymous === undefined) return authorization;
+			const anonymous = await this.#anonymous(request);
+			if (anonymous === undefined) return authorization;
+			return this.#handler.fetch(request, { ...options, authInfo: anonymous });
+		}
 		return this.#handler.fetch(request, { ...options, authInfo: authorization });
 	}
 

@@ -34,6 +34,26 @@ export type {
 } from "./decorators/mcp-handler.decorators.ts";
 export { McpHttpController, McpHttpControllerFor } from "./mcp-http.controller.ts";
 export type { McpHttpControllerClass } from "./mcp-http.controller.ts";
+export { mcpCorsOptions } from "./mcp-cors.ts";
+export type { McpCorsInput, McpNestCorsOptions } from "./mcp-cors.ts";
+export { McpOAuthControllerFor, McpOAuthController } from "./oauth/mcp-oauth.controller.ts";
+export type { McpOAuthControllerClass } from "./oauth/mcp-oauth.controller.ts";
+export { McpOAuthService } from "./oauth/mcp-oauth.service.ts";
+export type {
+	McpAnonymousAccessPolicy,
+	McpNestClientIdMetadataOptions,
+	McpNestOAuthMetadataOptions,
+	McpNestOAuthProxyOptions,
+	McpNestOAuthResourceOptions,
+	McpNestServerOAuthOptions,
+	McpOAuthConsentProvider,
+	McpOAuthFetchProvider,
+	McpOAuthSecretProvider,
+	McpOAuthSigningKeyProvider,
+	McpOAuthSubjectResolverProvider,
+	McpOAuthTokenVerifierProvider,
+	McpOAuthUpstreamProvider,
+} from "./oauth/mcp-oauth.types.ts";
 export { McpModule } from "./mcp.module.ts";
 export type { McpForRootAsyncOptions, McpForRootOptions } from "./mcp.module-definition.ts";
 export { McpClientModule } from "./client/mcp-client.module.ts";
@@ -161,3 +181,8 @@ export type {
 	ToolAnnotations,
 	ToolCallback,
 } from "@nestm/mcp-server";
+export type {
+	McpCorsOptions,
+	McpHttpSecurityOptions,
+	McpHttpSecurityPolicy,
+} from "@nestm/mcp-server/security";

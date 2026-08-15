@@ -46,11 +46,16 @@ import {
 	resolveMcpNestServerHttpOptions,
 	resolveMcpNestServerOptions,
 } from "./server/mcp-server-options.ts";
+import { resolveMcpNestServerOAuth } from "./oauth/mcp-oauth-options.ts";
+import type { McpFetchHandler } from "@nestm/mcp-server/auth";
+import type { McpOAuthProxy } from "@nestm/mcp-auth";
 
 @Injectable()
 export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestroy {
 	#ready = false;
 	readonly #gateways = new Map<string, McpGateway>();
+	readonly #httpComposers = new Map<string, (handler: McpFetchHandler) => McpFetchHandler>();
+	readonly #oauthProxies = new Map<string, McpOAuthProxy>();
 	#closeTask: Promise<void> | undefined;
 	#shutdownError: AggregateError | undefined;
 	#unsubscribeCapabilityMutations: (() => void) | undefined;
@@ -105,6 +110,7 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 					catalogExposure === undefined ? [] : [name],
 				),
 			);
+			const oauthRouteOwners = new Map<string, string>();
 			for (const definition of definitions) {
 				const {
 					catalogExposure,
@@ -117,6 +123,7 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 					http: httpOptions,
 					lifecycleObserver: lifecycleObserverToken,
 					middleware: middlewareTokens,
+					oauth: oauthOptions,
 					observer: observerToken,
 					onError: errorReporterToken,
 					principalClaims: principalClaimsToken,
@@ -124,6 +131,29 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 					...serverDefinition
 				} = definition;
 				Reflect.deleteProperty(serverDefinition, "features");
+				const resolvedOAuth = resolveMcpNestServerOAuth(
+					oauthOptions,
+					this.providers,
+					definition.name,
+				);
+				if (resolvedOAuth !== undefined) {
+					this.#httpComposers.set(definition.name, resolvedOAuth.compose);
+					if (resolvedOAuth.proxy !== undefined) {
+						const proxy = resolvedOAuth.proxy;
+						// Two proxies sharing an issuer+basePath would silently shadow each
+						// other's identical routes; refuse the ambiguous configuration.
+						const route = `${proxy.authorizationServerMetadata.issuer}${proxy.basePath}`;
+						const owner = oauthRouteOwners.get(route);
+						if (owner !== undefined) {
+							throw new McpModuleError(
+								"INVALID_OPTIONS",
+								`MCP servers "${owner}" and "${definition.name}" both expose an OAuth proxy at "${route}". Give each a distinct issuer or oauth.proxy.basePath.`,
+							);
+						}
+						oauthRouteOwners.set(route, definition.name);
+						this.#oauthProxies.set(definition.name, proxy);
+					}
+				}
 				const resolvedServerOptions = resolveMcpNestServerOptions(serverOptions, this.providers);
 				const resolvedHttpOptions = resolveMcpNestServerHttpOptions(httpOptions, this.providers);
 				const contributors = this.#providerTokenList(
@@ -323,6 +353,22 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 		}
 	}
 
+	/**
+	 * Composes the configured OAuth resource-server protection around a runtime's
+	 * fetch handler. Returns the runtime untouched when the server has no `oauth`
+	 * group, so the HTTP controller's default composition seam is a no-op unless
+	 * OAuth is configured.
+	 */
+	composeHttpHandler(serverName: string, runtime: McpServerRuntime): McpFetchHandler {
+		const composer = this.#httpComposers.get(serverName);
+		return composer === undefined ? runtime : composer(runtime);
+	}
+
+	/** The OAuth authorization-server proxy for a server, when `oauth.proxy` is configured. */
+	oauthProxy(serverName: string): McpOAuthProxy | undefined {
+		return this.#oauthProxies.get(serverName);
+	}
+
 	server(name: string): McpServerRuntime {
 		this.#assertReady();
 		return this.servers.get(name);
@@ -413,6 +459,8 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 			}
 		}
 		this.#gateways.clear();
+		this.#httpComposers.clear();
+		this.#oauthProxies.clear();
 		if (errors.length > 0) {
 			this.#shutdownError = new AggregateError(errors, "One or more MCP runtimes failed to close.");
 			throw this.#shutdownError;

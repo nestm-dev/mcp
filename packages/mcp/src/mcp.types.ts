@@ -20,6 +20,7 @@ import type {
 	McpServerRuntimeEvent,
 	ReadResourceResult,
 } from "@nestm/mcp-server";
+import type { McpNestServerOAuthOptions } from "./oauth/mcp-oauth.types.ts";
 import type { ModuleMetadata } from "@nestjs/common";
 import type {
 	McpGatewayAuthorizationContextResolver,
@@ -212,6 +213,8 @@ export interface McpNestServerDefinition extends Omit<
 	readonly catalogExposure?: McpNestCatalogExposureOptions;
 	/** Optional aggregate gateway backed by clients owned by this Nest module. */
 	readonly gateway?: McpNestGatewayOptions;
+	/** Optional OAuth resource-server protection composed around the HTTP handler. */
+	readonly oauth?: McpNestServerOAuthOptions;
 }
 
 export interface McpModuleOptions {

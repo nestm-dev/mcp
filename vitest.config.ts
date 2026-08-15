@@ -18,6 +18,22 @@ export default defineConfig({
 					.pathname,
 			},
 			{
+				find: /^@nestm\/mcp-auth\/cimd$/,
+				replacement: new URL("./packages/mcp-auth/src/cimd/index.ts", import.meta.url).pathname,
+			},
+			{
+				find: /^@nestm\/mcp-auth\/stores$/,
+				replacement: new URL("./packages/mcp-auth/src/stores/index.ts", import.meta.url).pathname,
+			},
+			{
+				find: /^@nestm\/mcp-auth\/testing$/,
+				replacement: new URL("./packages/mcp-auth/src/testing/index.ts", import.meta.url).pathname,
+			},
+			{
+				find: /^@nestm\/mcp-auth$/,
+				replacement: new URL("./packages/mcp-auth/src/index.ts", import.meta.url).pathname,
+			},
+			{
 				find: /^@nestm\/mcp-gateway\/testing$/,
 				replacement: new URL("./packages/mcp-gateway/src/testing/index.ts", import.meta.url)
 					.pathname,
