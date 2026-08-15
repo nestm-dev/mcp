@@ -11,8 +11,12 @@
 		"@nestm/mcp": "0.0.0"
 	},
 	"changesets": [
+		"http-hardening-posture",
 		"initial-mcp-runtime",
+		"nest-client-module",
 		"nest-native-public-surface",
+		"oauth-auth-package",
+		"oauth-durable-stores-token-exchange",
 		"plain-capability-decorators",
 		"portable-tool-schema",
 		"secure-catalog-transforms"
