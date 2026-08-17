@@ -67,8 +67,12 @@ The client runtime owns a registry of named upstream definitions and an independ
 - typed protocol delegates for tools, resources, prompts, completion, general requests, and manual modern multi-round input;
 - runtime-owned modern subscriptions that close before their client connection;
 - connection and capability snapshots;
-- explicit connect, disconnect, and async-disposal ownership; and
-- host-managed prior discovery verdicts.
+- explicit connect, disconnect, and async-disposal ownership;
+- opaque identity-keyed leases with secure close-on-final-release defaults;
+- host-managed prior discovery verdicts; and
+- a separate strict outbound OAuth surface with exact issuer/resource discovery, endpoint policy,
+  PKCE/state transactions, durable pre-dispatch refresh claims, exact-revision commits, and
+  bounded refresh ownership.
 
 An upstream name is a routing key, not a security identity. Policies should additionally bind the resolved URL, authorization issuer/resource, and expected server identity.
 
@@ -262,7 +266,7 @@ Inbound HTTP serving applies resource authentication before MCP dispatch. Nest h
 NestM intentionally exposes more than one layer:
 
 1. **Logical operation middleware** from `@nestm/mcp-core` surrounds client, gateway, or validated Nest handler operations. In `composeMcpMiddleware([a, b], terminal)`, `a` is outermost. A continuation may be called once.
-2. **Official client fetch middleware** surrounds every HTTP attempt, including discovery, OAuth, and retries. In the official SDK composition, the last middleware passed is outermost.
+2. **Official client fetch middleware** surrounds HTTP attempts made through the configured client transport, including its SDK-managed discovery, pass-through OAuth, and retries. In the official SDK composition, the last middleware passed is outermost. The dedicated `@nestm/mcp-client/oauth` facade is separate: it uses only its host-supplied guarded fetch and must not be routed through arbitrary transport or logging middleware.
 3. **Server-definition middleware** surrounds a complete web-standard HTTP exchange. It does not wrap stdio and should not be the only per-capability authorization layer.
 4. **Nest handler middleware** runs after official request validation and routing, around decorated tool/resource/prompt callbacks on HTTP and stdio. Mandatory `handlerAuthorization` remains ahead of custom handler middleware.
 5. **Framework middleware/adapters** mount the web-standard server handler into Node, Express, Fastify, or another host. They should authenticate and normalize the request before MCP dispatch.

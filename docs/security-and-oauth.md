@@ -24,6 +24,24 @@ The MCP server should not become a _general_ Authorization Server — issuing cr
 - private-key JWT client authentication; and
 - cross-application assertion exchange.
 
+That pass-through is useful for application-owned service identities. A multi-tenant host with
+shared or per-user credentials should use `@nestm/mcp-client/oauth` instead. Its strict facade
+accepts only pre-provisioned clients, performs RFC 9728 and RFC 8414 discovery in two separately
+policy-checked phases, requires exact configured resource and issuer values, requires PKCE S256,
+requires RFC 9207 authorization-response issuer identification, and pins the discovered endpoints
+into the single-use callback transaction. It never calls the SDK full-flow orchestrator, never
+performs Dynamic Client Registration, and never rediscovers a token endpoint while redeeming an
+authorization code.
+
+The strict surface requires a host-supplied guarded fetch and a fail-closed endpoint policy. The
+fetch must reject redirects, DNS rebinding and private destinations, excessive response bodies,
+and timeouts; policy should additionally constrain exact origins and ports. Re-check the frozen
+token endpoint immediately before credentials are added. Keep OAuth network traffic separate from
+general MCP fetch middleware because middleware and header-enabled request logging can observe
+codes, Basic credentials, token form bodies, and bearer tokens. The guarded fetch must not retry a
+credentialed token `POST`: a durable refresh claim authorizes one wire exchange only, and ambiguous
+network outcomes must return to the coordinator unchanged.
+
 Client providers must:
 
 - key registrations and credentials by authorization-server issuer;
@@ -34,6 +52,29 @@ Client providers must:
 - encrypt durable tokens and client secrets at rest;
 - coalesce concurrent refreshes and prevent refresh-token replay; and
 - return a fresh transport after an interactive authorization hand-off when required by the SDK flow.
+
+Strict host-managed flows must additionally atomically take a pending transaction by the
+domain-separated state digest before inspecting callback success or error values. The transaction
+remains consumed after an ambiguous exchange. Persist it with authenticated encryption and bind it
+to the browser session, exact issuer/resource/endpoints, provisioned client coordinate, and host
+scope/owner/revision. Use `McpClientOAuthRefreshCoordinator` with an exact-revision commit and a
+durable pre-dispatch claim so concurrent processes cannot present the same rotating refresh token.
+Only the exact claim owner may commit the replacement. Retry-safe pre-dispatch failures may release
+the claim; abandoned or indeterminate post-dispatch claims must become terminal and must never
+reactivate the old generation. Indeterminate outcomes invalidate the old generation instead of
+replaying it, and terminal invalidation evicts credential-bound runtime leases. Successful token
+rotation remains inside the same stable binding; if runtime leases are keyed by the token revision,
+release and reacquire them rather than pooling across that change. An invalidation hook runs while
+the failed operation may still hold its lease: initiate lease retirement and return immediately;
+never await draining invalidation from the hook or the operation and lease release can deadlock.
+
+Attach credentials to MCP transports through one `McpClientOAuthAuthProvider` per exact binding and
+set `onInsufficientScope: "throw"`. The bridge deliberately lacks the SDK `OAuthClientProvider`
+shape, so a `401` can refresh the bound generation but cannot begin registration, redirect a user,
+or silently widen scopes. Close the bridge when its credential-bound runtime lease is released.
+The SDK callback does not identify the credential revision attached to the failed request, so
+concurrent delayed `401` responses cannot be attributed exactly. Credentialed transports should be
+close-on-release unless the host supplies request-correlated refresh and revision fencing.
 
 The transport may retry once after a `401` when the provider refreshes or completes authorization. Runtime middleware observes one logical call; fetch middleware observes each wire attempt.
 
@@ -400,7 +441,10 @@ NestM lifecycle events omit inputs and outputs, and server/gateway operation pri
 - [ ] Logical operations have a fail-closed authorization policy.
 - [ ] Decorated Nest capabilities use `handlerAuthorization`; HTTP-exchange middleware is not treated as a stdio policy.
 - [ ] Gateway downstream and upstream credentials are separate.
-- [ ] OAuth state is encrypted and keyed by issuer and resource.
+- [ ] OAuth pending state is single-use, authenticated-encrypted, session-bound, and pinned to exact issuer, resource, endpoints, client, owner, and revision.
+- [ ] Interactive OAuth authorities advertise RFC 9207 and every callback carries the exact expected `iss` value.
+- [ ] OAuth discovery and token calls use a redirect-denying, DNS-pinned, size/time-bounded fetch plus fail-closed endpoint policy.
+- [ ] Refresh rotation uses a durable pre-dispatch claim plus exact-revision commit; stale claims never reactivate, and terminal invalidation evicts credential-bound client leases.
 - [ ] Stdio definitions are trusted, allowlisted, and sandboxed.
 - [ ] Payloads and secrets are redacted from logs and traces.
 - [ ] Timeouts, cancellation, concurrency, and size limits are configured.
