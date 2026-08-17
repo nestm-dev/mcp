@@ -27,6 +27,7 @@
 		"paths": {
 			"@nestm/mcp-core": ["./packages/mcp-core/src/index.ts"],
 			"@nestm/mcp-client": ["./packages/mcp-client/src/index.ts"],
+			"@nestm/mcp-client/oauth": ["./packages/mcp-client/src/oauth/index.ts"],
 			"@nestm/mcp-server": ["./packages/mcp-server/src/index.ts"],
 			"@nestm/mcp-server/auth": ["./packages/mcp-server/src/auth/index.ts"],
 			"@nestm/mcp-server/security": ["./packages/mcp-server/src/security/index.ts"],

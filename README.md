@@ -12,7 +12,7 @@ The primary use case is an artifact or agent runtime that needs to expose truste
 | Package                    | Responsibility                                                                                                                                      | Status      |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | `@nestm/mcp-core`          | Framework-neutral operation context, middleware, authorization decisions, and lifecycle observation                                                 | Implemented |
-| `@nestm/mcp-client`        | Named multi-server official v2 client runtime, transports, typed requests, manual multi-round input, managed listening, and middleware              | Implemented |
+| `@nestm/mcp-client`        | Named v2 client runtime, strict outbound OAuth, isolated leases, transports, typed requests, managed listening, and middleware                      | Implemented |
 | `@nestm/mcp-server`        | Framework-neutral per-request server runtime, feature registry, web-standard/Node/stdio serving, and OAuth resource-server wrapper                  | Implemented |
 | `@nestm/mcp-gateway`       | Tool, prompt, resource, resource-template, and completion projection with policy enforcement and auth-scoped discovery caching                      | Implemented |
 | `@nestm/mcp-auth`          | OAuth toolkit: Client ID Metadata Document resolution, SSRF-hardened discovery fetch, bounded token stores, and asymmetric JWT issuing/verification | Alpha       |

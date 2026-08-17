@@ -127,6 +127,92 @@ discovery helpers, and the official typed OAuth errors are also available from t
 Interactive providers can be passed through in the same way; authorization redirects and durable
 token storage remain host-application responsibilities.
 
+## Strict host-managed OAuth
+
+Multi-tenant hosts should use the dedicated `@nestm/mcp-client/oauth` surface instead of allowing
+the transport to start an interactive SDK flow. The strict facade only accepts clients that were
+provisioned out of band. It has no Dynamic Client Registration operation, requires exact resource
+and issuer bindings, requires PKCE S256 plus the RFC 9207 authorization-response issuer parameter,
+and re-checks every discovered or credentialed endpoint through host policy.
+
+```ts
+import { McpClientOAuthProtocol } from "@nestm/mcp-client/oauth";
+
+const oauth = new McpClientOAuthProtocol({
+	// This must reject redirects, private/rebound addresses, oversized bodies, and timeouts.
+	fetch: ssrfGuardedOAuthFetch,
+	endpointPolicy({ endpoint, credentialed }) {
+		if (endpoint.port !== "" && endpoint.port !== "443") return false;
+		if (!allowedOAuthOrigins.has(endpoint.origin)) return false;
+		return !credentialed || credentialOrigins.has(endpoint.origin);
+	},
+});
+
+const authority = await oauth.discover({
+	serverUrl: "https://mcp.example.com/mcp",
+	resource: "https://mcp.example.com/mcp",
+	issuer: "https://identity.example.com/",
+});
+
+const started = await oauth.startAuthorization({
+	authority,
+	client: { clientId, authentication: { method: "none" } },
+	redirectUri: "https://studio.example.com/oauth/callback",
+	scopes: ["mcp:tools"],
+});
+
+// Persist `started.transaction` with authenticated encryption and browser-session binding.
+// The plaintext state exists only in `started.authorizationUrl`; the record keeps its digest.
+await savePendingAuthorization(started.transaction);
+redirectUser(started.authorizationUrl);
+```
+
+On callback, parse the parameters, derive the state lookup digest, and atomically take the pending
+transaction before calling `exchangeAuthorization`. A consumed transaction stays consumed even
+when token exchange has an ambiguous network result. The facade validates state lifetime, callback
+issuer, client identity, and the authority/endpoints pinned before redirect; callbacks without the
+exact RFC 9207 `iss` value fail closed, and the facade never rediscovers an endpoint while redeeming
+a code.
+
+The subpath also provides a revisioned credential-store port and
+`McpClientOAuthRefreshCoordinator`. Refreshes for one opaque identity and exact revision share one
+operation. Before dispatch, the store must atomically claim the exact revision with a durable
+fencing token; another process observing that claim never sends the same refresh token. A rotated
+refresh token is committed only by that claim owner. Retry-safe pre-dispatch failure can release the
+claim explicitly, while an abandoned or indeterminate post-dispatch claim must become terminal and
+must never reactivate the old generation. If the outcome becomes unknowable after a refresh request
+may have reached the authorization server, the old generation is invalidated instead of replayed.
+Terminal invalidation or an observed external disappearance can evict credential-bound client
+leases. Successful rotation and a newer winner remain within the same stable binding and do not
+invoke the terminal invalidation hook. Identity keys must be non-secret and include every immutable
+host isolation coordinate. The coordinator awaits its invalidation hook while the failed request
+may still hold that same lease, so a lease-eviction hook must initiate retirement and return without
+awaiting active-lease drain; observe and report the eventual drain separately.
+
+Create one `McpClientOAuthAuthProvider` per credential binding and close it with that binding's
+runtime lease. The bridge implements only the SDK's minimal `AuthProvider`: it loads the current
+generation before each request and delegates a `401` refresh to the coordinator, but has no
+`OAuthClientProvider` methods that could trigger redirects or registration. Set the HTTP transport's
+`options.onInsufficientScope` to `"throw"` so scope escalation returns to host policy instead of
+starting an implicit interactive flow. The bridge follows successful token revisions inside one
+stable owner/authority binding. A host that treats every token revision as a new runtime identity
+must close or reacquire that runtime after the operation instead of pooling it under the old
+revision.
+
+The SDK's minimal `onUnauthorized` callback does not report which token revision was attached to
+the failed request. On a concurrent or long-lived transport, a delayed `401` can therefore arrive
+after another request has published a newer generation. Use close-on-release/no credentialed
+pooling for this bridge, or perform request-correlated refresh at a host fetch boundary; do not
+claim exact 401-to-revision attribution from the minimal provider alone.
+
+Encryption, AAD construction, owner/scope authorization, RLS, callback-session checks, and the
+atomic pending-transaction store remain application responsibilities. OAuth fetches should use a
+separate guarded path from arbitrary MCP middleware: request logging or middleware that can inspect
+headers and form bodies can expose bearer tokens, client secrets, codes, or refresh tokens. Treat
+returned `id_token` values as opaque unless a separate OIDC validator verifies them. The guarded
+fetch must never automatically retry a credentialed token `POST`; one durable refresh claim permits
+at most one wire exchange, and an ambiguous result must return to the coordinator unchanged.
+
 ## Stdio servers
 
 ```ts

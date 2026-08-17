@@ -36,6 +36,11 @@
 			"import": "./dist/index.mjs",
 			"default": "./dist/index.mjs"
 		},
+		"./oauth": {
+			"types": "./dist/oauth/index.d.mts",
+			"import": "./dist/oauth/index.mjs",
+			"default": "./dist/oauth/index.mjs"
+		},
 		"./package.json": "./package.json"
 	},
 	"files": [
