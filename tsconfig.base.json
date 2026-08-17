@@ -39,6 +39,7 @@
 			"@nestm/mcp-gateway": ["./packages/mcp-gateway/src/index.ts"],
 			"@nestm/mcp-gateway/testing": ["./packages/mcp-gateway/src/testing/index.ts"],
 			"@nestm/mcp": ["./packages/mcp/src/index.ts"],
+			"@nestm/mcp/client": ["./packages/mcp/src/client/index.ts"],
 			"@nestm/mcp/testing": ["./packages/mcp/src/testing/index.ts"]
 		}
 	}

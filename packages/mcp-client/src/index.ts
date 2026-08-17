@@ -85,15 +85,30 @@ export type { StdioServerParameters } from "@modelcontextprotocol/client/stdio";
 
 export {
 	MCP_CLIENT_NOT_CONNECTED,
+	MCP_CLIENT_LEASE_CAPACITY_EXCEEDED,
+	MCP_CLIENT_LEASE_INVALIDATED,
+	MCP_CLIENT_LEASE_MANAGER_CLOSED,
+	MCP_CLIENT_LEASE_RELEASE_MODE_CONFLICT,
 	MCP_CLIENT_RUNTIME_CLOSED,
 	MCP_CLIENT_SERVER_EXISTS,
 	MCP_CLIENT_SERVER_NOT_FOUND,
 	MCP_CLIENT_SHUTDOWN_TIMEOUT,
 	McpClientRuntimeError,
+	McpClientLeaseManagerError,
 } from "./errors.ts";
-export type { McpClientRuntimeErrorCode } from "./errors.ts";
+export type { McpClientLeaseManagerErrorCode, McpClientRuntimeErrorCode } from "./errors.ts";
 
 export { McpClientRuntime } from "./runtime.ts";
+
+export { McpClientLeaseManager } from "./lease-manager.ts";
+export type {
+	McpClientLease,
+	McpClientLeaseAcquireOptions,
+	McpClientLeaseFactoryContext,
+	McpClientLeaseManagerOptions,
+	McpClientLeaseManagerSnapshot,
+	McpClientLeaseReleaseMode,
+} from "./lease-manager.ts";
 
 export { createMcpClientToolSchema } from "./tool-schema.ts";
 export type {

@@ -42,6 +42,11 @@
 			"import": "./dist/index.mjs",
 			"default": "./dist/index.mjs"
 		},
+		"./client": {
+			"types": "./dist/client/index.d.mts",
+			"import": "./dist/client/index.mjs",
+			"default": "./dist/client/index.mjs"
+		},
 		"./testing": {
 			"types": "./dist/testing/index.d.mts",
 			"import": "./dist/testing/index.mjs",
@@ -50,6 +55,7 @@
 		"./package.json": "./package.json"
 	},
 	"dependencies": {
+		"@nestm/mcp-auth": "workspace:^",
 		"@nestm/mcp-client": "workspace:^",
 		"@nestm/mcp-core": "workspace:^",
 		"@nestm/mcp-gateway": "workspace:^",
@@ -78,8 +84,5 @@
 	"publishConfig": {
 		"access": "public",
 		"provenance": true
-	},
-	"devDependencies": {
-		"@nestm/mcp-auth": "workspace:*"
 	}
 }
