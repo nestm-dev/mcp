@@ -97,7 +97,7 @@ For an outbound-only agent host, import `McpClientModule` directly and inject `M
 
 ```ts
 import { Injectable, Module } from "@nestjs/common";
-import { McpClientModule, McpClientService } from "@nestm/mcp";
+import { McpClientModule, McpClientService } from "@nestm/mcp/client";
 
 @Injectable()
 class KnowledgeAgent {
@@ -126,8 +126,9 @@ export class AgentHostModule {}
 registry and protocol operations while adding Nest bootstrap and shutdown ownership. Client
 factories, transports, authentication, middleware, observers, and resolvers are referenced by
 provider token and registered under `McpClientModule`'s `collaborators`; the module resolves and
-binds them before constructing the runtime. Outside Nest, continue constructing `McpClientRuntime`
-directly from `@nestm/mcp-client`.
+binds them before constructing the runtime. The dedicated `@nestm/mcp/client` entrypoint does not
+load inbound server, gateway, or OAuth implementation code. Outside Nest, continue constructing
+`McpClientRuntime` directly from `@nestm/mcp-client`.
 
 The client adapter resolves these provider-token seams:
 

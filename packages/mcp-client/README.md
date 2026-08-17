@@ -188,6 +188,53 @@ cancellation cannot hang shutdown indefinitely: cleanup rejects with `MCP_CLIENT
 retains failures observed before the deadline, and detaches stale work so it can never publish a
 connection later.
 
+## Identity-isolated client leases
+
+Hosts that create separate client runtimes for different credential or authorization contexts can
+use `McpClientLeaseManager`. Its identity key is opaque: the manager uses `Map` equality and passes
+the key only to the host factory. Use a canonical, non-secret identifier that changes whenever any
+credential, allowed capability, upstream configuration, or other isolation-relevant input changes.
+Never place an access token, refresh token, authorization code, or other secret in the key.
+
+```ts
+import { McpClientLeaseManager, McpClientRuntime } from "@nestm/mcp-client";
+
+const clients = new McpClientLeaseManager({
+	maxResources: 64,
+	idleTtlMs: 30_000,
+	async create(identityKey: string, { signal }) {
+		const definition = await loadServerDefinition(identityKey, { signal });
+		const runtime = new McpClientRuntime({ servers: [definition] });
+		await runtime.connect(definition.name, { signal });
+		return { runtime, serverName: definition.name };
+	},
+	async close(resource) {
+		await resource.runtime.close();
+	},
+});
+
+const lease = await clients.acquire(identityKey); // defaults to releaseMode: "close"
+try {
+	await lease.resource.runtime.listTools(lease.resource.serverName);
+} finally {
+	await lease.release(); // idempotent; closes after the final reference
+}
+```
+
+Concurrent acquisitions for one key share one in-flight factory and maintain independent
+references. An existing generation pins its release mode and rejects a conflicting acquisition.
+The default `"close"` mode is intended for credential-bound resources. Only resources that are
+safe to retain and reuse should opt into `{ releaseMode: "idle" }`; they remain cached until
+`idleTtlMs` expires and may be evicted earlier to admit another identity within `maxResources`.
+
+`invalidate(identityKey)` retires the matching generation before awaiting its close. It aborts a
+pending factory and prevents a late result from publishing, even if a replacement generation has
+already started. Active leases drain before their resource closes, so callers must release every
+accepted lease. `close()` and `Symbol.asyncDispose` reject new acquisitions, abort all factories,
+drain active leases, and settle all resource closes. The manager cannot forcibly stop a factory
+that ignores its abort signal, so factories must honor cancellation. Snapshots are aggregate-only,
+and manager-created errors never include identity keys or resources.
+
 ## Configure the official client
 
 Use `configureClient` before connection to register SDK request handlers, notification handlers,
