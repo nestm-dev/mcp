@@ -1,5 +1,21 @@
 # @nestm/mcp
 
+## 0.1.0-alpha.3
+
+### Patch Changes
+
+- 758c3a3: Declare `@nestm/mcp-auth` as a runtime dependency so production installs can import the built Nest
+  module's OAuth integration without relying on development dependencies. Add a first-class
+  `@nestm/mcp/client` entrypoint for outbound-only Nest applications without loading inbound server,
+  gateway, or OAuth implementation code.
+- Updated dependencies [758c3a3]
+- Updated dependencies [bd245f5]
+  - @nestm/mcp-client@0.1.0-alpha.3
+  - @nestm/mcp-core@0.1.0-alpha.3
+  - @nestm/mcp-server@0.1.0-alpha.3
+  - @nestm/mcp-auth@0.1.0-alpha.3
+  - @nestm/mcp-gateway@0.1.0-alpha.3
+
 ## 0.1.0-alpha.2
 
 ### Minor Changes

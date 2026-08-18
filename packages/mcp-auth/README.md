@@ -7,12 +7,12 @@ servers. It targets the stateless 2026-07-28 revision and builds on
 > Alpha. Ships both the resource-server building blocks (Client ID Metadata Document resolution,
 > token storage, JWT issuing/verification) and the OAuth 2.1 authorization-server proxy
 > (`McpOAuthProxy`: authorize/consent/callback/token with two-tier PKCE, refresh rotation, and
-> upstream token swap). Durable/encrypted stores and RFC 8693 token exchange remain planned.
+> upstream token swap), durable/encrypted stores, and RFC 8693 token exchange.
 
 ## Install
 
 ```sh
-pnpm add @nestm/mcp-auth @modelcontextprotocol/client @modelcontextprotocol/core @modelcontextprotocol/server
+pnpm add @nestm/mcp-auth@alpha @modelcontextprotocol/client@2 @modelcontextprotocol/core@2 @modelcontextprotocol/server@2
 # jose is an optional peer, needed only for createJwksTokenVerifier
 pnpm add jose
 ```

@@ -2,7 +2,7 @@
 
 Framework-neutral runtime primitives for building MCP clients, servers, gateways, and NestJS adapters. This package deliberately has no dependency on NestJS or an MCP SDK; adapters translate their SDK-specific calls into these stable operation primitives.
 
-> `0.1.0-alpha.0` is an initial alpha. Public APIs may change before the first stable release.
+> This package is alpha. Public APIs may change before the first stable release.
 
 ## What it provides
 
@@ -17,7 +17,7 @@ Framework-neutral runtime primitives for building MCP clients, servers, gateways
 ## Installation
 
 ```sh
-pnpm add @nestm/mcp-core
+pnpm add @nestm/mcp-core@alpha
 ```
 
 ## Compose an operation pipeline

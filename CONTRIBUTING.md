@@ -73,6 +73,45 @@ pnpm changeset
 
 The packages currently release as a fixed alpha group. Choose the smallest semver impact that accurately describes the public change and explain migration requirements in the summary.
 
+## Releasing
+
+Changesets on `main` create or update the release pull request. Merging it publishes through npm
+Trusted Publishing (OIDC, with provenance), tags every package, and creates GitHub releases. The
+guarded publisher refuses to run outside GitHub Actions on `main`, from a dirty worktree, with a
+version set outside the Changesets fixed group, or with a prerelease identifier that disagrees with
+`.changeset/pre.json`.
+
+### One-time npm bootstrap
+
+npm only lets maintainers configure a trusted publisher after a package exists. Bootstrap the first
+prerelease interactively from a clean, fully verified checkout. Publish in dependency order and
+always use the alpha dist-tag:
+
+```sh
+pnpm run verify
+for PKG in mcp-core mcp-client mcp-server mcp-observability mcp-auth mcp-gateway mcp; do
+  (cd "packages/$PKG" && pnpm publish --access public --tag alpha --provenance=false)
+done
+```
+
+Use pnpm here because it rewrites internal `workspace:^` ranges in the published manifests. Complete
+npm's browser or two-factor flow locally; never add an npm token to this repository. Then bind each
+package to the routine release workflow:
+
+```sh
+for PKG in @nestm/mcp-core @nestm/mcp-client @nestm/mcp-server @nestm/mcp-auth @nestm/mcp-observability @nestm/mcp-gateway @nestm/mcp; do
+  npm trust github "$PKG" \
+    --file release.yml \
+    --repository nestm-dev/mcp \
+    --environment release \
+    --allow-publish \
+    --yes
+done
+```
+
+After this bootstrap, all publication must use the GitHub release workflow. Once prerelease mode is
+exited, publishing falls back to Changesets' stable-release behavior automatically.
+
 ## Pull requests
 
 Before requesting review:

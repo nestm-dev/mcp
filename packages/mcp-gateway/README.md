@@ -2,7 +2,7 @@
 
 Policy-enforced MCP v2 gateway composition for exposing tools, prompts, concrete resources, resource templates, and completion from multiple upstream MCP clients through an `@nestm/mcp-server` feature.
 
-> `0.1.0-alpha.0` is an initial alpha. Public APIs may change before the first stable release.
+> This package is alpha. Public APIs may change before the first stable release.
 
 ## Design guarantees
 
@@ -19,7 +19,7 @@ Policy-enforced MCP v2 gateway composition for exposing tools, prompts, concrete
 ## Installation
 
 ```sh
-pnpm add @nestm/mcp-gateway @nestm/mcp-client @nestm/mcp-server
+pnpm add @nestm/mcp-gateway@alpha @nestm/mcp-client@alpha @nestm/mcp-server@alpha @modelcontextprotocol/node@2 @modelcontextprotocol/server@2
 ```
 
 ## Create an aggregate gateway

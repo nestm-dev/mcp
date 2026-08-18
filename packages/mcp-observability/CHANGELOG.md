@@ -1,5 +1,11 @@
 # @nestm/mcp-observability
 
+## 0.1.0-alpha.3
+
+### Patch Changes
+
+- @nestm/mcp-core@0.1.0-alpha.3
+
 ## 0.1.0-alpha.2
 
 ### Patch Changes

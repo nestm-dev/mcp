@@ -4,6 +4,12 @@ Framework-neutral MCP v2 server runtime built on the official `@modelcontextprot
 2.x SDK. Install Zod 4.2 or newer alongside it when using the recommended schema authoring style
 below.
 
+## Install
+
+```sh
+pnpm add @nestm/mcp-server@alpha @modelcontextprotocol/node@2 @modelcontextprotocol/server@2 zod@^4.4.3
+```
+
 ```ts
 import { McpServerRuntime } from "@nestm/mcp-server";
 import { z } from "zod/v4";

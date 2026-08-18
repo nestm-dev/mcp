@@ -13,12 +13,15 @@
 	"changesets": [
 		"http-hardening-posture",
 		"initial-mcp-runtime",
+		"mcp-auth-runtime-dependency",
 		"nest-client-module",
 		"nest-native-public-surface",
 		"oauth-auth-package",
 		"oauth-durable-stores-token-exchange",
+		"opaque-client-leases",
 		"plain-capability-decorators",
 		"portable-tool-schema",
-		"secure-catalog-transforms"
+		"secure-catalog-transforms",
+		"strict-outbound-oauth-runtime"
 	]
 }

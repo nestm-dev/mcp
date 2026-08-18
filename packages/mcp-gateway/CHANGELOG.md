@@ -1,5 +1,15 @@
 # @nestm/mcp-gateway
 
+## 0.1.0-alpha.3
+
+### Patch Changes
+
+- Updated dependencies [758c3a3]
+- Updated dependencies [bd245f5]
+  - @nestm/mcp-client@0.1.0-alpha.3
+  - @nestm/mcp-core@0.1.0-alpha.3
+  - @nestm/mcp-server@0.1.0-alpha.3
+
 ## 0.1.0-alpha.2
 
 ### Patch Changes

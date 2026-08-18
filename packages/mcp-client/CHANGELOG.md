@@ -1,5 +1,24 @@
 # @nestm/mcp-client
 
+## 0.1.0-alpha.3
+
+### Minor Changes
+
+- 758c3a3: Add a bounded, framework-neutral `McpClientLeaseManager` for opaque, non-secret identity keys. It
+  deduplicates concurrent resource creation, maintains active reference counts, drains retired
+  generations safely, supports explicit idle reuse, and defaults every resource to close on final
+  release.
+- bd245f5: Add a dedicated `@nestm/mcp-client/oauth` surface for strict, host-managed outbound OAuth. It
+  provides exact resource and issuer discovery, mandatory endpoint policy checks, PKCE and
+  digest-only state transactions, pre-registered client authentication, revisioned credential CAS,
+  durable pre-dispatch refresh claims, bounded refresh coordination, invalidation hooks for runtime
+  lease eviction, and a per-binding minimal transport provider without implicit redirects or Dynamic
+  Client Registration.
+
+### Patch Changes
+
+- @nestm/mcp-core@0.1.0-alpha.3
+
 ## 0.1.0-alpha.2
 
 ### Patch Changes

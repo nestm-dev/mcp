@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/mcp-client",
-	"version": "0.1.0-alpha.2",
+	"version": "0.1.0-alpha.3",
 	"description": "Multi-server MCP v2 client runtime with transport, middleware, lifecycle, and discovery support.",
 	"license": "BSD-3-Clause",
 	"author": "nestm",
@@ -9,7 +9,7 @@
 		"url": "git+https://github.com/nestm-dev/mcp.git",
 		"directory": "packages/mcp-client"
 	},
-	"homepage": "https://github.com/nestm-dev/mcp#readme",
+	"homepage": "https://github.com/nestm-dev/mcp/tree/main/packages/mcp-client#readme",
 	"bugs": {
 		"url": "https://github.com/nestm-dev/mcp/issues"
 	},
@@ -28,7 +28,6 @@
 	"engines": {
 		"node": ">=22.13.0"
 	},
-	"packageManager": "pnpm@11.20.0",
 	"types": "./dist/index.d.mts",
 	"exports": {
 		".": {

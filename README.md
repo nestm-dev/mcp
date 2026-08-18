@@ -5,7 +5,7 @@ NestM MCP is an alpha-stage Model Context Protocol runtime for NestJS applicatio
 The primary use case is an artifact or agent runtime that needs to expose trusted application capabilities and consume many MCP servers through one controlled NestJS layer. The runtime is intended to make authentication, authorization, routing, lifecycle ownership, and telemetry explicit rather than hiding them behind a global SDK singleton.
 
 > [!WARNING]
-> This repository currently targets NestJS `12.0.0-alpha.5`, TypeScript `7.0.2`, MCP SDK `2.0.0`, and Node.js `>=22.13.0`. Every package is `0.1.0-alpha.1`. Expect breaking changes while NestJS 12 and these packages remain alpha.
+> This repository currently targets NestJS `12.0.0-alpha.5`, TypeScript `7.0.2`, MCP SDK `2.0.0`, and Node.js `>=22.13.0`. Every package remains pre-1.0 alpha. Expect breaking changes while NestJS 12 and these packages remain alpha.
 
 ## Packages
 
@@ -40,6 +40,18 @@ flowchart BT
 ```
 
 `@nestm/mcp-core` is not a replacement for `@modelcontextprotocol/core`: the NestM package owns runtime composition contracts, while the official package owns raw protocol schemas. Client and server adapters depend only on the official SDK packages they actually use.
+
+## Install
+
+The packages currently publish on the `alpha` dist-tag. Install the NestJS integration with its
+required peers:
+
+```sh
+pnpm add @nestm/mcp@alpha @modelcontextprotocol/client@2 @modelcontextprotocol/core@2 @modelcontextprotocol/node@2 @modelcontextprotocol/server@2 @nestjs/common@12.0.0-alpha.5 @nestjs/core@12.0.0-alpha.5 reflect-metadata rxjs zod@^4.4.3
+```
+
+Framework-neutral applications can instead install the individual `@nestm/mcp-*@alpha` packages
+they use.
 
 ## MCP v2 model
 

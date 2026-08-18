@@ -32,10 +32,12 @@
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage",
-		"verify:pack": "pnpm run build && pnpm --filter \"./packages/*\" exec publint --strict",
+		"verify:pack": "pnpm run build && pnpm --filter \"./packages/*\" exec publint --strict && node scripts/check-package-dependencies.mjs",
 		"verify:attw": "pnpm run build && for package in packages/*; do pnpm exec attw --pack \"$package\" --profile esm-only || exit 1; done",
 		"verify": "pnpm run check && pnpm run test && pnpm run verify:pack && pnpm run verify:attw",
-		"changeset": "changeset"
+		"changeset": "changeset",
+		"release:version": "node scripts/version.mjs",
+		"release": "node scripts/publish.mjs"
 	},
 	"devDependencies": {
 		"@arethetypeswrong/cli": "0.18.5",

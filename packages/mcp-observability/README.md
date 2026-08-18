@@ -2,6 +2,12 @@
 
 Backend-neutral observability for NestM MCP clients, servers, and gateways. The package consumes the operation and lifecycle contracts from `@nestm/mcp-core`; it does not depend on a logging, metrics, or tracing SDK.
 
+## Install
+
+```sh
+pnpm add @nestm/mcp-observability@alpha
+```
+
 ## Safety defaults
 
 Automatic telemetry contains only bounded protocol dimensions: runtime role, operation name and kind, capability, and (optionally) the named target. Principal data, operation payloads, arbitrary context attributes, operation/request/session IDs, error messages, stacks, tokens, cookies, and credentials are excluded by default.

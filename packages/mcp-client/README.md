@@ -27,7 +27,7 @@ client SDK `>=2 <3`.
 ## Install
 
 ```sh
-pnpm add @nestm/mcp-client @modelcontextprotocol/client
+pnpm add @nestm/mcp-client@alpha @modelcontextprotocol/client@2
 ```
 
 ## HTTP runtime
