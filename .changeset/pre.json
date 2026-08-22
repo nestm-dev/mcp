@@ -9,11 +9,15 @@
 		"@nestm/mcp-auth": "0.0.0",
 		"@nestm/mcp-observability": "0.0.0",
 		"@nestm/mcp-gateway": "0.0.0",
-		"@nestm/mcp": "0.0.0"
+		"@nestm/mcp": "0.0.0",
+		"@nestm/mcp-control-plane-api": "0.0.0",
+		"@nestm/mcp-control-plane-web": "0.1.0"
 	},
 	"changesets": [
+		"dynamic-gateway-topology",
 		"http-hardening-posture",
 		"initial-mcp-runtime",
+		"managed-runtime-generations",
 		"mcp-auth-runtime-dependency",
 		"nest-client-module",
 		"nest-native-public-surface",
