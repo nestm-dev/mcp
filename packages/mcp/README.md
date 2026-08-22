@@ -136,6 +136,41 @@ binds them before constructing the runtime. The dedicated `@nestm/mcp/client` en
 load inbound server, gateway, or OAuth implementation code. Outside Nest, continue constructing
 `McpClientRuntime` directly from `@nestm/mcp-client`.
 
+For dynamic, already-admitted client generations, use the dedicated manager entrypoint:
+
+```ts
+import { Module } from "@nestjs/common";
+import { McpManagerModule } from "@nestm/mcp/manager";
+
+const GENERATION_RESOLVER = Symbol("GENERATION_RESOLVER");
+const LIFECYCLE_OBSERVER = Symbol("LIFECYCLE_OBSERVER");
+
+@Module({
+	imports: [
+		McpManagerModule.forRoot({
+			generationResolver: GENERATION_RESOLVER,
+			observer: LIFECYCLE_OBSERVER,
+			maxConnections: 16,
+			collaborators: {
+				providers: [
+					{ provide: GENERATION_RESOLVER, useExisting: AdmittedGenerationResolver },
+					{ provide: LIFECYCLE_OBSERVER, useExisting: RuntimeMetricsObserver },
+				],
+			},
+		}),
+	],
+})
+export class ManagedUpstreamsModule {}
+```
+
+Inject `McpManagerService` from `@nestm/mcp/manager`; it extends the framework-neutral
+`McpRuntimeManager` from `@nestm/mcp-manager` and closes deterministically during Nest module
+shutdown. `forRootAsync()` supports normal imported configuration providers. Generation resolution
+and lifecycle observation are provider-token seams. An optional `clock` token must implement
+`now()`, and `listenerErrorReporter` must implement `report(error, event)`; raw callbacks do not live
+in Nest module options. Records, endpoint admission, credentials, and durable reconciliation remain
+application responsibilities.
+
 The client adapter resolves these provider-token seams:
 
 | Client option                                 | Provider contract                                      |

@@ -4,6 +4,7 @@
 	"initialVersions": {
 		"@nestm/mcp-core": "0.0.0",
 		"@nestm/mcp-client": "0.0.0",
+		"@nestm/mcp-manager": "0.0.0",
 		"@nestm/mcp-server": "0.0.0",
 		"@nestm/mcp-auth": "0.0.0",
 		"@nestm/mcp-observability": "0.0.0",

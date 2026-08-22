@@ -74,6 +74,8 @@ import type {
 	McpGatewayResourceTemplatePolicyInput,
 	McpGatewayResourceTemplateReadOperationInput,
 	McpGatewayToolClient,
+	McpGatewayTopologyMutationOptions,
+	McpGatewayTopologySnapshot,
 	McpGatewayUpstream,
 } from "./mcp-gateway.types.ts";
 
@@ -109,7 +111,8 @@ interface GatewayDiscoveryFlight {
 
 /** Long-lived gateway runtime; expose it through one or more MCP server definitions. */
 export class McpGateway implements AsyncDisposable {
-	readonly #upstreams: ReadonlyMap<string, McpGatewayUpstream>;
+	#upstreams: ReadonlyMap<string, McpGatewayUpstream>;
+	readonly #dynamicUpstreams: boolean;
 	readonly #policy: McpGatewayPolicy;
 	readonly #nameCodec: NonNullable<McpGatewayOptions["nameCodec"]>;
 	readonly #promptNameCodec: NonNullable<McpGatewayOptions["promptNameCodec"]>;
@@ -138,12 +141,16 @@ export class McpGateway implements AsyncDisposable {
 	readonly #lifecycle: GatewayLifecycle;
 	#discoveryCacheBarrier: Promise<void> = Promise.resolve();
 	#discoveryEpoch = 0;
+	readonly #fencedUpstreamNames = new Set<string>();
+	#topologyRevision = 0;
+	#topologyMutationTail: Promise<void> = Promise.resolve();
 
 	constructor(options: McpGatewayOptions) {
 		if (typeof options?.policy?.authorize !== "function") {
 			throw new McpGatewayError("INVALID_OPTIONS", "A gateway authorization policy is required.");
 		}
 		this.#upstreams = snapshotUpstreams(options.upstreams);
+		this.#dynamicUpstreams = options.dynamicUpstreams === true;
 		this.#policy = options.policy;
 		this.#nameCodec = options.nameCodec ?? new GatewayNameCodec();
 		this.#promptNameCodec = options.promptNameCodec ?? new GatewayPromptNameCodec();
@@ -241,6 +248,41 @@ export class McpGateway implements AsyncDisposable {
 		return this.#feature;
 	}
 
+	/** Credential-free, deterministic view of the current upstream membership. */
+	topology(): McpGatewayTopologySnapshot {
+		this.#lifecycle.assertOpen();
+		return this.#topologySnapshot();
+	}
+
+	/** Attach one upstream without rebuilding the owning server runtime. */
+	attachUpstream(
+		upstream: McpGatewayUpstream,
+		options: McpGatewayTopologyMutationOptions = {},
+	): Promise<McpGatewayTopologySnapshot> {
+		return this.#lifecycle.track(() => this.#attachTopology(upstream, options.expectedRevision));
+	}
+
+	/** Detach one namespace. Accepted operations retain their captured upstream snapshot. */
+	detachUpstream(
+		upstreamName: string,
+		options: McpGatewayTopologyMutationOptions = {},
+	): Promise<McpGatewayTopologySnapshot> {
+		return this.#lifecycle.track(() =>
+			this.#detachTopology(upstreamName, options.expectedRevision),
+		);
+	}
+
+	/** Atomically replace one routing identity with a freshly prepared upstream. */
+	replaceUpstream(
+		upstreamName: string,
+		replacement: McpGatewayUpstream,
+		options: McpGatewayTopologyMutationOptions = {},
+	): Promise<McpGatewayTopologySnapshot> {
+		return this.#lifecycle.track(() =>
+			this.#replaceTopology(upstreamName, replacement, options.expectedRevision),
+		);
+	}
+
 	listProjectedTools(
 		context: McpGatewayRequestContext = {},
 	): Promise<readonly McpGatewayProjectedTool[]> {
@@ -318,10 +360,11 @@ export class McpGateway implements AsyncDisposable {
 	/** Discover, authorize, and project every visible upstream tool. */
 	async #listProjectedTools(
 		context: McpGatewayRequestContext = {},
+		upstreams: ReadonlyMap<string, McpGatewayUpstream> = this.#upstreams,
 	): Promise<readonly McpGatewayProjectedTool[]> {
 		const resolved = await this.#resolveContext(context);
 		const groups = await Promise.all(
-			[...this.#upstreams.values()].map(async (upstream) => {
+			[...upstreams.values()].map(async (upstream) => {
 				const snapshot = await this.#discover(upstream, resolved, "tools");
 				const visible: McpGatewayProjectedTool[] = [];
 				for (const tool of snapshot.tools) {
@@ -337,10 +380,11 @@ export class McpGateway implements AsyncDisposable {
 	/** Discover, authorize, and project every visible upstream prompt. */
 	async #listProjectedPrompts(
 		context: McpGatewayRequestContext = {},
+		upstreams: ReadonlyMap<string, McpGatewayUpstream> = this.#upstreams,
 	): Promise<readonly McpGatewayProjectedPrompt[]> {
 		const resolved = await this.#resolveContext(context);
 		const groups = await Promise.all(
-			[...this.#upstreams.values()].map(async (upstream) => {
+			[...upstreams.values()].map(async (upstream) => {
 				const snapshot = await this.#discover(upstream, resolved, "prompts");
 				const visible: McpGatewayProjectedPrompt[] = [];
 				for (const prompt of snapshot.prompts ?? []) {
@@ -356,10 +400,11 @@ export class McpGateway implements AsyncDisposable {
 	/** Discover, authorize, and project every visible concrete upstream resource. */
 	async #listProjectedResources(
 		context: McpGatewayRequestContext = {},
+		upstreams: ReadonlyMap<string, McpGatewayUpstream> = this.#upstreams,
 	): Promise<readonly McpGatewayProjectedResource[]> {
 		const resolved = await this.#resolveContext(context);
 		const groups = await Promise.all(
-			[...this.#upstreams.values()].map(async (upstream) => {
+			[...upstreams.values()].map(async (upstream) => {
 				const snapshot = await this.#discover(upstream, resolved, "resources");
 				const visible: McpGatewayProjectedResource[] = [];
 				for (const resource of snapshot.resources ?? []) {
@@ -375,10 +420,11 @@ export class McpGateway implements AsyncDisposable {
 	/** Discover, authorize, and project every visible upstream resource template. */
 	async #listProjectedResourceTemplates(
 		context: McpGatewayRequestContext = {},
+		upstreams: ReadonlyMap<string, McpGatewayUpstream> = this.#upstreams,
 	): Promise<readonly McpGatewayProjectedResourceTemplate[]> {
 		const resolved = await this.#resolveContext(context);
 		const groups = await Promise.all(
-			[...this.#upstreams.values()].map(async (upstream) => {
+			[...upstreams.values()].map(async (upstream) => {
 				const snapshot = await this.#discover(upstream, resolved, "resourceTemplates");
 				const visible: McpGatewayProjectedResourceTemplate[] = [];
 				for (const resourceTemplate of snapshot.resourceTemplates ?? []) {
@@ -880,38 +926,43 @@ export class McpGateway implements AsyncDisposable {
 		buildContext: McpServerBuildContext,
 	): Promise<void> {
 		const context = contextFromBuild(buildContext);
+		const upstreams = this.#upstreams;
 		const [projectedTools, projectedPrompts, projectedResources, projectedResourceTemplates] =
 			await Promise.all([
-				this.listProjectedTools(context),
-				this.listProjectedPrompts(context),
-				this.listProjectedResources(context),
-				this.listProjectedResourceTemplates(context),
+				this.#listProjectedTools(context, upstreams),
+				this.#listProjectedPrompts(context, upstreams),
+				this.#listProjectedResources(context, upstreams),
+				this.#listProjectedResourceTemplates(context, upstreams),
 			]);
 		const resolved = await this.#resolveContext(context);
 		const clients = new Map(
 			await Promise.all(
-				[...this.#upstreams.values()].map(
+				[...upstreams.values()].map(
 					async (upstream) => [upstream.name, await resolveClient(upstream, resolved)] as const,
 				),
 			),
 		);
-		const promptsSupported = [...clients.values()].some(hasPromptCapability);
-		const resourcesSupported = [...clients.values()].some(
-			(client) => hasResourceCapability(client) || hasResourceTemplateCapability(client),
-		);
+		const promptsSupported =
+			this.#dynamicUpstreams || [...clients.values()].some(hasPromptCapability);
+		const resourcesSupported =
+			this.#dynamicUpstreams ||
+			[...clients.values()].some(
+				(client) => hasResourceCapability(client) || hasResourceTemplateCapability(client),
+			);
 		const completionSupported =
-			projectedPrompts.some(
+			!this.#dynamicUpstreams &&
+			(projectedPrompts.some(
 				(projected) =>
 					(projected.prompt.arguments?.length ?? 0) > 0 &&
 					hasCompletionCapability(requireInstalledClient(clients, projected.upstreamName)),
 			) ||
-			projectedResourceTemplates.some(
-				(projected) =>
-					new UriTemplate(projected.projectedTemplateUri).variableNames.length > 0 &&
-					hasCompletionCapability(requireInstalledClient(clients, projected.upstreamName)),
-			);
-		// A static gateway snapshot cannot honor notification/subscription promises
-		// owned by a different feature for the projected gateway namespace.
+				projectedResourceTemplates.some(
+					(projected) =>
+						new UriTemplate(projected.projectedTemplateUri).variableNames.length > 0 &&
+						hasCompletionCapability(requireInstalledClient(clients, projected.upstreamName)),
+				));
+		// Dynamic HTTP hosts may emit list-changed invalidations through the owning
+		// persistent runtime notifier. Resource subscriptions are still not bridged.
 		const currentCapabilities = server.server.getCapabilities();
 		assertGatewayCapabilityOwnership(currentCapabilities, {
 			tools: true,
@@ -934,12 +985,12 @@ export class McpGateway implements AsyncDisposable {
 			assertGatewayHandlerOwnership(server.server, ["completion/complete"]);
 		}
 		server.server.registerCapabilities({
-			tools: { listChanged: false },
-			...(promptsSupported ? { prompts: { listChanged: false } } : {}),
+			tools: { listChanged: this.#dynamicUpstreams },
+			...(promptsSupported ? { prompts: { listChanged: this.#dynamicUpstreams } } : {}),
 			...(resourcesSupported
 				? {
 						resources: {
-							listChanged: false,
+							listChanged: this.#dynamicUpstreams,
 							subscribe: false,
 						},
 					}
@@ -1651,13 +1702,143 @@ export class McpGateway implements AsyncDisposable {
 
 	#requireUpstream(upstreamName: string): McpGatewayUpstream {
 		const upstream = this.#upstreams.get(upstreamName);
-		if (upstream === undefined) {
+		if (upstream === undefined || this.#fencedUpstreamNames.has(upstreamName)) {
 			throw new McpGatewayError(
 				"UNKNOWN_UPSTREAM",
 				`No MCP gateway upstream named "${upstreamName}" is registered.`,
 			);
 		}
 		return upstream;
+	}
+
+	#topologySnapshot(): McpGatewayTopologySnapshot {
+		return Object.freeze({
+			revision: this.#topologyRevision,
+			upstreamNames: Object.freeze([...this.#upstreams.keys()].toSorted()),
+		});
+	}
+
+	#assertDynamicTopology(): void {
+		if (this.#dynamicUpstreams) return;
+		throw new McpGatewayError(
+			"STATIC_TOPOLOGY",
+			"Runtime upstream mutations require dynamicUpstreams: true.",
+		);
+	}
+
+	#attachTopology(
+		upstream: McpGatewayUpstream,
+		expectedRevision: number | undefined,
+	): Promise<McpGatewayTopologySnapshot> {
+		this.#assertDynamicTopology();
+		const normalizedUpstream = snapshotUpstreams([upstream]).values().next().value;
+		if (normalizedUpstream === undefined) {
+			throw new McpGatewayError("INVALID_OPTIONS", "An upstream definition is required.");
+		}
+		return this.#queueTopologyMutation(expectedRevision, (current) => {
+			if (current.has(normalizedUpstream.name)) {
+				throw new McpGatewayError(
+					"DUPLICATE_UPSTREAM",
+					`An MCP gateway upstream named "${normalizedUpstream.name}" is already registered.`,
+				);
+			}
+			const next = new Map(current);
+			next.set(normalizedUpstream.name, normalizedUpstream);
+			return next;
+		});
+	}
+
+	#detachTopology(
+		upstreamName: string,
+		expectedRevision: number | undefined,
+	): Promise<McpGatewayTopologySnapshot> {
+		this.#assertDynamicTopology();
+		const normalizedName = assertUpstreamName(upstreamName);
+		return this.#queueTopologyMutation(expectedRevision, (current) => {
+			const next = new Map(current);
+			if (!next.delete(normalizedName)) {
+				throw new McpGatewayError(
+					"UNKNOWN_UPSTREAM",
+					`No MCP gateway upstream named "${normalizedName}" is registered.`,
+				);
+			}
+			return next;
+		});
+	}
+
+	#replaceTopology(
+		upstreamName: string,
+		replacement: McpGatewayUpstream,
+		expectedRevision: number | undefined,
+	): Promise<McpGatewayTopologySnapshot> {
+		this.#assertDynamicTopology();
+		const normalizedName = assertUpstreamName(upstreamName);
+		const normalizedReplacement = snapshotUpstreams([replacement]).values().next().value;
+		if (normalizedReplacement === undefined) {
+			throw new McpGatewayError("INVALID_OPTIONS", "A replacement upstream is required.");
+		}
+		if (normalizedReplacement.name === normalizedName) {
+			throw new McpGatewayError(
+				"INVALID_OPTIONS",
+				"A replacement upstream must use a fresh routing name.",
+			);
+		}
+		return this.#queueTopologyMutation(expectedRevision, (current) => {
+			if (!current.has(normalizedName)) {
+				throw new McpGatewayError(
+					"UNKNOWN_UPSTREAM",
+					`No MCP gateway upstream named "${normalizedName}" is registered.`,
+				);
+			}
+			if (current.has(normalizedReplacement.name)) {
+				throw new McpGatewayError(
+					"DUPLICATE_UPSTREAM",
+					`An MCP gateway upstream named "${normalizedReplacement.name}" is already registered.`,
+				);
+			}
+			const next = new Map(current);
+			next.delete(normalizedName);
+			next.set(normalizedReplacement.name, normalizedReplacement);
+			return next;
+		});
+	}
+
+	#queueTopologyMutation(
+		expectedRevision: number | undefined,
+		mutate: (
+			current: ReadonlyMap<string, McpGatewayUpstream>,
+		) => ReadonlyMap<string, McpGatewayUpstream>,
+	): Promise<McpGatewayTopologySnapshot> {
+		const predecessor = this.#topologyMutationTail;
+		const mutation = predecessor
+			.catch(() => undefined)
+			.then(async () => {
+				this.#lifecycle.assertOpen();
+				assertTopologyRevision(expectedRevision, this.#topologyRevision);
+				const current = this.#upstreams;
+				const next = mutate(current);
+				const removedNames = [...current.keys()].filter((name) => !next.has(name));
+				for (const name of removedNames) this.#fencedUpstreamNames.add(name);
+
+				try {
+					// Removed routes reject new invocation admission before the first await.
+					// Cache cleanup must settle before the candidate topology is committed.
+					await this.#invalidateAllDiscovery();
+					this.#lifecycle.assertOpen();
+					this.#upstreams = new Map(
+						[...next.entries()].toSorted(([left], [right]) => left.localeCompare(right, "en-US")),
+					);
+					this.#topologyRevision += 1;
+					return this.#topologySnapshot();
+				} finally {
+					for (const name of removedNames) this.#fencedUpstreamNames.delete(name);
+				}
+			});
+		this.#topologyMutationTail = mutation.then(
+			() => undefined,
+			() => undefined,
+		);
+		return mutation;
 	}
 
 	async #resolveContext(
@@ -1756,6 +1937,28 @@ function snapshotUpstreams(
 		snapshot.set(upstream.name, Object.freeze({ ...upstream }));
 	}
 	return snapshot;
+}
+
+function assertUpstreamName(upstreamName: string): string {
+	if (typeof upstreamName !== "string" || upstreamName.length === 0) {
+		throw new McpGatewayError("INVALID_OPTIONS", "upstreamName must be a non-empty string.");
+	}
+	return upstreamName;
+}
+
+function assertTopologyRevision(expected: number | undefined, actual: number): void {
+	if (expected === undefined) return;
+	if (!Number.isSafeInteger(expected) || expected < 0) {
+		throw new McpGatewayError(
+			"INVALID_OPTIONS",
+			"expectedRevision must be a non-negative safe integer.",
+		);
+	}
+	if (expected === actual) return;
+	throw new McpGatewayError(
+		"TOPOLOGY_REVISION_CONFLICT",
+		"The MCP gateway topology changed after it was read.",
+	);
 }
 
 function snapshotMiddleware(

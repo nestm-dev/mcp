@@ -225,7 +225,7 @@ const runtime = new McpClientRuntime({
 				command: "node",
 				args: ["./dist/files-server.mjs"],
 				env: { MCP_ROOT: "/srv/artifacts" },
-				stderr: "pipe",
+				stderr: "inherit",
 			},
 		},
 	],
@@ -237,6 +237,77 @@ await runtime.connect("local-files");
 The default factory returns the official `StdioClientTransport` class exactly. That matters for
 the SDK's v2 automatic negotiation path, which can probe stdio through a short-lived sibling
 process before opening the session process.
+
+Prefer `stderr: "inherit"` or `"ignore"` for a noisy child. The runtime does not expose an owned
+stdio transport before the handshake, so an unread `"pipe"` can fill and block the child. To capture
+stderr, provide a custom transport factory that attaches a reader before returning the transport.
+
+The built-in transport definitions cover Streamable HTTP and stdio. A standalone legacy SSE-only
+endpoint is not automatically detected or exposed as a first-class transport. OAuth transport
+authentication applies to HTTP; stdio credentials are an out-of-band concern for the spawned
+process and should be passed only through explicitly controlled configuration.
+
+## Opt-in external smoke test
+
+The repository's default test and verification commands never contact external services. To check
+the built package against a real Streamable HTTP or stdio server, run the package-local smoke
+command with environment-only configuration:
+
+```sh
+export MCP_SMOKE_TRANSPORT=http
+export MCP_SMOKE_URL=https://mcp.example.com/mcp
+export MCP_SMOKE_AUTH=bearer
+export MCP_SMOKE_BEARER_TOKEN="$(read-token-from-your-secret-store)"
+pnpm --filter @nestm/mcp-client smoke:external
+```
+
+Machine-to-machine OAuth uses the official client-credentials provider and requires issuer
+binding:
+
+```sh
+export MCP_SMOKE_AUTH=oauth-client-credentials
+export MCP_SMOKE_OAUTH_CLIENT_ID=smoke-client
+export MCP_SMOKE_OAUTH_CLIENT_SECRET="$(read-secret-from-your-secret-store)"
+export MCP_SMOKE_OAUTH_EXPECTED_ISSUER=https://identity.example.com
+export MCP_SMOKE_OAUTH_SCOPE="mcp:tools mcp:resources"
+pnpm --filter @nestm/mcp-client smoke:external
+```
+
+For stdio, arguments are a JSON string array and only explicitly named environment variables are
+forwarded in addition to the official SDK's safe default environment:
+
+```sh
+export MCP_SMOKE_TRANSPORT=stdio
+export MCP_SMOKE_COMMAND=node
+export MCP_SMOKE_ARGS_JSON='["./dist/server.mjs"]'
+export MCP_SMOKE_STDIO_ENV_NAMES=MCP_SERVER_TOKEN
+export MCP_SERVER_TOKEN="$(read-token-from-your-secret-store)"
+pnpm --filter @nestm/mcp-client smoke:external
+```
+
+The command connects, calls `server/discover` on the modern session transport, uses legacy `ping`
+only when that method is valid for the negotiated era, lists advertised tools/resources/prompts,
+and emits only counts and protocol metadata. Set `MCP_SMOKE_TOOL_NAME` and
+`MCP_SMOKE_TOOL_ARGUMENTS_JSON` to opt into a real tool call; its result is not printed and all
+nested scalar argument values are treated as secrets in harness diagnostics. `MCP_SMOKE_PROTOCOL`
+accepts `auto` (default), `legacy`, or a valid modern calendar date on or after `2026-07-28` to pin.
+Additional HTTP headers can be supplied through `MCP_SMOKE_HTTP_HEADERS_JSON`; their values are
+also treated as secrets in diagnostics.
+
+`MCP_SMOKE_TIMEOUT_MS` bounds the active phase starting before any development build and covering
+the MCP requests. On timeout, an active development build is terminated and
+in-flight MCP work is aborted. Runtime teardown then has a separate shutdown bound of the same
+duration, so cleanup can extend total elapsed time. Stdio stderr defaults to `ignore`. Setting
+`MCP_SMOKE_STDIO_STDERR=inherit` sends the child output directly to the terminal, outside the
+harness redactor; use it only with a trusted server that does not log credentials or payloads.
+
+The command refuses to run when `CI` is set unless `MCP_SMOKE_ALLOW_CI=true` is also set, and it is
+not referenced by the normal CI workflow. Use that override only in a trusted, explicitly
+configured job backed by a secret store. Interactive browser OAuth is intentionally not automated
+here; use a short-lived bearer token obtained by the host flow, while the hermetic interoperability
+suite covers authorization-code, PKCE, state, issuer, and reconnect behavior.
+
+Run `node packages/mcp-client/scripts/external-smoke.mjs --help` for every supported variable.
 
 ## Many servers
 

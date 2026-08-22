@@ -13,6 +13,7 @@ The primary use case is an artifact or agent runtime that needs to expose truste
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | `@nestm/mcp-core`          | Framework-neutral operation context, middleware, authorization decisions, and lifecycle observation                                                 | Implemented |
 | `@nestm/mcp-client`        | Named v2 client runtime, strict outbound OAuth, isolated leases, transports, typed requests, managed listening, and middleware                      | Implemented |
+| `@nestm/mcp-manager`       | Framework-neutral bounded ownership and lifecycle for opaque, dynamically resolved MCP client generations                                           | Implemented |
 | `@nestm/mcp-server`        | Framework-neutral per-request server runtime, feature registry, web-standard/Node/stdio serving, and OAuth resource-server wrapper                  | Implemented |
 | `@nestm/mcp-gateway`       | Tool, prompt, resource, resource-template, and completion projection with policy enforcement and auth-scoped discovery caching                      | Implemented |
 | `@nestm/mcp-auth`          | OAuth toolkit: Client ID Metadata Document resolution, SSRF-hardened discovery fetch, bounded token stores, and asymmetric JWT issuing/verification | Alpha       |
@@ -25,6 +26,8 @@ The dependency graph keeps protocol/runtime code below the Nest adapter:
 flowchart BT
   core["@nestm/mcp-core"]
   client["@nestm/mcp-client"] --> core
+  manager["@nestm/mcp-manager"] --> core
+  manager --> client
   server["@nestm/mcp-server"] --> core
   gateway["@nestm/mcp-gateway"] --> core
   gateway --> client
@@ -35,6 +38,7 @@ flowchart BT
   nest["@nestm/mcp"] --> core
   nest --> server
   nest --> client
+  nest --> manager
   nest --> gateway
   nest --> auth
 ```
@@ -52,6 +56,21 @@ pnpm add @nestm/mcp@alpha @modelcontextprotocol/client@2 @modelcontextprotocol/c
 
 Framework-neutral applications can instead install the individual `@nestm/mcp-*@alpha` packages
 they use.
+
+## MCP manager applications
+
+The private [`apps/control-plane-api`](apps/control-plane-api) NestJS application validates dynamic
+desired state, the public `@nestm/mcp-manager` lifecycle, generation replacement, catalog discovery,
+operation execution, bounded process-local metrics, and a live aggregate `/mcp/hub` whose upstreams
+can be attached or detached without restarting. The companion
+[`apps/control-plane-web`](apps/control-plane-web) application is an Inspector-style local manager
+built with the same Vinext, React, Tailwind, shadcn, TanStack Query, and Zod stack as Artifact
+Studio. Run both with `pnpm dev`.
+
+These applications deliberately keep connection authority and admission policy outside the
+published libraries. They validate the control-plane boundary for a future Artifact Studio adapter
+without turning tenant, workspace, credential, approval, or persistence concerns into
+`@nestm/mcp` behavior.
 
 ## MCP v2 model
 
@@ -194,7 +213,11 @@ lifecycle observer, and observer-error reporter. Register their singleton implem
 framework-neutral `@nestm/mcp-server` and `@nestm/mcp-gateway` APIs continue to accept raw
 implementations directly.
 
-Resource-template discovery/read and prompt/template completion are supported. Transparent multi-round `input_required` relaying and upstream-to-downstream notification bridging are not: those require sealed route-bound request state and a long-lived, authorization-partitioned subscription coordinator. Until that coordinator exists, the gateway does not claim list-change or resource-subscription support for projected capabilities.
+Resource-template discovery/read and prompt/template completion are supported. Dynamic gateways
+can publish host-owned list-change invalidations after attach/detach commits. Transparent
+multi-round `input_required`, upstream notification bridging, and resource subscriptions are not:
+those require sealed route-bound request state and a long-lived, authorization-partitioned
+subscription coordinator.
 
 ## Expose Nest providers as MCP capabilities
 

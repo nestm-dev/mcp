@@ -4,6 +4,10 @@ export default defineConfig({
 	resolve: {
 		alias: [
 			{
+				find: /^@nestm\/mcp-client\/oauth$/,
+				replacement: new URL("./packages/mcp-client/src/oauth/index.ts", import.meta.url).pathname,
+			},
+			{
 				find: /^@nestm\/mcp-server\/auth$/,
 				replacement: new URL("./packages/mcp-server/src/auth/index.ts", import.meta.url).pathname,
 			},
@@ -51,6 +55,10 @@ export default defineConfig({
 				replacement: new URL("./packages/mcp-client/src/index.ts", import.meta.url).pathname,
 			},
 			{
+				find: /^@nestm\/mcp-manager$/,
+				replacement: new URL("./packages/mcp-manager/src/index.ts", import.meta.url).pathname,
+			},
+			{
 				find: /^@nestm\/mcp-server$/,
 				replacement: new URL("./packages/mcp-server/src/index.ts", import.meta.url).pathname,
 			},
@@ -61,6 +69,10 @@ export default defineConfig({
 			{
 				find: /^@nestm\/mcp-observability$/,
 				replacement: new URL("./packages/mcp-observability/src/index.ts", import.meta.url).pathname,
+			},
+			{
+				find: /^@nestm\/mcp\/manager$/,
+				replacement: new URL("./packages/mcp/src/manager/index.ts", import.meta.url).pathname,
 			},
 			{
 				find: /^@nestm\/mcp$/,
@@ -75,7 +87,13 @@ export default defineConfig({
 			reporter: ["text", "json", "html"],
 		},
 		exclude: ["references/**", "**/dist/**", "**/node_modules/**"],
-		include: ["packages/**/*.spec.ts", "packages/**/*.test.ts", "tests/**/*.test.ts"],
+		include: [
+			"packages/**/*.spec.ts",
+			"packages/**/*.test.ts",
+			"apps/control-plane-api/**/*.spec.ts",
+			"apps/control-plane-api/**/*.test.ts",
+			"tests/**/*.test.ts",
+		],
 		testTimeout: 15_000,
 	},
 });

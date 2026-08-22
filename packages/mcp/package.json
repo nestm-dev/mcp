@@ -47,6 +47,11 @@
 			"import": "./dist/client/index.mjs",
 			"default": "./dist/client/index.mjs"
 		},
+		"./manager": {
+			"types": "./dist/manager/index.d.mts",
+			"import": "./dist/manager/index.mjs",
+			"default": "./dist/manager/index.mjs"
+		},
 		"./testing": {
 			"types": "./dist/testing/index.d.mts",
 			"import": "./dist/testing/index.mjs",
@@ -59,6 +64,7 @@
 		"@nestm/mcp-client": "workspace:^",
 		"@nestm/mcp-core": "workspace:^",
 		"@nestm/mcp-gateway": "workspace:^",
+		"@nestm/mcp-manager": "workspace:^",
 		"@nestm/mcp-server": "workspace:^"
 	},
 	"peerDependencies": {
