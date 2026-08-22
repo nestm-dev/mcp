@@ -10,6 +10,10 @@ The application owns desired connection records, endpoint admission, catalog sna
 DTOs, and any future authentication material. The runtime supervisor receives only an opaque,
 non-secret generation key and an admitted transport factory.
 
+Request DTOs carry strict Zod schemas through `@nestm/standard-schema`. Controllers attach those
+schemas through NestJS 12's native Standard Schema metadata, so runtime parsing and OpenAPI use the
+same contract without `class-validator` or `class-transformer`.
+
 ```text
 HTTP controllers
   -> ConnectionControlService

@@ -68,6 +68,11 @@ describe("control-plane Standard Schema DTOs", () => {
 				endpoint: "http://127.0.0.1/mcp",
 				unexpected: true,
 			},
+			{
+				authentication: { kind: "none", unexpected: true },
+				displayName: "Fixture",
+				endpoint: "http://127.0.0.1/mcp",
+			},
 			{ displayName: "Fixture", endpoint: "ftp://example.com/mcp" },
 		]) {
 			const result = await CreateConnectionDto.schema["~standard"].validate(input);

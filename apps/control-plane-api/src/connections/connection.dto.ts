@@ -18,7 +18,9 @@ const desiredConnectionStates = [
 ] as const satisfies readonly DesiredConnectionState[];
 
 const positiveSafeIntegerSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
-const httpEndpointSchema = z.url({ protocol: /^https?$/ });
+const httpEndpointSchema = z
+	.url({ protocol: /^https?$/ })
+	.meta({ example: "http://127.0.0.1:3200/mcp" });
 const promptArgumentsSchema = z
 	.record(
 		z.string().min(1).max(MAX_PROMPT_ARGUMENT_NAME_CHARACTERS),
@@ -40,6 +42,10 @@ const promptArgumentsSchema = z
 				message: "Arguments must fit within 64 KiB.",
 			});
 		}
+	})
+	.meta({
+		description: "At most 64 string arguments with a total serialized size of 64 KiB.",
+		maxProperties: MAX_PROMPT_ARGUMENTS,
 	});
 
 export const ConnectionAuthenticationSchema = z.strictObject({
@@ -53,8 +59,10 @@ export class ConnectionAuthenticationDto extends createStandardSchemaDto(
 export const CreateConnectionSchema = z.strictObject({
 	displayName: z.string().trim().min(1).max(120),
 	endpoint: httpEndpointSchema,
-	desiredState: z.enum(desiredConnectionStates).optional(),
-	authentication: ConnectionAuthenticationSchema.optional(),
+	desiredState: z.enum(desiredConnectionStates).optional().meta({ default: "offline" }),
+	authentication: ConnectionAuthenticationSchema.optional().meta({
+		default: { kind: "none" },
+	}),
 });
 
 export class CreateConnectionDto extends createStandardSchemaDto(CreateConnectionSchema) {}
@@ -62,7 +70,10 @@ export class CreateConnectionDto extends createStandardSchemaDto(CreateConnectio
 export const ReplaceConnectionSchema = z.strictObject({
 	expectedRevision: positiveSafeIntegerSchema,
 	displayName: z.string().trim().min(1).max(120),
-	endpoint: httpEndpointSchema.optional(),
+	endpoint: httpEndpointSchema.optional().meta({
+		description: "Omit to preserve the currently admitted endpoint and runtime generation.",
+		example: "http://127.0.0.1:3200/mcp",
+	}),
 });
 
 export class ReplaceConnectionDto extends createStandardSchemaDto(ReplaceConnectionSchema) {}

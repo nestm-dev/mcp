@@ -61,7 +61,10 @@ const resourceResultSchema = z.object({
 const promptResultSchema = z.object({
 	messages: z.array(z.object({ content: z.object({ text: z.string().optional() }) })),
 });
-const problemSchema = z.object({ code: z.string() });
+const problemSchema = z.object({
+	code: z.string(),
+	details: z.array(z.string()).optional(),
+});
 const hubSchema = z.object({
 	revision: z.number().int().positive(),
 	endpoint: z.object({ transport: z.literal("streamable-http"), path: z.literal("/mcp/hub") }),
@@ -137,25 +140,30 @@ describe("MCP control-plane API", () => {
 	});
 
 	it("validates request DTOs through Standard Schema before controller execution", async () => {
-		for (const payload of [
-			{
-				displayName: "Unknown key",
-				endpoint: "http://127.0.0.1/mcp",
-				unexpected: true,
-			},
-			{ displayName: "Invalid scheme", endpoint: "ftp://example.com/mcp" },
-		]) {
-			expect(
-				parse(
-					await inject({
-						method: "POST",
-						url: "/v1/mcp/connections",
-						payload,
-						expectedStatus: 400,
-					}),
-					problemSchema,
-				).code,
-			).toBe("REQUEST_INVALID");
+		for (const [payload, expectedDetail] of [
+			[
+				{
+					displayName: "Unknown key",
+					endpoint: "http://127.0.0.1/mcp",
+					unexpected: true,
+				},
+				"unexpected",
+			],
+			[{ displayName: "Invalid scheme", endpoint: "ftp://example.com/mcp" }, "endpoint:"],
+		] as const) {
+			const problem = parse(
+				await inject({
+					method: "POST",
+					url: "/v1/mcp/connections",
+					payload,
+					expectedStatus: 400,
+				}),
+				problemSchema,
+			);
+			expect(problem.code).toBe("REQUEST_INVALID");
+			expect(problem.details).toEqual(
+				expect.arrayContaining([expect.stringContaining(expectedDetail)]),
+			);
 		}
 
 		expect(
@@ -340,17 +348,19 @@ describe("MCP control-plane API", () => {
 		);
 		expect(resourceResult.contents[0]?.text).toBe("control-plane guide");
 
-		expect(
-			parse(
-				await inject({
-					method: "POST",
-					url: `/v1/mcp/connections/${atCapacity.id}/prompts/get`,
-					payload: { name: "summarize", arguments: { topic: 42 } },
-					expectedStatus: 400,
-				}),
-				problemSchema,
-			).code,
-		).toBe("REQUEST_INVALID");
+		const invalidPrompt = parse(
+			await inject({
+				method: "POST",
+				url: `/v1/mcp/connections/${atCapacity.id}/prompts/get`,
+				payload: { name: "summarize", arguments: { topic: 42 } },
+				expectedStatus: 400,
+			}),
+			problemSchema,
+		);
+		expect(invalidPrompt.code).toBe("REQUEST_INVALID");
+		expect(invalidPrompt.details).toEqual(
+			expect.arrayContaining([expect.stringContaining("arguments.topic:")]),
+		);
 
 		const promptResult = parse(
 			await inject({

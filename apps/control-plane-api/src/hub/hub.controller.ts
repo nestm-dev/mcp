@@ -13,7 +13,13 @@ import {
 	Put,
 	Query,
 } from "@nestjs/common";
-import { ApiNoContentResponse, ApiOkResponse, ApiOperation, ApiTags } from "@nestjs/swagger";
+import {
+	ApiNoContentResponse,
+	ApiOkResponse,
+	ApiOperation,
+	ApiQuery,
+	ApiTags,
+} from "@nestjs/swagger";
 
 import {
 	AttachHubMemberDto,
@@ -49,9 +55,23 @@ export class HubController {
 	@Delete("members/:connectionId")
 	@HttpCode(HttpStatus.NO_CONTENT)
 	@ApiNoContentResponse()
+	@ApiQuery({
+		maximum: Number.MAX_SAFE_INTEGER,
+		minimum: 1,
+		name: "expectedHubRevision",
+		required: true,
+		type: "integer",
+	})
+	@ApiQuery({
+		maximum: Number.MAX_SAFE_INTEGER,
+		minimum: 1,
+		name: "runtimeGeneration",
+		required: true,
+		type: "integer",
+	})
 	detach(
 		@Param("connectionId", ParseUUIDPipe) connectionId: string,
-		@Query({ schema: DetachHubMemberQueryDto.schema }) query: DetachHubMemberQueryDto,
+		@Query() query: DetachHubMemberQueryDto,
 	): Promise<void> {
 		return this.hub.detach(connectionId, query.expectedHubRevision, query.runtimeGeneration);
 	}
@@ -59,7 +79,14 @@ export class HubController {
 	@Get("catalog")
 	@Header("Cache-Control", "no-store")
 	@ApiOkResponse({ type: HubCatalogResponseDto })
-	catalog(@Query({ schema: HubCatalogQueryDto.schema }) query: HubCatalogQueryDto) {
+	@ApiQuery({
+		maximum: Number.MAX_SAFE_INTEGER,
+		minimum: 1,
+		name: "expectedHubRevision",
+		required: false,
+		type: "integer",
+	})
+	catalog(@Query() query: HubCatalogQueryDto) {
 		return this.hub.catalog(query.expectedHubRevision);
 	}
 

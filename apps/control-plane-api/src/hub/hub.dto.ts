@@ -11,7 +11,7 @@ const queryPositiveSafeIntegerSchema = z
 	.pipe(positiveSafeIntegerSchema);
 
 export const AttachHubMemberSchema = z.strictObject({
-	namespace: z.string().trim().regex(HUB_NAMESPACE_PATTERN),
+	namespace: z.string().trim().regex(HUB_NAMESPACE_PATTERN).meta({ example: "deepwiki" }),
 	expectedHubRevision: positiveSafeIntegerSchema,
 	expectedConnectionRevision: positiveSafeIntegerSchema,
 	runtimeGeneration: positiveSafeIntegerSchema,
