@@ -1,5 +1,32 @@
 # @nestm/mcp
 
+## 0.1.0-alpha.4
+
+### Minor Changes
+
+- bcbe893: Add process-local dynamic gateway topology with revision-fenced attach, detach, and atomic replace
+  operations. Dynamic gateways advertise list-change support from an empty topology while retaining
+  collision-free tool, prompt, resource, and resource-template routing.
+- bcbe893: Add a published, framework-neutral manager for bounded dynamic MCP client generations, including
+  deterministic draining, cleanup quarantine, key-free state lifecycle subscriptions, catalog and
+  operation delegation, a lease-scoped client-runtime integration callback, and optional lifecycle
+  observation for every managed client runtime.
+
+  Expose a thin Nest adapter at `@nestm/mcp/manager` with synchronous and asynchronous module
+  configuration, provider-token generation resolvers and observers, an injectable manager service,
+  and deterministic module shutdown.
+
+### Patch Changes
+
+- Updated dependencies [bcbe893]
+- Updated dependencies [bcbe893]
+  - @nestm/mcp-gateway@0.1.0-alpha.4
+  - @nestm/mcp-manager@0.1.0-alpha.4
+  - @nestm/mcp-core@0.1.0-alpha.4
+  - @nestm/mcp-client@0.1.0-alpha.4
+  - @nestm/mcp-server@0.1.0-alpha.4
+  - @nestm/mcp-auth@0.1.0-alpha.4
+
 ## 0.1.0-alpha.3
 
 ### Patch Changes
