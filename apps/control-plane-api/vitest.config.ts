@@ -4,6 +4,11 @@ export default defineConfig({
 	resolve: {
 		alias: [
 			{
+				find: /^@nestm\/mcp-client\/oauth$/,
+				replacement: new URL("../../packages/mcp-client/src/oauth/index.ts", import.meta.url)
+					.pathname,
+			},
+			{
 				find: /^@nestm\/mcp-gateway$/,
 				replacement: new URL("../../packages/mcp-gateway/src/index.ts", import.meta.url).pathname,
 			},
