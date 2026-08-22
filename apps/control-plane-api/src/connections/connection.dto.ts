@@ -1,19 +1,5 @@
-import { Transform } from "class-transformer";
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import {
-	IsIn,
-	IsInt,
-	IsObject,
-	IsOptional,
-	IsString,
-	IsUrl,
-	Length,
-	Max,
-	Min,
-	ValidateBy,
-	ValidateNested,
-} from "class-validator";
-import { Type } from "class-transformer";
+import { createStandardSchemaDto } from "@nestm/standard-schema";
+import { z } from "zod";
 
 import type { ConnectionAuthenticationKind, DesiredConnectionState } from "./connection.types.ts";
 
@@ -22,139 +8,88 @@ const MAX_PROMPT_ARGUMENT_NAME_CHARACTERS = 200;
 const MAX_PROMPT_ARGUMENT_VALUE_CHARACTERS = 16 * 1_024;
 const MAX_PROMPT_ARGUMENT_JSON_BYTES = 64 * 1_024;
 
-function IsPromptArguments(): PropertyDecorator {
-	return ValidateBy({
-		name: "isPromptArguments",
-		validator: {
-			validate(value: unknown): boolean {
-				if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-				const entries = Object.entries(value);
-				if (entries.length > MAX_PROMPT_ARGUMENTS) return false;
-				if (
-					entries.some(
-						([name, argument]) =>
-							name.length === 0 ||
-							name.length > MAX_PROMPT_ARGUMENT_NAME_CHARACTERS ||
-							typeof argument !== "string" ||
-							argument.length > MAX_PROMPT_ARGUMENT_VALUE_CHARACTERS,
-					)
-				) {
-					return false;
-				}
-				try {
-					return (
-						new TextEncoder().encode(JSON.stringify(value)).byteLength <=
-						MAX_PROMPT_ARGUMENT_JSON_BYTES
-					);
-				} catch {
-					return false;
-				}
-			},
-			defaultMessage(): string {
-				return "arguments must contain at most 64 string values and fit within 64 KiB";
-			},
-		},
+const authenticationKinds = [
+	"none",
+	"oauth",
+] as const satisfies readonly ConnectionAuthenticationKind[];
+const desiredConnectionStates = [
+	"offline",
+	"online",
+] as const satisfies readonly DesiredConnectionState[];
+
+const positiveSafeIntegerSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
+const httpEndpointSchema = z.url({ protocol: /^https?$/ });
+const promptArgumentsSchema = z
+	.record(
+		z.string().min(1).max(MAX_PROMPT_ARGUMENT_NAME_CHARACTERS),
+		z.string().max(MAX_PROMPT_ARGUMENT_VALUE_CHARACTERS),
+	)
+	.superRefine((arguments_, context) => {
+		if (Object.keys(arguments_).length > MAX_PROMPT_ARGUMENTS) {
+			context.addIssue({
+				code: "custom",
+				message: `Arguments must contain at most ${String(MAX_PROMPT_ARGUMENTS)} values.`,
+			});
+		}
+		if (
+			new TextEncoder().encode(JSON.stringify(arguments_)).byteLength >
+			MAX_PROMPT_ARGUMENT_JSON_BYTES
+		) {
+			context.addIssue({
+				code: "custom",
+				message: "Arguments must fit within 64 KiB.",
+			});
+		}
 	});
-}
 
-export class ConnectionAuthenticationDto {
-	@ApiProperty({ enum: ["none", "oauth"] })
-	@IsIn(["none", "oauth"] satisfies readonly ConnectionAuthenticationKind[])
-	kind!: ConnectionAuthenticationKind;
-}
+export const ConnectionAuthenticationSchema = z.strictObject({
+	kind: z.enum(authenticationKinds),
+});
 
-export class CreateConnectionDto {
-	@ApiProperty({ maxLength: 120 })
-	@IsString()
-	@Length(1, 120)
-	@Transform(({ value }): unknown => (typeof value === "string" ? value.trim() : value))
-	displayName!: string;
+export class ConnectionAuthenticationDto extends createStandardSchemaDto(
+	ConnectionAuthenticationSchema,
+) {}
 
-	@ApiProperty({ format: "uri", example: "http://127.0.0.1:3200/mcp" })
-	@IsUrl({ require_protocol: true, require_tld: false, protocols: ["http", "https"] })
-	endpoint!: string;
+export const CreateConnectionSchema = z.strictObject({
+	displayName: z.string().trim().min(1).max(120),
+	endpoint: httpEndpointSchema,
+	desiredState: z.enum(desiredConnectionStates).optional(),
+	authentication: ConnectionAuthenticationSchema.optional(),
+});
 
-	@ApiPropertyOptional({ default: "offline", enum: ["offline", "online"] })
-	@IsOptional()
-	@IsIn(["offline", "online"] satisfies readonly DesiredConnectionState[])
-	desiredState?: DesiredConnectionState;
+export class CreateConnectionDto extends createStandardSchemaDto(CreateConnectionSchema) {}
 
-	@ApiPropertyOptional({
-		oneOf: [
-			{ type: "object", required: ["kind"], properties: { kind: { enum: ["none"] } } },
-			{ type: "object", required: ["kind"], properties: { kind: { enum: ["oauth"] } } },
-		],
-		default: { kind: "none" },
-	})
-	@IsOptional()
-	@ValidateNested()
-	@Type(() => ConnectionAuthenticationDto)
-	authentication?: ConnectionAuthenticationDto;
-}
+export const ReplaceConnectionSchema = z.strictObject({
+	expectedRevision: positiveSafeIntegerSchema,
+	displayName: z.string().trim().min(1).max(120),
+	endpoint: httpEndpointSchema.optional(),
+});
 
-export class ReplaceConnectionDto {
-	@ApiProperty({ minimum: 1 })
-	@IsInt()
-	@Min(1)
-	@Max(Number.MAX_SAFE_INTEGER)
-	expectedRevision!: number;
+export class ReplaceConnectionDto extends createStandardSchemaDto(ReplaceConnectionSchema) {}
 
-	@ApiProperty({ maxLength: 120 })
-	@IsString()
-	@Length(1, 120)
-	@Transform(({ value }): unknown => (typeof value === "string" ? value.trim() : value))
-	displayName!: string;
+export const SetDesiredStateSchema = z.strictObject({
+	expectedRevision: positiveSafeIntegerSchema,
+	state: z.enum(desiredConnectionStates),
+});
 
-	@ApiPropertyOptional({
-		description: "Omit to preserve the currently admitted endpoint and runtime generation.",
-		format: "uri",
-		example: "http://127.0.0.1:3200/mcp",
-	})
-	@IsOptional()
-	@IsUrl({ require_protocol: true, require_tld: false, protocols: ["http", "https"] })
-	endpoint?: string;
-}
+export class SetDesiredStateDto extends createStandardSchemaDto(SetDesiredStateSchema) {}
 
-export class SetDesiredStateDto {
-	@ApiProperty({ minimum: 1 })
-	@IsInt()
-	@Min(1)
-	@Max(Number.MAX_SAFE_INTEGER)
-	expectedRevision!: number;
+export const CallToolSchema = z.strictObject({
+	name: z.string().min(1).max(200),
+	arguments: z.record(z.string(), z.unknown()).optional(),
+});
 
-	@ApiProperty({ enum: ["offline", "online"] })
-	@IsIn(["offline", "online"] satisfies readonly DesiredConnectionState[])
-	state!: DesiredConnectionState;
-}
+export class CallToolDto extends createStandardSchemaDto(CallToolSchema) {}
 
-export class CallToolDto {
-	@ApiProperty({ maxLength: 200 })
-	@IsString()
-	@Length(1, 200)
-	name!: string;
+export const ReadResourceSchema = z.strictObject({
+	uri: z.string().min(1).max(4_096),
+});
 
-	@ApiPropertyOptional({ type: "object", additionalProperties: true })
-	@IsOptional()
-	@IsObject()
-	arguments?: Record<string, unknown>;
-}
+export class ReadResourceDto extends createStandardSchemaDto(ReadResourceSchema) {}
 
-export class ReadResourceDto {
-	@ApiProperty({ maxLength: 4_096 })
-	@IsString()
-	@Length(1, 4_096)
-	uri!: string;
-}
+export const GetPromptSchema = z.strictObject({
+	name: z.string().min(1).max(200),
+	arguments: promptArgumentsSchema.optional(),
+});
 
-export class GetPromptDto {
-	@ApiProperty({ maxLength: 200 })
-	@IsString()
-	@Length(1, 200)
-	name!: string;
-
-	@ApiPropertyOptional({ type: "object", additionalProperties: { type: "string" } })
-	@IsOptional()
-	@IsObject()
-	@IsPromptArguments()
-	arguments?: Record<string, string>;
-}
+export class GetPromptDto extends createStandardSchemaDto(GetPromptSchema) {}

@@ -41,7 +41,7 @@ export class HubController {
 	@ApiOkResponse({ type: HubResponseDto })
 	attach(
 		@Param("connectionId", ParseUUIDPipe) connectionId: string,
-		@Body() body: AttachHubMemberDto,
+		@Body({ schema: AttachHubMemberDto.schema }) body: AttachHubMemberDto,
 	) {
 		return this.hub.attach(connectionId, body);
 	}
@@ -51,7 +51,7 @@ export class HubController {
 	@ApiNoContentResponse()
 	detach(
 		@Param("connectionId", ParseUUIDPipe) connectionId: string,
-		@Query() query: DetachHubMemberQueryDto,
+		@Query({ schema: DetachHubMemberQueryDto.schema }) query: DetachHubMemberQueryDto,
 	): Promise<void> {
 		return this.hub.detach(connectionId, query.expectedHubRevision, query.runtimeGeneration);
 	}
@@ -59,14 +59,14 @@ export class HubController {
 	@Get("catalog")
 	@Header("Cache-Control", "no-store")
 	@ApiOkResponse({ type: HubCatalogResponseDto })
-	catalog(@Query() query: HubCatalogQueryDto) {
+	catalog(@Query({ schema: HubCatalogQueryDto.schema }) query: HubCatalogQueryDto) {
 		return this.hub.catalog(query.expectedHubRevision);
 	}
 
 	@Post("catalog/refresh")
 	@HttpCode(HttpStatus.OK)
 	@ApiOkResponse({ type: HubResponseDto })
-	refresh(@Body() body: RefreshHubCatalogDto) {
+	refresh(@Body({ schema: RefreshHubCatalogDto.schema }) body: RefreshHubCatalogDto) {
 		return this.hub.refresh(body.expectedHubRevision);
 	}
 }

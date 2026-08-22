@@ -1,69 +1,39 @@
-import { Transform, Type } from "class-transformer";
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsInt, IsOptional, IsString, Matches, Max, Min } from "class-validator";
+import { createStandardSchemaDto } from "@nestm/standard-schema";
+import { z } from "zod";
 
 export const HUB_NAMESPACE_PATTERN = /^[a-z](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
 
-export class AttachHubMemberDto {
-	@ApiProperty({
-		example: "deepwiki",
-		maxLength: 32,
-		pattern: HUB_NAMESPACE_PATTERN.source,
-	})
-	@IsString()
-	@Matches(HUB_NAMESPACE_PATTERN)
-	@Transform(({ value }): unknown => (typeof value === "string" ? value.trim() : value))
-	namespace!: string;
+const positiveSafeIntegerSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
+const queryPositiveSafeIntegerSchema = z
+	.string()
+	.regex(/^[1-9]\d*$/)
+	.transform(Number)
+	.pipe(positiveSafeIntegerSchema);
 
-	@ApiProperty({ minimum: 1 })
-	@IsInt()
-	@Min(1)
-	@Max(Number.MAX_SAFE_INTEGER)
-	expectedHubRevision!: number;
+export const AttachHubMemberSchema = z.strictObject({
+	namespace: z.string().trim().regex(HUB_NAMESPACE_PATTERN),
+	expectedHubRevision: positiveSafeIntegerSchema,
+	expectedConnectionRevision: positiveSafeIntegerSchema,
+	runtimeGeneration: positiveSafeIntegerSchema,
+});
 
-	@ApiProperty({ minimum: 1 })
-	@IsInt()
-	@Min(1)
-	@Max(Number.MAX_SAFE_INTEGER)
-	expectedConnectionRevision!: number;
+export class AttachHubMemberDto extends createStandardSchemaDto(AttachHubMemberSchema) {}
 
-	@ApiProperty({ minimum: 1 })
-	@IsInt()
-	@Min(1)
-	@Max(Number.MAX_SAFE_INTEGER)
-	runtimeGeneration!: number;
-}
+export const DetachHubMemberQuerySchema = z.strictObject({
+	expectedHubRevision: queryPositiveSafeIntegerSchema,
+	runtimeGeneration: queryPositiveSafeIntegerSchema,
+});
 
-export class DetachHubMemberQueryDto {
-	@ApiProperty({ minimum: 1 })
-	@Type(() => Number)
-	@IsInt()
-	@Min(1)
-	@Max(Number.MAX_SAFE_INTEGER)
-	expectedHubRevision!: number;
+export class DetachHubMemberQueryDto extends createStandardSchemaDto(DetachHubMemberQuerySchema) {}
 
-	@ApiProperty({ minimum: 1 })
-	@Type(() => Number)
-	@IsInt()
-	@Min(1)
-	@Max(Number.MAX_SAFE_INTEGER)
-	runtimeGeneration!: number;
-}
+export const HubCatalogQuerySchema = z.strictObject({
+	expectedHubRevision: queryPositiveSafeIntegerSchema.optional(),
+});
 
-export class HubCatalogQueryDto {
-	@ApiPropertyOptional({ minimum: 1 })
-	@IsOptional()
-	@Type(() => Number)
-	@IsInt()
-	@Min(1)
-	@Max(Number.MAX_SAFE_INTEGER)
-	expectedHubRevision?: number;
-}
+export class HubCatalogQueryDto extends createStandardSchemaDto(HubCatalogQuerySchema) {}
 
-export class RefreshHubCatalogDto {
-	@ApiProperty({ minimum: 1 })
-	@IsInt()
-	@Min(1)
-	@Max(Number.MAX_SAFE_INTEGER)
-	expectedHubRevision!: number;
-}
+export const RefreshHubCatalogSchema = z.strictObject({
+	expectedHubRevision: positiveSafeIntegerSchema,
+});
+
+export class RefreshHubCatalogDto extends createStandardSchemaDto(RefreshHubCatalogSchema) {}

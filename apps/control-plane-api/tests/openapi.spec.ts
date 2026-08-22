@@ -17,6 +17,14 @@ const documentSchema = z
 	})
 	.passthrough();
 
+const requestOperationSchema = z.object({
+	requestBody: z.object({
+		content: z.object({
+			"application/json": z.object({ schema: componentSchema }),
+		}),
+	}),
+});
+
 describe("control-plane OpenAPI document", () => {
 	it("publishes request and response contracts instead of empty DTO schemas", async () => {
 		const app = await createApplication({ logger: false });
@@ -25,26 +33,33 @@ describe("control-plane OpenAPI document", () => {
 			expect(response.statusCode).toBe(200);
 			const document = documentSchema.parse(response.json<unknown>());
 
-			const create = document.components.schemas.CreateConnectionDto;
-			expect(create).toBeDefined();
-			expect(Object.keys(create?.properties ?? {})).toEqual([
+			const create = requestOperationSchema.parse(
+				z.object({ post: requestOperationSchema }).parse(document.paths["/v1/mcp/connections"])
+					.post,
+			).requestBody.content["application/json"].schema;
+			expect(Object.keys(create.properties)).toEqual([
 				"displayName",
 				"endpoint",
 				"desiredState",
 				"authentication",
 			]);
-			expect(create?.required).toEqual(["displayName", "endpoint"]);
+			expect(create.required).toEqual(["displayName", "endpoint"]);
+			expect(create).toMatchObject({ additionalProperties: false });
 
-			const replace = document.components.schemas.ReplaceConnectionDto;
-			expect(replace?.required).toEqual(["expectedRevision", "displayName"]);
-			expect(replace?.properties).toHaveProperty("endpoint");
+			const replace = z
+				.object({ put: requestOperationSchema })
+				.parse(document.paths["/v1/mcp/connections/{connectionId}"]).put.requestBody.content[
+				"application/json"
+			].schema;
+			expect(replace.required).toEqual(["expectedRevision", "displayName"]);
+			expect(replace.properties).toHaveProperty("endpoint");
 
 			const connection = document.components.schemas.ConnectionResponseDto;
 			expect(connection?.properties).toHaveProperty("runtime");
 			expect(connection?.properties).not.toHaveProperty("endpoint");
 
 			const connectionsPath = JSON.stringify(document.paths["/v1/mcp/connections"]);
-			expect(connectionsPath).toContain("#/components/schemas/CreateConnectionDto");
+			expect(connectionsPath).toContain('"additionalProperties":false');
 			expect(connectionsPath).toContain("#/components/schemas/ConnectionResponseDto");
 		} finally {
 			await app.close();

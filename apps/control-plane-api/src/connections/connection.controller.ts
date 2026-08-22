@@ -39,7 +39,9 @@ export class ConnectionController {
 
 	@Post()
 	@ApiCreatedResponse({ type: ConnectionResponseDto })
-	create(@Body() body: CreateConnectionDto): Promise<ConnectionView> {
+	create(
+		@Body({ schema: CreateConnectionDto.schema }) body: CreateConnectionDto,
+	): Promise<ConnectionView> {
 		return this.control.create({
 			displayName: body.displayName,
 			endpoint: body.endpoint,
@@ -64,7 +66,7 @@ export class ConnectionController {
 	@ApiOkResponse({ type: ConnectionResponseDto })
 	replace(
 		@Param("connectionId", ParseUUIDPipe) connectionId: string,
-		@Body() body: ReplaceConnectionDto,
+		@Body({ schema: ReplaceConnectionDto.schema }) body: ReplaceConnectionDto,
 	): Promise<ConnectionView> {
 		return this.control.replace(connectionId, body.expectedRevision, {
 			displayName: body.displayName,
@@ -86,7 +88,7 @@ export class ConnectionController {
 	@ApiOkResponse({ type: ConnectionResponseDto })
 	setDesiredState(
 		@Param("connectionId", ParseUUIDPipe) connectionId: string,
-		@Body() body: SetDesiredStateDto,
+		@Body({ schema: SetDesiredStateDto.schema }) body: SetDesiredStateDto,
 	): Promise<ConnectionView> {
 		return this.control.setDesiredState(connectionId, body.expectedRevision, body.state);
 	}
@@ -114,7 +116,10 @@ export class ConnectionController {
 	@Post(":connectionId/tools/call")
 	@HttpCode(HttpStatus.OK)
 	@ApiOkResponse({ schema: { type: "object", additionalProperties: true } })
-	callTool(@Param("connectionId", ParseUUIDPipe) connectionId: string, @Body() body: CallToolDto) {
+	callTool(
+		@Param("connectionId", ParseUUIDPipe) connectionId: string,
+		@Body({ schema: CallToolDto.schema }) body: CallToolDto,
+	) {
 		return this.control.callTool(connectionId, body.name, body.arguments ?? {});
 	}
 
@@ -123,7 +128,7 @@ export class ConnectionController {
 	@ApiOkResponse({ schema: { type: "object", additionalProperties: true } })
 	readResource(
 		@Param("connectionId", ParseUUIDPipe) connectionId: string,
-		@Body() body: ReadResourceDto,
+		@Body({ schema: ReadResourceDto.schema }) body: ReadResourceDto,
 	) {
 		return this.control.readResource(connectionId, body.uri);
 	}
@@ -133,7 +138,7 @@ export class ConnectionController {
 	@ApiOkResponse({ schema: { type: "object", additionalProperties: true } })
 	getPrompt(
 		@Param("connectionId", ParseUUIDPipe) connectionId: string,
-		@Body() body: GetPromptDto,
+		@Body({ schema: GetPromptDto.schema }) body: GetPromptDto,
 	) {
 		return this.control.getPrompt(connectionId, body.name, body.arguments);
 	}

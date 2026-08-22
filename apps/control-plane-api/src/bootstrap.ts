@@ -1,5 +1,4 @@
 import type { Type } from "@nestjs/common";
-import { ValidationPipe } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
@@ -30,13 +29,6 @@ export function configureApplication(
 	app: NestFastifyApplication,
 	options: { readonly swagger?: boolean } = {},
 ): void {
-	app.useGlobalPipes(
-		new ValidationPipe({
-			forbidNonWhitelisted: true,
-			transform: true,
-			whitelist: true,
-		}),
-	);
 	app.enableShutdownHooks();
 	if (options.swagger === false) return;
 	const document = SwaggerModule.createDocument(

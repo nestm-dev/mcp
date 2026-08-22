@@ -136,13 +136,73 @@ describe("MCP control-plane API", () => {
 		await upstream.close();
 	});
 
+	it("validates request DTOs through Standard Schema before controller execution", async () => {
+		for (const payload of [
+			{
+				displayName: "Unknown key",
+				endpoint: "http://127.0.0.1/mcp",
+				unexpected: true,
+			},
+			{ displayName: "Invalid scheme", endpoint: "ftp://example.com/mcp" },
+		]) {
+			expect(
+				parse(
+					await inject({
+						method: "POST",
+						url: "/v1/mcp/connections",
+						payload,
+						expectedStatus: 400,
+					}),
+					problemSchema,
+				).code,
+			).toBe("REQUEST_INVALID");
+		}
+
+		expect(
+			parse(
+				await inject({
+					method: "GET",
+					url: "/v1/mcp/hub/catalog?expectedHubRevision=1&expectedHubRevision=2",
+					expectedStatus: 400,
+				}),
+				problemSchema,
+			).code,
+		).toBe("REQUEST_INVALID");
+
+		expect(
+			parse(
+				await inject({
+					method: "GET",
+					url: "/v1/mcp/hub/catalog?unexpected=1",
+					expectedStatus: 400,
+				}),
+				problemSchema,
+			).code,
+		).toBe("REQUEST_INVALID");
+
+		const tooManyPromptArguments = Object.fromEntries(
+			Array.from({ length: 65 }, (_, index) => [`arg-${String(index)}`, "value"]),
+		);
+		expect(
+			parse(
+				await inject({
+					method: "POST",
+					url: "/v1/mcp/connections/00000000-0000-4000-8000-000000000000/prompts/get",
+					payload: { name: "summarize", arguments: tooManyPromptArguments },
+					expectedStatus: 400,
+				}),
+				problemSchema,
+			).code,
+		).toBe("REQUEST_INVALID");
+	});
+
 	it("validates lifecycle, capacity, catalog, execution, generation replacement, and CAS", async () => {
 		const first = parse(
 			await inject({
 				method: "POST",
 				url: "/v1/mcp/connections",
 				payload: {
-					displayName: "First upstream",
+					displayName: "  First upstream  ",
 					endpoint: "http://127.0.0.1/mcp",
 					desiredState: "online",
 				},
@@ -151,6 +211,7 @@ describe("MCP control-plane API", () => {
 			connectionViewSchema,
 		);
 		expect(first).toMatchObject({
+			displayName: "First upstream",
 			revision: 1,
 			runtimeGeneration: 1,
 			desiredState: "online",
