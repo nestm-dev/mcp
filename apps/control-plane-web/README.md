@@ -2,10 +2,12 @@
 
 Private Vinext console for managing MCP servers through the NestM control-plane API. The primary
 surface covers server lifecycle, runtime health, discovered tools, resources, templates, prompts,
-and inclusion in one unified MCP endpoint. Its tool console can parse a safe subset of advertised
-JSON Schema, fall back to raw JSON for ambiguous schemas, execute an explicit synchronous tool
-call, and render the MCP result without interpreting upstream HTML or URLs. It does not collect MCP
-tokens, client secrets, custom authorization headers, or PKCE material.
+and inclusion in one unified MCP endpoint. The capability workbench can run tools, read concrete
+resources, and render prompts through explicit, non-retried requests. Its tool console parses a safe
+subset of advertised JSON Schema and falls back to raw JSON for ambiguous schemas. Result previews
+are bounded and never interpret upstream HTML, URLs, or binary payloads. The Hub catalog explorer
+shows how upstream names and URIs are projected through the unified endpoint. The app does not
+collect MCP tokens, client secrets, custom authorization headers, or PKCE material.
 
 ## Local development
 
@@ -70,6 +72,8 @@ do not expose this validation console as a public endpoint.
   not persist them, and an API restart clears the endpoint.
 - Connection and runtime queries poll only while state can reconcile (`queued`, `connecting`,
   `degraded`, `draining`, pending leases, or closing leases).
+- The header reports API liveness and readiness from separate health checks. A reachable API whose
+  manager is closed is shown as not ready rather than healthy.
 - The metrics snapshot polls every five seconds while the document is active. Its counters,
   low-cardinality operation groups, rolling buckets, and bounded histogram estimates live only in
   API process memory and reset when the API restarts; the browser does not persist or reconstruct
@@ -82,8 +86,19 @@ do not expose this validation console as a public endpoint.
   typed arrays. Unsupported or ambiguous JSON Schema keywords (for example `anyOf`, `oneOf`, and
   `$ref`) switch the entire editor to a JSON-object fallback instead of guessing.
 - Tool calls require a deliberate click, are limited to a 64 KiB argument object, and are never
-  retried automatically. Tools that require MCP task execution stay disabled until the API exposes
-  a task lifecycle contract.
+  retried automatically. The API revalidates against the pinned discovered definition before
+  dispatch and supplies that definition to the client runtime for structured-output validation.
+  Tools that require MCP task execution stay disabled until the API exposes a task lifecycle
+  contract.
 - Tool results stay in dialog memory only. Text is rendered as text, binary content and resource
   links are metadata-only, and large previews are bounded. Upstream annotations are advisory;
   tools marked destructive require an additional confirmation.
+- Concrete resource reads and prompt rendering use the same explicit, non-retried interaction
+  model. Prompt arguments and rendered results are bounded; binary content is summarized instead
+  of embedded.
+- Connection validation is displayed as individual pass, warning, or unknown checks from the safe
+  runtime and catalog projections. The console does not invent an aggregate readiness score or
+  persist validation evidence.
+- The projected Hub catalog is revision-fenced, cached by Hub revision, and exposes reversible
+  namespace/source to projected-name and projected-URI mappings without fetching from inside the
+  explorer component.

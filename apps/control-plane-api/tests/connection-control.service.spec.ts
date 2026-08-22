@@ -1,4 +1,12 @@
 import { Test } from "@nestjs/testing";
+import {
+	McpClientRuntime,
+	type CallToolRequest,
+	type CallToolRequestOptions,
+	type CallToolResult,
+} from "@nestm/mcp-client";
+import type { McpManagedClientRuntimeOperation } from "@nestm/mcp-manager";
+import type { Tool } from "@modelcontextprotocol/client";
 import { describe, expect, it, vi } from "vitest";
 
 import { ControlPlaneError } from "../src/common/control-plane.error.ts";
@@ -181,6 +189,200 @@ describe("ConnectionControlService", () => {
 			runtime: { phase: "online" },
 		});
 		expect(ensureOnline).toHaveBeenCalledTimes(2);
+	});
+
+	it("validates arguments and invokes the pinned generation with its catalog definition", async () => {
+		const repository = new ConnectionRepository();
+		const operationSignal = new AbortController().signal;
+		let invokedGenerationKey: string | undefined;
+		let runtimeCall:
+			| {
+					readonly serverName: string;
+					readonly params: CallToolRequest["params"];
+					readonly options: CallToolRequestOptions | undefined;
+			  }
+			| undefined;
+		const managedRuntime = new McpClientRuntime();
+		vi.spyOn(managedRuntime, "callTool").mockImplementation(
+			async (
+				serverName: string,
+				params: CallToolRequest["params"],
+				options?: CallToolRequestOptions,
+			): Promise<CallToolResult> => {
+				runtimeCall = Object.freeze({ serverName, params, options });
+				return {
+					content: [{ type: "text", text: "accepted" }],
+					structuredContent: { accepted: true },
+				};
+			},
+		);
+		const withClientRuntime = async <Result>(
+			generationKey: string,
+			operation: McpManagedClientRuntimeOperation<Result>,
+		): Promise<Result> => {
+			invokedGenerationKey = generationKey;
+			return operation(
+				Object.freeze({
+					runtime: managedRuntime,
+					serverName: "managed-one",
+					signal: operationSignal,
+				}),
+			);
+		};
+		const module = await Test.createTestingModule({
+			providers: [
+				ConnectionControlService,
+				ConnectionLifecycleCoordinator,
+				{ provide: HubService, useValue: hubLifecycle() },
+				{ provide: ConnectionRepository, useValue: repository },
+				{ provide: McpEndpointAdmissionService, useValue: endpointAdmission() },
+				{ provide: VolatileOAuthAuthorityService, useValue: oauthAuthority() },
+				{
+					provide: MCP_RUNTIME_SUPERVISOR,
+					useValue: {
+						ensureOnline: async () => runtimeState("online"),
+						state: () => runtimeState("online"),
+						withClientRuntime,
+					},
+				},
+			],
+		}).compile();
+		const service = module.get(ConnectionControlService);
+		const connection = await service.create({
+			displayName: "Pinned upstream",
+			endpoint: "https://mcp.example.test/service",
+			desiredState: "online",
+		});
+		const discoveredTool = {
+			name: "count",
+			description: "catalog-v1",
+			inputSchema: {
+				type: "object",
+				properties: { count: { type: "integer", minimum: 1 } },
+				required: ["count"],
+				additionalProperties: false,
+			},
+			outputSchema: {
+				type: "object",
+				properties: { accepted: { type: "boolean" } },
+				required: ["accepted"],
+				additionalProperties: false,
+			},
+		} satisfies Tool;
+		repository.putCatalog({
+			connectionId: connection.id,
+			runtimeGeneration: connection.runtimeGeneration,
+			discoveredAt: "2026-08-22T00:00:00.000Z",
+			tools: [discoveredTool],
+			resources: [],
+			resourceTemplates: [],
+			prompts: [],
+		});
+
+		await expect(service.callTool(connection.id, "count", { count: "one" })).rejects.toMatchObject({
+			code: "MCP_TOOL_ARGUMENTS_INVALID",
+			status: 422,
+		});
+		expect(runtimeCall).toBeUndefined();
+
+		const invocation = service.callTool(connection.id, "count", { count: 2 });
+		Reflect.set(discoveredTool, "description", "mutated-after-invocation");
+		Reflect.set(discoveredTool.inputSchema.properties.count, "type", "string");
+		repository.replace(connection.id, connection.revision, {
+			displayName: connection.displayName,
+			endpoint: "https://mcp.example.test/replacement",
+			endpointHost: "mcp.example.test",
+		});
+
+		await expect(invocation).resolves.toMatchObject({
+			content: [{ type: "text", text: "accepted" }],
+			structuredContent: { accepted: true },
+		});
+		expect(invokedGenerationKey).toBe(
+			`control-plane-mcp/v1/${connection.id}/${String(connection.runtimeGeneration)}`,
+		);
+		expect(runtimeCall).toEqual({
+			serverName: "managed-one",
+			params: { name: "count", arguments: { count: 2 } },
+			options: {
+				signal: operationSignal,
+				toolDefinition: {
+					name: "count",
+					description: "catalog-v1",
+					inputSchema: {
+						type: "object",
+						properties: { count: { type: "integer", minimum: 1 } },
+						required: ["count"],
+						additionalProperties: false,
+					},
+					outputSchema: discoveredTool.outputSchema,
+				},
+			},
+		});
+		expect(runtimeCall?.options?.toolDefinition).not.toBe(discoveredTool);
+		await managedRuntime.close();
+	});
+
+	it("rejects missing tools and uncompileable discovered input schemas before execution", async () => {
+		const repository = new ConnectionRepository();
+		const withClientRuntime = vi.fn();
+		const module = await Test.createTestingModule({
+			providers: [
+				ConnectionControlService,
+				ConnectionLifecycleCoordinator,
+				{ provide: HubService, useValue: hubLifecycle() },
+				{ provide: ConnectionRepository, useValue: repository },
+				{ provide: McpEndpointAdmissionService, useValue: endpointAdmission() },
+				{ provide: VolatileOAuthAuthorityService, useValue: oauthAuthority() },
+				{
+					provide: MCP_RUNTIME_SUPERVISOR,
+					useValue: {
+						ensureOnline: async () => runtimeState("online"),
+						state: () => runtimeState("online"),
+						withClientRuntime,
+					},
+				},
+			],
+		}).compile();
+		const service = module.get(ConnectionControlService);
+		const connection = await service.create({
+			displayName: "Invalid catalog upstream",
+			endpoint: "https://mcp.example.test/service",
+			desiredState: "online",
+		});
+
+		await expect(service.callTool(connection.id, "missing", {})).rejects.toMatchObject({
+			code: "MCP_NOT_READY",
+			status: 409,
+		});
+
+		repository.putCatalog({
+			connectionId: connection.id,
+			runtimeGeneration: connection.runtimeGeneration,
+			discoveredAt: "2026-08-22T00:00:00.000Z",
+			tools: [
+				{
+					name: "invalid-schema",
+					inputSchema: {
+						$schema: "http://json-schema.org/draft-07/schema#",
+						type: "object",
+					},
+				} satisfies Tool,
+			],
+			resources: [],
+			resourceTemplates: [],
+			prompts: [],
+		});
+
+		await expect(service.callTool(connection.id, "missing", {})).rejects.toMatchObject({
+			code: "MCP_TOOL_NOT_FOUND",
+			status: 404,
+		});
+		await expect(service.callTool(connection.id, "invalid-schema", {})).rejects.toMatchObject({
+			code: "MCP_TOOL_SCHEMA_INVALID",
+			status: 502,
+		});
+		expect(withClientRuntime).not.toHaveBeenCalled();
 	});
 });
 

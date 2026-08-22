@@ -21,6 +21,9 @@ export type ControlPlaneErrorCode =
 	| "MCP_QUARANTINED"
 	| "MCP_REVISION_CONFLICT"
 	| "MCP_RUNTIME_CLOSED"
+	| "MCP_TOOL_ARGUMENTS_INVALID"
+	| "MCP_TOOL_NOT_FOUND"
+	| "MCP_TOOL_SCHEMA_INVALID"
 	| "MCP_UPSTREAM_FAILED";
 
 export class ControlPlaneError extends Error {

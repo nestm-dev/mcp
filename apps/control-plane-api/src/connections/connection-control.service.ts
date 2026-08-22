@@ -1,5 +1,11 @@
 import { Inject, Injectable } from "@nestjs/common";
-import type { CallToolResult, GetPromptResult, ReadResourceResult } from "@nestm/mcp-client";
+import type { Tool } from "@modelcontextprotocol/client";
+import {
+	createMcpClientToolSchema,
+	type CallToolResult,
+	type GetPromptResult,
+	type ReadResourceResult,
+} from "@nestm/mcp-client";
 import type {
 	McpRuntimeManagerPort,
 	McpRuntimeManagerSnapshot,
@@ -186,13 +192,40 @@ export class ConnectionControlService {
 		);
 	}
 
-	callTool(
+	async callTool(
 		connectionId: string,
 		name: string,
 		arguments_: Readonly<Record<string, unknown>>,
 	): Promise<CallToolResult> {
 		const record = this.#onlineConnection(connectionId);
-		return this.runtime.callTool(record.generationKey, name, arguments_);
+		const catalog = this.getCatalog(connectionId);
+		if (catalog.runtimeGeneration !== record.runtimeGeneration) {
+			throw new ControlPlaneError(
+				"MCP_GENERATION_RETIRED",
+				409,
+				"The discovered MCP catalog belongs to a retired runtime generation.",
+			);
+		}
+		const discoveredTool = catalog.tools.find((tool) => tool.name === name);
+		if (discoveredTool === undefined) {
+			throw new ControlPlaneError(
+				"MCP_TOOL_NOT_FOUND",
+				404,
+				"The MCP tool does not exist in the current discovered catalog.",
+			);
+		}
+
+		const toolDefinition = snapshotToolDefinition(discoveredTool);
+		const stableArguments = snapshotToolArguments(arguments_);
+		await validateToolArguments(toolDefinition, stableArguments);
+
+		return this.runtime.withClientRuntime(record.generationKey, ({ runtime, serverName, signal }) =>
+			runtime.callTool(
+				serverName,
+				{ name: toolDefinition.name, arguments: stableArguments },
+				{ signal, toolDefinition },
+			),
+		);
 	}
 
 	readResource(connectionId: string, uri: string): Promise<ReadResourceResult> {
@@ -273,6 +306,60 @@ export class ConnectionControlService {
 			runtime: this.runtime.state(record.generationKey),
 		});
 	}
+}
+
+function snapshotToolDefinition(tool: Tool): Tool {
+	try {
+		return Object.freeze(structuredClone(tool));
+	} catch (cause) {
+		throw invalidToolSchemaError(cause);
+	}
+}
+
+function snapshotToolArguments(
+	arguments_: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+	try {
+		return Object.freeze(structuredClone(arguments_));
+	} catch (cause) {
+		throw new ControlPlaneError(
+			"MCP_TOOL_ARGUMENTS_INVALID",
+			422,
+			"The MCP tool arguments must be JSON-compatible.",
+			{ cause },
+		);
+	}
+}
+
+async function validateToolArguments(
+	tool: Tool,
+	arguments_: Readonly<Record<string, unknown>>,
+): Promise<void> {
+	let validation: Awaited<
+		ReturnType<ReturnType<typeof createMcpClientToolSchema>["~standard"]["validate"]>
+	>;
+	try {
+		const schema = createMcpClientToolSchema(tool.inputSchema);
+		validation = await schema["~standard"].validate(arguments_);
+	} catch (cause) {
+		throw invalidToolSchemaError(cause);
+	}
+	const issues = "issues" in validation ? validation.issues : undefined;
+	if (issues === undefined || issues.length === 0) return;
+	throw new ControlPlaneError(
+		"MCP_TOOL_ARGUMENTS_INVALID",
+		422,
+		"The MCP tool arguments do not match the discovered input schema.",
+	);
+}
+
+function invalidToolSchemaError(cause: unknown): ControlPlaneError {
+	return new ControlPlaneError(
+		"MCP_TOOL_SCHEMA_INVALID",
+		502,
+		"The MCP tool declares an input schema that cannot be compiled.",
+		{ cause },
+	);
 }
 
 function assertConnectionMutation(record: ConnectionRecord, expectedRevision: number): void {

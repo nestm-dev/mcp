@@ -32,6 +32,7 @@ import {
   EditConnectionDialog,
 } from "@/components/connection-dialogs";
 import { MetricsDashboard } from "@/components/metrics-dashboard";
+import { HubCatalogExplorer } from "@/components/hub-catalog-explorer";
 import { UnifiedEndpointPanel } from "@/components/unified-endpoint-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,18 +47,26 @@ import {
   type ConnectionUpdate,
   type DesiredConnectionState,
   type Hub,
+  type HubCatalog,
   type HubMember,
   type RuntimeManager,
   type RuntimePhase,
 } from "@/lib/control-plane-api";
+import {
+  deriveControlPlaneHealthStatus,
+  type ControlPlaneHealthStatus,
+} from "@/lib/control-plane-health";
 import { mergeConnection, mergeObservedRuntime } from "@/lib/connection-cache";
 import {
   attachHubMemberMutationOptions,
   connectionPollInterval,
   controlPlaneKeys,
   detachHubMemberMutationOptions,
+  hubCatalogQueryOptions,
   hubQueryOptions,
+  liveHealthQueryOptions,
   metricsQueryOptions,
+  readyHealthQueryOptions,
   refreshHubCatalogMutationOptions,
   runtimePollInterval,
 } from "@/lib/control-plane-queries";
@@ -117,6 +126,18 @@ export function ControlPlaneScreen() {
   });
   const metricsQuery = useQuery(metricsQueryOptions());
   const hubQuery = useQuery(hubQueryOptions());
+  const hubCatalogQuery = useQuery(hubCatalogQueryOptions(hubQuery.data?.revision));
+  const liveHealthQuery = useQuery(liveHealthQueryOptions());
+  const readyHealthQuery = useQuery(readyHealthQueryOptions());
+
+  useEffect(() => {
+    if (
+      hubCatalogQuery.error instanceof ControlPlaneApiError &&
+      hubCatalogQuery.error.code === "MCP_HUB_REVISION_CONFLICT"
+    ) {
+      void queryClient.invalidateQueries({ exact: true, queryKey: controlPlaneKeys.hub });
+    }
+  }, [hubCatalogQuery.error, queryClient]);
 
   useEffect(() => {
     const marker = parseOAuthCallbackMarker(window.location.search);
@@ -150,6 +171,7 @@ export function ControlPlaneScreen() {
     onMutate: () => queryClient.cancelQueries({ queryKey: controlPlaneKeys.hub }),
     onSuccess: async (snapshot, { connection }) => {
       await queryClient.cancelQueries({ queryKey: controlPlaneKeys.hub });
+      queryClient.removeQueries({ queryKey: controlPlaneKeys.hubCatalogPrefix });
       setEndpointSnapshotInCache(queryClient, snapshot);
       toast.success("MCP added to unified endpoint", { description: connection.displayName });
     },
@@ -161,6 +183,7 @@ export function ControlPlaneScreen() {
     ...detachHubMemberMutationOptions(),
     onMutate: () => queryClient.cancelQueries({ queryKey: controlPlaneKeys.hub }),
     onSuccess: async (_, { member }) => {
+      queryClient.removeQueries({ queryKey: controlPlaneKeys.hubCatalogPrefix });
       await queryClient.invalidateQueries({ exact: true, queryKey: controlPlaneKeys.hub });
       toast.success("MCP removed from unified endpoint", { description: member.displayName });
     },
@@ -173,6 +196,7 @@ export function ControlPlaneScreen() {
     onMutate: () => queryClient.cancelQueries({ queryKey: controlPlaneKeys.hub }),
     onSuccess: async (snapshot) => {
       await queryClient.cancelQueries({ queryKey: controlPlaneKeys.hub });
+      queryClient.removeQueries({ queryKey: controlPlaneKeys.hubCatalogPrefix });
       setEndpointSnapshotInCache(queryClient, snapshot);
       toast.success("Endpoint capabilities refreshed");
     },
@@ -298,24 +322,38 @@ export function ControlPlaneScreen() {
     connectionsQuery.isFetching ||
     runtimeQuery.isFetching ||
     metricsQuery.isFetching ||
-    hubQuery.isFetching;
+    hubQuery.isFetching ||
+    hubCatalogQuery.isFetching ||
+    liveHealthQuery.isFetching ||
+    readyHealthQuery.isFetching;
+  const healthStatus = deriveControlPlaneHealthStatus({
+    live: liveHealthQuery.data,
+    ready: readyHealthQuery.data,
+    liveFailed: liveHealthQuery.isError,
+    readyFailed: readyHealthQuery.isError,
+  });
 
   function refreshOverview() {
     void Promise.all([
       queryClient.invalidateQueries({ queryKey: controlPlaneKeys.connections }),
       queryClient.invalidateQueries({ queryKey: controlPlaneKeys.runtime }),
       queryClient.invalidateQueries({ queryKey: controlPlaneKeys.metrics }),
+      queryClient.invalidateQueries({ queryKey: controlPlaneKeys.healthLive }),
+      queryClient.invalidateQueries({ queryKey: controlPlaneKeys.healthReady }),
       queryClient.invalidateQueries({ exact: true, queryKey: controlPlaneKeys.hub }),
+      queryClient.invalidateQueries({ queryKey: controlPlaneKeys.hubCatalogPrefix }),
     ]);
   }
 
   return (
     <main className="mx-auto min-h-screen w-full max-w-[1480px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
       <Header
+        healthStatus={healthStatus}
         onAdd={() => setCreateOpen(true)}
         onRefresh={refreshOverview}
         refreshing={refreshing}
       />
+      <ValidationHostNotice />
       <RuntimeOverview
         error={runtimeQuery.error}
         loading={runtimeQuery.isPending}
@@ -337,6 +375,12 @@ export function ControlPlaneScreen() {
         onRetry={() => void hubQuery.refetch()}
         refreshPending={refreshEndpointMutation.isPending}
         snapshot={hubQuery.data}
+      />
+      <HubCatalogState
+        catalog={hubCatalogQuery.data}
+        error={hubCatalogQuery.error}
+        loading={hubCatalogQuery.isPending && hubQuery.data !== undefined}
+        onRetry={() => void hubCatalogQuery.refetch()}
       />
 
       {connectionsQuery.isError ? (
@@ -364,7 +408,7 @@ export function ControlPlaneScreen() {
                   {connections.length} configured
                 </p>
               </div>
-              <Badge variant="outline">Private inventory</Badge>
+              <Badge variant="outline">Validation inventory</Badge>
             </div>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
               {connections.map((connection) => (
@@ -476,11 +520,59 @@ export function ControlPlaneScreen() {
   );
 }
 
+function HubCatalogState({
+  catalog,
+  loading,
+  error,
+  onRetry,
+}: {
+  readonly catalog: HubCatalog | undefined;
+  readonly loading: boolean;
+  readonly error: Error | null;
+  readonly onRetry: () => void;
+}) {
+  if (catalog) {
+    return (
+      <div className="mt-3">
+        <HubCatalogExplorer catalog={catalog} />
+      </div>
+    );
+  }
+  if (loading) {
+    return (
+      <Card className="mt-3 grid min-h-36 place-items-center border-dashed bg-card/55">
+        <div aria-busy="true" className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner /> Loading projected Hub catalog…
+        </div>
+      </Card>
+    );
+  }
+  if (error) {
+    return (
+      <Card className="mt-3 flex flex-col items-start gap-4 border-warning/30 bg-warning/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex gap-3" role="alert">
+          <ShieldAlert className="mt-0.5 size-5 shrink-0 text-warning-foreground" />
+          <div>
+            <p className="text-sm font-medium">Projected Hub catalog unavailable</p>
+            <p className="mt-1 text-xs text-muted-foreground">{getApiErrorMessage(error)}</p>
+          </div>
+        </div>
+        <Button onClick={onRetry} size="sm" variant="outline">
+          Retry
+        </Button>
+      </Card>
+    );
+  }
+  return null;
+}
+
 function Header({
+  healthStatus,
   refreshing,
   onRefresh,
   onAdd,
 }: {
+  readonly healthStatus: ControlPlaneHealthStatus;
   readonly refreshing: boolean;
   readonly onRefresh: () => void;
   readonly onAdd: () => void;
@@ -490,14 +582,21 @@ function Header({
       <div className="flex items-center gap-3">
         <div className="relative grid size-11 place-items-center rounded-xl bg-primary text-primary-foreground shadow-md shadow-primary/15">
           <ServerCog className="size-5" />
-          <span className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-background bg-success" />
+          <span
+            aria-hidden="true"
+            className={cn(
+              "absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-background",
+              healthStatus === "ready" && "bg-success",
+              healthStatus === "checking" && "animate-pulse bg-info",
+              healthStatus === "not-ready" && "bg-warning",
+              healthStatus === "unreachable" && "bg-destructive",
+            )}
+          />
         </div>
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-semibold tracking-tight">MCP Manager</h1>
-            <Badge className="gap-1" variant="outline">
-              <LockKeyhole className="size-3" /> Private
-            </Badge>
+            <HealthBadge status={healthStatus} />
           </div>
           <p className="mt-0.5 text-sm text-muted-foreground">
             Managed MCP servers, health, and capabilities
@@ -515,6 +614,48 @@ function Header({
         </Button>
       </div>
     </header>
+  );
+}
+
+function HealthBadge({ status }: { readonly status: ControlPlaneHealthStatus }) {
+  if (status === "ready") {
+    return (
+      <Badge className="gap-1" variant="success">
+        <Activity className="size-3" /> API ready
+      </Badge>
+    );
+  }
+  if (status === "not-ready") {
+    return (
+      <Badge className="gap-1" variant="warning">
+        <ShieldAlert className="size-3" /> API not ready
+      </Badge>
+    );
+  }
+  if (status === "unreachable") {
+    return (
+      <Badge className="gap-1" variant="destructive">
+        <Unplug className="size-3" /> API unreachable
+      </Badge>
+    );
+  }
+  return (
+    <Badge className="gap-1" variant="outline">
+      <Spinner className="size-3" /> Checking API
+    </Badge>
+  );
+}
+
+function ValidationHostNotice() {
+  return (
+    <div className="mb-6 flex items-start gap-2 rounded-lg border border-info/20 bg-info/5 px-3 py-2.5 text-xs text-muted-foreground">
+      <LockKeyhole className="mt-0.5 size-3.5 shrink-0 text-info" />
+      <p>
+        <span className="font-medium text-foreground">Volatile validation host.</span> Connections,
+        OAuth state, unified-endpoint membership, catalogs, and metrics reset when the API restarts.
+        Administrative access is enforced by the deployment boundary, not this UI.
+      </p>
+    </div>
   );
 }
 
@@ -664,6 +805,10 @@ function ConnectionCard({
 }) {
   const toolCallPending =
     useIsMutating({ mutationKey: controlPlaneKeys.toolCall(connection.id) }) > 0;
+  const resourceReadPending =
+    useIsMutating({ mutationKey: controlPlaneKeys.resourceRead(connection.id) }) > 0;
+  const promptGetPending =
+    useIsMutating({ mutationKey: controlPlaneKeys.promptGet(connection.id) }) > 0;
   const capabilities = connection.runtime.capabilities;
   const activeCapabilities = capabilities
     ? (Object.keys(capabilityLabels) as (keyof typeof capabilityLabels)[]).filter(
@@ -675,6 +820,8 @@ function ConnectionCard({
     desiredPendingState !== null ||
     probePending ||
     toolCallPending ||
+    resourceReadPending ||
+    promptGetPending ||
     endpointActionPending !== null;
   const canAddToEndpoint = canExposeConnection(connection);
   const retryable =

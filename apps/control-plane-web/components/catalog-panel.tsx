@@ -15,6 +15,9 @@ import {
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { ConnectionValidationSummary } from "@/components/connection-validation-summary";
+import { PromptGetDialog } from "@/components/prompt-get-dialog";
+import { ResourceReadDialog } from "@/components/resource-read-dialog";
 import { ToolExecutionDialog } from "@/components/tool-execution-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,8 +46,15 @@ const utcDateTime = new Intl.DateTimeFormat("en", {
 export function CatalogPanel({ connection }: { readonly connection: Connection }) {
   const queryClient = useQueryClient();
   const [selectedTool, setSelectedTool] = useState<Tool | null>(null);
+  const [selectedResource, setSelectedResource] = useState<Resource | null>(null);
+  const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
   const toolCallPending =
     useIsMutating({ mutationKey: controlPlaneKeys.toolCall(connection.id) }) > 0;
+  const resourceReadPending =
+    useIsMutating({ mutationKey: controlPlaneKeys.resourceRead(connection.id) }) > 0;
+  const promptGetPending =
+    useIsMutating({ mutationKey: controlPlaneKeys.promptGet(connection.id) }) > 0;
+  const capabilityOperationPending = toolCallPending || resourceReadPending || promptGetPending;
   const queryKey = controlPlaneKeys.catalog(connection.id, connection.runtimeGeneration);
   const catalogQuery = useQuery({
     enabled: !connection.deletionPending,
@@ -98,7 +108,7 @@ export function CatalogPanel({ connection }: { readonly connection: Connection }
           <p className="mt-1 text-sm text-muted-foreground">Discovered MCP capabilities</p>
         </div>
         <Button
-          disabled={toolCallPending}
+          disabled={capabilityOperationPending}
           loading={refreshMutation.isPending}
           loadingText="Refreshing…"
           onClick={() => refreshMutation.mutate()}
@@ -109,6 +119,8 @@ export function CatalogPanel({ connection }: { readonly connection: Connection }
           Refresh catalog
         </Button>
       </div>
+
+      <ConnectionValidationSummary catalog={catalogQuery.data} connection={connection} />
 
       {catalogQuery.isPending ? <CatalogLoading /> : null}
       {catalogQuery.isError ? (
@@ -123,7 +135,11 @@ export function CatalogPanel({ connection }: { readonly connection: Connection }
         <CatalogTabs
           catalog={catalogQuery.data}
           connection={connection}
+          onGetPrompt={setSelectedPrompt}
+          onReadResource={setSelectedResource}
           onRunTool={setSelectedTool}
+          promptGetPending={promptGetPending}
+          resourceReadPending={resourceReadPending}
           toolCallPending={toolCallPending}
         />
       ) : null}
@@ -133,6 +149,22 @@ export function CatalogPanel({ connection }: { readonly connection: Connection }
           key={`${connection.id}:${String(connection.runtimeGeneration)}:${selectedTool.name}`}
           onDismiss={() => setSelectedTool(null)}
           tool={selectedTool}
+        />
+      ) : null}
+      {selectedResource ? (
+        <ResourceReadDialog
+          connection={connection}
+          key={`${connection.id}:${String(connection.runtimeGeneration)}:${selectedResource.uri}`}
+          onDismiss={() => setSelectedResource(null)}
+          resource={selectedResource}
+        />
+      ) : null}
+      {selectedPrompt ? (
+        <PromptGetDialog
+          connection={connection}
+          key={`${connection.id}:${String(connection.runtimeGeneration)}:${selectedPrompt.name}`}
+          onDismiss={() => setSelectedPrompt(null)}
+          prompt={selectedPrompt}
         />
       ) : null}
     </section>
@@ -196,12 +228,20 @@ function CatalogTabs({
   catalog,
   connection,
   toolCallPending,
+  resourceReadPending,
+  promptGetPending,
   onRunTool,
+  onReadResource,
+  onGetPrompt,
 }: {
   readonly catalog: Catalog;
   readonly connection: Connection;
   readonly toolCallPending: boolean;
+  readonly resourceReadPending: boolean;
+  readonly promptGetPending: boolean;
   readonly onRunTool: (tool: Tool) => void;
+  readonly onReadResource: (resource: Resource) => void;
+  readonly onGetPrompt: (prompt: Prompt) => void;
 }) {
   return (
     <Tabs defaultValue="tools">
@@ -248,7 +288,15 @@ function CatalogTabs({
           emptyDescription="This server did not advertise any concrete resources."
           emptyTitle="No resources"
           items={catalog.resources}
-          renderItem={(resource) => <ResourceItem key={resource.uri} resource={resource} />}
+          renderItem={(resource) => (
+            <ResourceItem
+              connection={connection}
+              key={resource.uri}
+              onRead={() => onReadResource(resource)}
+              pending={resourceReadPending}
+              resource={resource}
+            />
+          )}
         />
       </TabsContent>
       <TabsContent value="templates">
@@ -264,7 +312,15 @@ function CatalogTabs({
           emptyDescription="This server did not advertise any prompt templates."
           emptyTitle="No prompts"
           items={catalog.prompts}
-          renderItem={(prompt) => <PromptItem key={prompt.name} prompt={prompt} />}
+          renderItem={(prompt) => (
+            <PromptItem
+              connection={connection}
+              key={prompt.name}
+              onGet={() => onGetPrompt(prompt)}
+              pending={promptGetPending}
+              prompt={prompt}
+            />
+          )}
         />
       </TabsContent>
     </Tabs>
@@ -356,7 +412,24 @@ function ToolItem({
   );
 }
 
-function ResourceItem({ resource }: { readonly resource: Resource }) {
+export function ResourceItem({
+  resource,
+  connection,
+  pending,
+  onRead,
+}: {
+  readonly resource: Resource;
+  readonly connection: Connection;
+  readonly pending: boolean;
+  readonly onRead: () => void;
+}) {
+  const runtimeReady =
+    connection.desiredState === "online" && connection.runtime.phase === "online";
+  const disabledReason = !runtimeReady
+    ? "Connect this runtime before reading resources."
+    : pending
+      ? "Another resource read is running for this connection."
+      : undefined;
   return (
     <CatalogItem
       description={resource.description}
@@ -369,6 +442,15 @@ function ResourceItem({ resource }: { readonly resource: Resource }) {
         {resource.size !== undefined ? (
           <Badge variant="mono">{formatBytes(resource.size)}</Badge>
         ) : null}
+      </div>
+      <div className="mt-1 flex items-center justify-between gap-3 border-t pt-3">
+        <span className="text-[11px] leading-relaxed text-muted-foreground">
+          {disabledReason ?? "Read this exact advertised URI with an explicit request."}
+        </span>
+        <Button disabled={disabledReason !== undefined} onClick={onRead} size="sm" type="button">
+          <FileText />
+          Read
+        </Button>
       </div>
     </CatalogItem>
   );
@@ -387,7 +469,26 @@ function TemplateItem({ template }: { readonly template: ResourceTemplate }) {
   );
 }
 
-function PromptItem({ prompt }: { readonly prompt: Prompt }) {
+export function PromptItem({
+  prompt,
+  connection,
+  pending,
+  onGet,
+}: {
+  readonly prompt: Prompt;
+  readonly connection: Connection;
+  readonly pending: boolean;
+  readonly onGet: () => void;
+}) {
+  const runtimeReady =
+    connection.desiredState === "online" && connection.runtime.phase === "online";
+  const disabledReason = !runtimeReady
+    ? "Connect this runtime before rendering prompts."
+    : pending
+      ? "Another prompt request is running for this connection."
+      : undefined;
+  const promptArguments = prompt.arguments ?? [];
+  const visibleArguments = promptArguments.slice(0, 20);
   return (
     <CatalogItem
       description={prompt.description}
@@ -395,18 +496,35 @@ function PromptItem({ prompt }: { readonly prompt: Prompt }) {
       name={prompt.title ?? prompt.name}
       secondary={prompt.title ? prompt.name : undefined}
     >
-      {prompt.arguments && prompt.arguments.length > 0 ? (
+      {promptArguments.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">
-          {prompt.arguments.map((argument) => (
-            <Badge key={argument.name} variant={argument.required ? "info" : "outline"}>
+          {visibleArguments.map((argument, index) => (
+            <Badge
+              key={`${argument.name}:${String(index)}`}
+              variant={argument.required ? "info" : "outline"}
+            >
               {argument.name}
               {argument.required ? " *" : ""}
             </Badge>
           ))}
+          {promptArguments.length > visibleArguments.length ? (
+            <Badge variant="outline">
+              +{String(promptArguments.length - visibleArguments.length)} more
+            </Badge>
+          ) : null}
         </div>
       ) : (
         <span className="text-xs text-muted-foreground">No arguments</span>
       )}
+      <div className="mt-1 flex items-center justify-between gap-3 border-t pt-3">
+        <span className="text-[11px] leading-relaxed text-muted-foreground">
+          {disabledReason ?? "Provide text arguments and inspect the rendered MCP messages."}
+        </span>
+        <Button disabled={disabledReason !== undefined} onClick={onGet} size="sm" type="button">
+          <Play />
+          Render
+        </Button>
+      </div>
     </CatalogItem>
   );
 }

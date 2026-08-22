@@ -123,6 +123,9 @@ export const runtimeManagerSchema = z
   })
   .strict();
 
+export const liveHealthSchema = z.object({ status: z.literal("live") }).strict();
+export const readyHealthSchema = z.object({ status: z.literal("ready") }).strict();
+
 const metricCountSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const metricMillisecondsSchema = z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER);
 
@@ -351,7 +354,7 @@ const textToolResultContentSchema = z
 const binaryToolResultContentSchema = z
   .object({
     type: z.enum(["image", "audio"]),
-    data: z.string().min(1),
+    data: z.string(),
     mimeType: z.string().min(1),
     annotations: annotationsSchema.optional(),
     _meta: metaSchema.optional(),
@@ -378,7 +381,7 @@ const embeddedResourceContentsSchema = z
     uri: z.string().min(1),
     mimeType: z.string().optional(),
     text: z.string().optional(),
-    blob: z.string().min(1).optional(),
+    blob: z.string().optional(),
     _meta: metaSchema.optional(),
   })
   .passthrough()
@@ -439,6 +442,55 @@ export const toolCallInputSchema = z
     arguments: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
+
+export const readResourceInputSchema = z
+  .object({
+    uri: z.string().min(1).max(4_096),
+  })
+  .strict();
+
+export const readResourceResultSchema = z
+  .object({
+    contents: z.array(embeddedResourceContentsSchema),
+    _meta: metaSchema.optional(),
+  })
+  .passthrough();
+
+const promptArgumentsInputSchema = z
+  .record(z.string().min(1).max(200), z.string().max(16 * 1_024))
+  .superRefine((arguments_, context) => {
+    if (Object.keys(arguments_).length > 64) {
+      context.addIssue({ code: "custom", message: "Use at most 64 prompt arguments." });
+    }
+    if (new TextEncoder().encode(JSON.stringify(arguments_)).byteLength > 64 * 1_024) {
+      context.addIssue({
+        code: "custom",
+        message: "Prompt arguments must fit within a 64 KiB request payload.",
+      });
+    }
+  });
+
+export const getPromptInputSchema = z
+  .object({
+    name: z.string().min(1).max(200),
+    arguments: promptArgumentsInputSchema.optional(),
+  })
+  .strict();
+
+export const promptMessageSchema = z
+  .object({
+    role: z.enum(["user", "assistant"]),
+    content: toolResultContentSchema,
+  })
+  .passthrough();
+
+export const getPromptResultSchema = z
+  .object({
+    description: z.string().optional(),
+    messages: z.array(promptMessageSchema),
+    _meta: metaSchema.optional(),
+  })
+  .passthrough();
 
 export const toolSchema = z
   .object({
@@ -593,6 +645,78 @@ export const hubSchema = z
     });
   });
 
+const hubCatalogOriginShape = {
+  namespace: hubNamespaceSchema,
+  sourceName: z.string().min(1),
+  projectedName: z.string().min(1),
+  definition: z.record(z.string(), z.unknown()),
+} as const;
+
+const hubCatalogToolSchema = z.object(hubCatalogOriginShape).strict();
+const hubCatalogResourceSchema = z
+  .object({
+    ...hubCatalogOriginShape,
+    projectedUri: z.string().min(1),
+  })
+  .strict();
+const hubCatalogResourceTemplateSchema = z
+  .object({
+    ...hubCatalogOriginShape,
+    projectedUriTemplate: z.string().min(1),
+  })
+  .strict();
+
+export const hubCatalogSchema = z
+  .object({
+    revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    publishedAt: dateTimeSchema,
+    tools: z.array(hubCatalogToolSchema),
+    resources: z.array(hubCatalogResourceSchema),
+    resourceTemplates: z.array(hubCatalogResourceTemplateSchema),
+    prompts: z.array(hubCatalogToolSchema),
+  })
+  .strict()
+  .superRefine((catalog, context) => {
+    const unique = (
+      values: readonly string[],
+      path: "tools" | "resources" | "resourceTemplates" | "prompts",
+      field: "projectedName" | "projectedUri" | "projectedUriTemplate",
+    ): void => {
+      const seen = new Set<string>();
+      values.forEach((value, index) => {
+        if (seen.has(value)) {
+          context.addIssue({
+            code: "custom",
+            message: `Hub catalog ${field} values must be unique.`,
+            path: [path, index, field],
+          });
+        }
+        seen.add(value);
+      });
+    };
+
+    unique(
+      catalog.tools.map((item) => item.projectedName),
+      "tools",
+      "projectedName",
+    );
+    unique(
+      catalog.resources.map((item) => item.projectedUri),
+      "resources",
+      "projectedUri",
+    );
+    unique(
+      catalog.resourceTemplates.map((item) => item.projectedUriTemplate),
+      "resourceTemplates",
+      "projectedUriTemplate",
+    );
+    unique(
+      catalog.prompts.map((item) => item.projectedName),
+      "prompts",
+      "projectedName",
+    );
+  });
+
 export const probeSchema = z
   .object({
     reachable: z.literal(true),
@@ -661,6 +785,8 @@ export type ConnectionAuthentication = z.infer<typeof connectionAuthenticationSc
 export type ConnectionAuthenticationInput = z.infer<typeof connectionAuthenticationInputSchema>;
 export type Connection = z.infer<typeof connectionSchema>;
 export type RuntimeManager = z.infer<typeof runtimeManagerSchema>;
+export type LiveHealth = z.infer<typeof liveHealthSchema>;
+export type ReadyHealth = z.infer<typeof readyHealthSchema>;
 export type MetricOutcomes = z.infer<typeof metricOutcomesSchema>;
 export type MetricDurationSummary = z.infer<typeof metricDurationSummarySchema>;
 export type MetricAggregate = z.infer<typeof metricAggregateSchema>;
@@ -669,12 +795,18 @@ export type OperationMetrics = z.infer<typeof operationMetricsSchema>;
 export type MetricsSnapshot = z.infer<typeof metricsSnapshotSchema>;
 export type Catalog = z.infer<typeof catalogSchema>;
 export type Hub = z.infer<typeof hubSchema>;
+export type HubCatalog = z.infer<typeof hubCatalogSchema>;
 export type HubCounts = z.infer<typeof hubCountsSchema>;
 export type HubMember = z.infer<typeof hubMemberSchema>;
 export type Tool = z.infer<typeof toolSchema>;
 export type ToolCallInput = z.infer<typeof toolCallInputSchema>;
 export type ToolCallResult = z.infer<typeof toolCallResultSchema>;
 export type ToolResultContent = z.infer<typeof toolResultContentSchema>;
+export type ReadResourceInput = z.infer<typeof readResourceInputSchema>;
+export type ReadResourceResult = z.infer<typeof readResourceResultSchema>;
+export type GetPromptInput = z.infer<typeof getPromptInputSchema>;
+export type PromptMessage = z.infer<typeof promptMessageSchema>;
+export type GetPromptResult = z.infer<typeof getPromptResultSchema>;
 export type Resource = z.infer<typeof resourceSchema>;
 export type ResourceTemplate = z.infer<typeof resourceTemplateSchema>;
 export type Prompt = z.infer<typeof promptSchema>;
@@ -852,12 +984,25 @@ export const controlPlaneApi = {
     return requestJson("/v1/mcp/runtime", runtimeManagerSchema, { signal });
   },
 
+  liveHealth(signal?: AbortSignal): Promise<LiveHealth> {
+    return requestJson("/health/live", liveHealthSchema, { signal });
+  },
+
+  readyHealth(signal?: AbortSignal): Promise<ReadyHealth> {
+    return requestJson("/health/ready", readyHealthSchema, { signal });
+  },
+
   metricsSnapshot(signal?: AbortSignal): Promise<MetricsSnapshot> {
     return requestJson("/v1/mcp/metrics", metricsSnapshotSchema, { signal });
   },
 
   hubSnapshot(signal?: AbortSignal): Promise<Hub> {
     return requestJson("/v1/mcp/hub", hubSchema, { signal });
+  },
+
+  getHubCatalog(expectedHubRevision: number, signal?: AbortSignal): Promise<HubCatalog> {
+    const params = new URLSearchParams({ expectedHubRevision: String(expectedHubRevision) });
+    return requestJson(`/v1/mcp/hub/catalog?${params.toString()}`, hubCatalogSchema, { signal });
   },
 
   attachHubMember(input: {
@@ -955,6 +1100,20 @@ export const controlPlaneApi = {
 
   callTool(connectionId: string, input: ToolCallInput): Promise<ToolCallResult> {
     return requestJson(`${connectionPath(connectionId)}/tools/call`, toolCallResultSchema, {
+      method: "POST",
+      body: input,
+    });
+  },
+
+  readResource(connectionId: string, input: ReadResourceInput): Promise<ReadResourceResult> {
+    return requestJson(`${connectionPath(connectionId)}/resources/read`, readResourceResultSchema, {
+      method: "POST",
+      body: input,
+    });
+  },
+
+  getPrompt(connectionId: string, input: GetPromptInput): Promise<GetPromptResult> {
+    return requestJson(`${connectionPath(connectionId)}/prompts/get`, getPromptResultSchema, {
       method: "POST",
       body: input,
     });

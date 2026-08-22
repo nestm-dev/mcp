@@ -41,6 +41,10 @@ describe("UnifiedEndpointPanel", () => {
     expect(html).toContain("1 MCP available");
     expect(html).toContain("Copy unified MCP endpoint path");
     expect(html).toContain("Add or remove an MCP from its MCP card");
+    expect(html).toContain("1 tool");
+    expect(html).toContain("0 resources");
+    expect(html).toContain("0 templates");
+    expect(html).toContain("0 prompts");
     expect(html).not.toContain("Docs server");
     expect(html).not.toContain("docs");
     expect(html).not.toContain("generation");

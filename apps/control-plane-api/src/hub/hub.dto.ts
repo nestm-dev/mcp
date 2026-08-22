@@ -1,6 +1,6 @@
 import { Transform, Type } from "class-transformer";
-import { ApiProperty } from "@nestjs/swagger";
-import { IsInt, IsString, Matches, Max, Min } from "class-validator";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { IsInt, IsOptional, IsString, Matches, Max, Min } from "class-validator";
 
 export const HUB_NAMESPACE_PATTERN = /^[a-z](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
 
@@ -48,6 +48,16 @@ export class DetachHubMemberQueryDto {
 	@Min(1)
 	@Max(Number.MAX_SAFE_INTEGER)
 	runtimeGeneration!: number;
+}
+
+export class HubCatalogQueryDto {
+	@ApiPropertyOptional({ minimum: 1 })
+	@IsOptional()
+	@Type(() => Number)
+	@IsInt()
+	@Min(1)
+	@Max(Number.MAX_SAFE_INTEGER)
+	expectedHubRevision?: number;
 }
 
 export class RefreshHubCatalogDto {

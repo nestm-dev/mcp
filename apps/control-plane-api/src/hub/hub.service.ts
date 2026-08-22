@@ -151,8 +151,11 @@ export class HubService {
 		});
 	}
 
-	catalog(): Promise<HubCatalogView> {
-		return this.#serialize(() => this.#catalog());
+	catalog(expectedHubRevision?: number): Promise<HubCatalogView> {
+		return this.#serialize(() => {
+			if (expectedHubRevision !== undefined) this.#assertRevision(expectedHubRevision);
+			return this.#catalog();
+		});
 	}
 
 	async #catalog(): Promise<HubCatalogView> {

@@ -10,11 +10,52 @@ import {
 	Length,
 	Max,
 	Min,
+	ValidateBy,
 	ValidateNested,
 } from "class-validator";
 import { Type } from "class-transformer";
 
 import type { ConnectionAuthenticationKind, DesiredConnectionState } from "./connection.types.ts";
+
+const MAX_PROMPT_ARGUMENTS = 64;
+const MAX_PROMPT_ARGUMENT_NAME_CHARACTERS = 200;
+const MAX_PROMPT_ARGUMENT_VALUE_CHARACTERS = 16 * 1_024;
+const MAX_PROMPT_ARGUMENT_JSON_BYTES = 64 * 1_024;
+
+function IsPromptArguments(): PropertyDecorator {
+	return ValidateBy({
+		name: "isPromptArguments",
+		validator: {
+			validate(value: unknown): boolean {
+				if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+				const entries = Object.entries(value);
+				if (entries.length > MAX_PROMPT_ARGUMENTS) return false;
+				if (
+					entries.some(
+						([name, argument]) =>
+							name.length === 0 ||
+							name.length > MAX_PROMPT_ARGUMENT_NAME_CHARACTERS ||
+							typeof argument !== "string" ||
+							argument.length > MAX_PROMPT_ARGUMENT_VALUE_CHARACTERS,
+					)
+				) {
+					return false;
+				}
+				try {
+					return (
+						new TextEncoder().encode(JSON.stringify(value)).byteLength <=
+						MAX_PROMPT_ARGUMENT_JSON_BYTES
+					);
+				} catch {
+					return false;
+				}
+			},
+			defaultMessage(): string {
+				return "arguments must contain at most 64 string values and fit within 64 KiB";
+			},
+		},
+	});
+}
 
 export class ConnectionAuthenticationDto {
 	@ApiProperty({ enum: ["none", "oauth"] })
@@ -114,5 +155,6 @@ export class GetPromptDto {
 	@ApiPropertyOptional({ type: "object", additionalProperties: { type: "string" } })
 	@IsOptional()
 	@IsObject()
+	@IsPromptArguments()
 	arguments?: Record<string, string>;
 }

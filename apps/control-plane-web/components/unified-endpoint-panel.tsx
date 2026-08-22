@@ -95,6 +95,16 @@ export function UnifiedEndpointPanel({
               <p className="text-xs text-muted-foreground">
                 Add or remove an MCP from its MCP card.
               </p>
+              <div aria-label="Published capability counts" className="mt-2 flex flex-wrap gap-1.5">
+                <Badge variant="outline">{formatCount(snapshot.counts.tools, "tool")}</Badge>
+                <Badge variant="outline">
+                  {formatCount(snapshot.counts.resources, "resource")}
+                </Badge>
+                <Badge variant="outline">
+                  {formatCount(snapshot.counts.resourceTemplates, "template")}
+                </Badge>
+                <Badge variant="outline">{formatCount(snapshot.counts.prompts, "prompt")}</Badge>
+              </div>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -126,4 +136,8 @@ async function copyEndpoint(endpoint: string): Promise<void> {
   } catch {
     toast.error("Could not copy the MCP endpoint");
   }
+}
+
+function formatCount(value: number, singular: string): string {
+  return `${String(value)} ${singular}${value === 1 ? "" : "s"}`;
 }

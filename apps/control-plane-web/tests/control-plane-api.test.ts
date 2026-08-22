@@ -7,9 +7,15 @@ import {
   connectionUpdateSchema,
   ControlPlaneApiError,
   controlPlaneApi,
+  getPromptInputSchema,
+  getPromptResultSchema,
+  hubCatalogSchema,
   hubSchema,
+  liveHealthSchema,
   metricsSnapshotSchema,
   oauthAuthorizationPath,
+  readResourceResultSchema,
+  readyHealthSchema,
   runtimeManagerSchema,
   toolCallResultSchema,
 } from "../lib/control-plane-api";
@@ -95,6 +101,30 @@ const hub = {
     },
   ],
   counts: { tools: 1, resources: 1, resourceTemplates: 1, prompts: 1 },
+};
+
+const hubCatalog = {
+  revision: 3,
+  publishedAt: "2026-08-21T12:06:00.000Z",
+  tools: [
+    {
+      namespace: "docs",
+      sourceName: "search",
+      projectedName: "docs__search",
+      definition: { name: "search", inputSchema: { type: "object" } },
+    },
+  ],
+  resources: [
+    {
+      namespace: "docs",
+      sourceName: "guide",
+      projectedName: "docs__guide",
+      projectedUri: "mcp+gateway://docs/docs%3A%2F%2Fguide",
+      definition: { name: "guide", uri: "docs://guide" },
+    },
+  ],
+  resourceTemplates: [],
+  prompts: [],
 };
 
 afterEach(() => {
@@ -184,6 +214,22 @@ describe("control-plane response schemas", () => {
     ).toThrow();
     expect(() =>
       hubSchema.parse({ ...hub, endpoint: { ...hub.endpoint, path: "/mcp" } }),
+    ).toThrow();
+  });
+
+  it("strictly validates health and projected hub catalog envelopes", () => {
+    expect(liveHealthSchema.parse({ status: "live" })).toEqual({ status: "live" });
+    expect(readyHealthSchema.parse({ status: "ready" })).toEqual({ status: "ready" });
+    expect(() => liveHealthSchema.parse({ status: "live", runtime: "open" })).toThrow();
+    expect(() => readyHealthSchema.parse({ status: "not-ready" })).toThrow();
+
+    expect(hubCatalogSchema.parse(hubCatalog)).toEqual(hubCatalog);
+    expect(() => hubCatalogSchema.parse({ ...hubCatalog, routeTable: [] })).toThrow();
+    expect(() =>
+      hubCatalogSchema.parse({
+        ...hubCatalog,
+        tools: [hubCatalog.tools[0], hubCatalog.tools[0]],
+      }),
     ).toThrow();
   });
 
@@ -319,10 +365,64 @@ describe("control-plane response schemas", () => {
     };
 
     expect(toolCallResultSchema.parse(result)).toEqual(result);
+    expect(
+      toolCallResultSchema.parse({
+        content: [{ type: "image", data: "", mimeType: "image/png" }],
+      }),
+    ).toEqual({ content: [{ type: "image", data: "", mimeType: "image/png" }] });
     expect(() =>
       toolCallResultSchema.parse({ content: [{ type: "text", value: "missing text" }] }),
     ).toThrow();
     expect(() => toolCallResultSchema.parse({ structuredContent: {} })).toThrow();
+  });
+
+  it("validates resource and prompt results while preserving additive protocol fields", () => {
+    const resourceResult = {
+      contents: [
+        { uri: "docs://guide", mimeType: "text/plain", text: "Guide", checksum: "sha256" },
+      ],
+      futureResultField: true,
+    };
+    const promptResult = {
+      description: "Review docs",
+      messages: [
+        { role: "user", content: { type: "text", text: "Review this guide", citations: [] } },
+        { role: "assistant", content: { type: "citation", uri: "docs://guide" } },
+      ],
+      futureResultField: true,
+    };
+
+    expect(readResourceResultSchema.parse(resourceResult)).toEqual(resourceResult);
+    expect(getPromptResultSchema.parse(promptResult)).toEqual(promptResult);
+    expect(
+      readResourceResultSchema.parse({ contents: [{ uri: "docs://empty", blob: "" }] }),
+    ).toEqual({
+      contents: [{ uri: "docs://empty", blob: "" }],
+    });
+    expect(() => readResourceResultSchema.parse({ contents: [{ uri: "docs://guide" }] })).toThrow();
+    expect(() =>
+      getPromptResultSchema.parse({
+        messages: [{ role: "system", content: { type: "text", text: "No" } }],
+      }),
+    ).toThrow();
+  });
+
+  it("bounds prompt input arguments and rejects non-string values", () => {
+    expect(getPromptInputSchema.parse({ name: "review", arguments: { topic: "MCP" } })).toEqual({
+      name: "review",
+      arguments: { topic: "MCP" },
+    });
+    expect(() =>
+      getPromptInputSchema.parse({ name: "review", arguments: { topic: 42 } }),
+    ).toThrow();
+    expect(() =>
+      getPromptInputSchema.parse({
+        name: "review",
+        arguments: Object.fromEntries(
+          Array.from({ length: 65 }, (_, index) => [`argument-${String(index)}`, "value"]),
+        ),
+      }),
+    ).toThrow();
   });
 });
 
@@ -441,6 +541,55 @@ describe("controlPlaneApi", () => {
     );
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/mcp/metrics",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("loads strict health and hub catalog snapshots through same-origin GET routes", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ status: "live" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ status: "ready" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(hubCatalog), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await expect(controlPlaneApi.liveHealth(controller.signal)).resolves.toEqual({
+      status: "live",
+    });
+    await expect(controlPlaneApi.readyHealth(controller.signal)).resolves.toEqual({
+      status: "ready",
+    });
+    await expect(controlPlaneApi.getHubCatalog(4, controller.signal)).resolves.toEqual(hubCatalog);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/health/live",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/health/ready",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/v1/mcp/hub/catalog?expectedHubRevision=4",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
@@ -569,6 +718,56 @@ describe("controlPlaneApi", () => {
           name: "read_wiki_structure",
           arguments: { repoName: "facebook/react" },
         }),
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
+  it("reads a resource and gets a prompt without automatic transport semantics", async () => {
+    const resourceResult = {
+      contents: [{ uri: "docs://guide", mimeType: "text/plain", text: "Guide" }],
+    };
+    const promptResult = {
+      messages: [{ role: "user", content: { type: "text", text: "Review MCP" } }],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(resourceResult), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(promptResult), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      controlPlaneApi.readResource(connection.id, { uri: "docs://guide" }),
+    ).resolves.toEqual(resourceResult);
+    await expect(
+      controlPlaneApi.getPrompt(connection.id, { name: "review", arguments: { topic: "MCP" } }),
+    ).resolves.toEqual(promptResult);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `/api/v1/mcp/connections/${connection.id}/resources/read`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ uri: "docs://guide" }),
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `/api/v1/mcp/connections/${connection.id}/prompts/get`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ name: "review", arguments: { topic: "MCP" } }),
         signal: expect.any(AbortSignal),
       }),
     );

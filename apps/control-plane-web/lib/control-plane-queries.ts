@@ -5,6 +5,10 @@ import {
   type Connection,
   type Hub,
   type HubMember,
+  type GetPromptInput,
+  type GetPromptResult,
+  type ReadResourceInput,
+  type ReadResourceResult,
   type RuntimeManager,
   type RuntimePhase,
   type ToolCallInput,
@@ -16,9 +20,15 @@ export const controlPlaneKeys = {
   connections: ["control-plane", "connections"] as const,
   runtime: ["control-plane", "runtime"] as const,
   metrics: ["control-plane", "metrics"] as const,
+  healthLive: ["control-plane", "health", "live"] as const,
+  healthReady: ["control-plane", "health", "ready"] as const,
   hub: ["control-plane", "hub"] as const,
+  hubCatalog: (hubRevision: number) => ["control-plane", "hub", "catalog", hubRevision] as const,
+  hubCatalogPrefix: ["control-plane", "hub", "catalog"] as const,
   hubRefresh: ["control-plane", "hub", "refresh"] as const,
   toolCall: (connectionId: string) => ["control-plane", "tool-call", connectionId] as const,
+  resourceRead: (connectionId: string) => ["control-plane", "resource-read", connectionId] as const,
+  promptGet: (connectionId: string) => ["control-plane", "prompt-get", connectionId] as const,
   catalog: (connectionId: string, runtimeGeneration: number) =>
     ["control-plane", "catalog", connectionId, runtimeGeneration] as const,
   catalogPrefix: (connectionId: string) => ["control-plane", "catalog", connectionId] as const,
@@ -33,6 +43,7 @@ const transientPhases: ReadonlySet<RuntimePhase> = new Set([
 
 export const TRANSIENT_POLL_INTERVAL_MS = 1_250;
 export const METRICS_POLL_INTERVAL_MS = 5_000;
+export const HEALTH_POLL_INTERVAL_MS = 10_000;
 
 export function isTransientPhase(phase: RuntimePhase): boolean {
   return transientPhases.has(phase);
@@ -62,10 +73,45 @@ export function metricsQueryOptions() {
   });
 }
 
+export function liveHealthQueryOptions() {
+  return queryOptions({
+    queryKey: controlPlaneKeys.healthLive,
+    queryFn: ({ signal }) => controlPlaneApi.liveHealth(signal),
+    refetchInterval: HEALTH_POLL_INTERVAL_MS,
+    refetchIntervalInBackground: false,
+    retry: 1,
+  });
+}
+
+export function readyHealthQueryOptions() {
+  return queryOptions({
+    queryKey: controlPlaneKeys.healthReady,
+    queryFn: ({ signal }) => controlPlaneApi.readyHealth(signal),
+    refetchInterval: HEALTH_POLL_INTERVAL_MS,
+    refetchIntervalInBackground: false,
+    retry: 1,
+  });
+}
+
 export function hubQueryOptions() {
   return queryOptions({
     queryKey: controlPlaneKeys.hub,
     queryFn: ({ signal }) => controlPlaneApi.hubSnapshot(signal),
+  });
+}
+
+export function hubCatalogQueryOptions(hubRevision: number | undefined) {
+  return queryOptions({
+    enabled: hubRevision !== undefined,
+    queryKey: controlPlaneKeys.hubCatalog(hubRevision ?? 0),
+    queryFn: ({ signal }) => {
+      if (hubRevision === undefined) {
+        return Promise.reject(
+          new Error("A Hub revision is required to read its projected catalog."),
+        );
+      }
+      return controlPlaneApi.getHubCatalog(hubRevision, signal);
+    },
   });
 }
 
@@ -117,6 +163,24 @@ export function toolCallMutationOptions(connectionId: string) {
     mutationKey: controlPlaneKeys.toolCall(connectionId),
     mutationFn: (input) => controlPlaneApi.callTool(connectionId, input),
     // A tool may have external side effects, so transport failures must never trigger a replay.
+    retry: false,
+  });
+}
+
+export function resourceReadMutationOptions(connectionId: string) {
+  return mutationOptions<ReadResourceResult, Error, ReadResourceInput>({
+    mutationKey: controlPlaneKeys.resourceRead(connectionId),
+    mutationFn: (input) => controlPlaneApi.readResource(connectionId, input),
+    // Keep validation reads user-triggered; a transport failure must not replay the request.
+    retry: false,
+  });
+}
+
+export function promptGetMutationOptions(connectionId: string) {
+  return mutationOptions<GetPromptResult, Error, GetPromptInput>({
+    mutationKey: controlPlaneKeys.promptGet(connectionId),
+    mutationFn: (input) => controlPlaneApi.getPrompt(connectionId, input),
+    // Prompt rendering can invoke upstream work, so every attempt remains explicit.
     retry: false,
   });
 }

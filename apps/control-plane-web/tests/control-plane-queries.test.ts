@@ -12,10 +12,16 @@ import {
   connectionPollInterval,
   controlPlaneKeys,
   detachHubMemberMutationOptions,
+  HEALTH_POLL_INTERVAL_MS,
+  hubCatalogQueryOptions,
   hubQueryOptions,
+  liveHealthQueryOptions,
   METRICS_POLL_INTERVAL_MS,
   metricsQueryOptions,
+  promptGetMutationOptions,
+  readyHealthQueryOptions,
   refreshHubCatalogMutationOptions,
+  resourceReadMutationOptions,
   runtimePollInterval,
   toolCallMutationOptions,
   TRANSIENT_POLL_INTERVAL_MS,
@@ -97,6 +103,24 @@ describe("control-plane query policy", () => {
 
     expect(hubOptions.queryKey).toEqual(["control-plane", "hub"]);
     expect(hubOptions.refetchInterval).toBeUndefined();
+  });
+
+  it("polls liveness and readiness independently", () => {
+    const live = liveHealthQueryOptions();
+    const ready = readyHealthQueryOptions();
+
+    expect(live.queryKey).toEqual(["control-plane", "health", "live"]);
+    expect(ready.queryKey).toEqual(["control-plane", "health", "ready"]);
+    expect(live.refetchInterval).toBe(HEALTH_POLL_INTERVAL_MS);
+    expect(ready.refetchInterval).toBe(HEALTH_POLL_INTERVAL_MS);
+    expect(live.retry).toBe(1);
+    expect(ready.retry).toBe(1);
+  });
+
+  it("loads the hub catalog only after the hub snapshot is available", () => {
+    expect(hubCatalogQueryOptions(undefined).enabled).toBe(false);
+    expect(hubCatalogQueryOptions(7).enabled).toBe(true);
+    expect(hubCatalogQueryOptions(7).queryKey).toEqual(["control-plane", "hub", "catalog", 7]);
   });
 
   it("forwards endpoint-status cancellation", async () => {
@@ -189,5 +213,41 @@ describe("control-plane query policy", () => {
       }),
     ).resolves.toEqual(result);
     expect(callTool).toHaveBeenCalledWith("connection-a", input);
+  });
+
+  it("never retries resource reads or prompt rendering and forwards exact inputs", async () => {
+    const resourceResult = { contents: [{ uri: "docs://guide", text: "Guide" }] };
+    const promptResult = {
+      messages: [{ role: "user" as const, content: { type: "text", text: "Review MCP" } }],
+    };
+    const readResource = vi
+      .spyOn(controlPlaneApi, "readResource")
+      .mockResolvedValue(resourceResult);
+    const getPrompt = vi.spyOn(controlPlaneApi, "getPrompt").mockResolvedValue(promptResult);
+    const readOptions = resourceReadMutationOptions("connection-a");
+    const promptOptions = promptGetMutationOptions("connection-a");
+    const readInput = { uri: "docs://guide" };
+    const promptInput = { name: "review", arguments: { topic: "MCP" } };
+
+    expect(readOptions.mutationKey).toEqual(["control-plane", "resource-read", "connection-a"]);
+    expect(promptOptions.mutationKey).toEqual(["control-plane", "prompt-get", "connection-a"]);
+    expect(readOptions.retry).toBe(false);
+    expect(promptOptions.retry).toBe(false);
+    await expect(
+      readOptions.mutationFn?.(readInput, {
+        client: new QueryClient(),
+        meta: undefined,
+        mutationKey: readOptions.mutationKey,
+      }),
+    ).resolves.toEqual(resourceResult);
+    await expect(
+      promptOptions.mutationFn?.(promptInput, {
+        client: new QueryClient(),
+        meta: undefined,
+        mutationKey: promptOptions.mutationKey,
+      }),
+    ).resolves.toEqual(promptResult);
+    expect(readResource).toHaveBeenCalledWith("connection-a", readInput);
+    expect(getPrompt).toHaveBeenCalledWith("connection-a", promptInput);
   });
 });

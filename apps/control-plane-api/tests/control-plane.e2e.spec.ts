@@ -53,6 +53,7 @@ const catalogSchema = z.object({
 });
 const toolResultSchema = z.object({
 	content: z.array(z.object({ type: z.string(), text: z.string().optional() })),
+	structuredContent: z.object({ echoed: z.string() }).optional(),
 });
 const resourceResultSchema = z.object({
 	contents: z.array(z.object({ text: z.string().optional() })),
@@ -241,6 +242,17 @@ describe("MCP control-plane API", () => {
 			"docs://control-plane/guide",
 		]);
 		expect(catalog.prompts.map((prompt) => prompt.name)).toEqual(["summarize"]);
+		expect(
+			parse(
+				await inject({
+					method: "POST",
+					url: `/v1/mcp/connections/${atCapacity.id}/tools/call`,
+					payload: { name: "echo", arguments: { text: 42 } },
+					expectedStatus: 422,
+				}),
+				problemSchema,
+			).code,
+		).toBe("MCP_TOOL_ARGUMENTS_INVALID");
 
 		const toolResult = parse(
 			await inject({
@@ -251,7 +263,10 @@ describe("MCP control-plane API", () => {
 			}),
 			toolResultSchema,
 		);
-		expect(toolResult.content).toEqual([{ type: "text", text: "hello" }]);
+		expect(toolResult).toEqual({
+			content: [{ type: "text", text: "hello" }],
+			structuredContent: { echoed: "hello" },
+		});
 
 		const resourceResult = parse(
 			await inject({
@@ -263,6 +278,18 @@ describe("MCP control-plane API", () => {
 			resourceResultSchema,
 		);
 		expect(resourceResult.contents[0]?.text).toBe("control-plane guide");
+
+		expect(
+			parse(
+				await inject({
+					method: "POST",
+					url: `/v1/mcp/connections/${atCapacity.id}/prompts/get`,
+					payload: { name: "summarize", arguments: { topic: 42 } },
+					expectedStatus: 400,
+				}),
+				problemSchema,
+			).code,
+		).toBe("REQUEST_INVALID");
 
 		const promptResult = parse(
 			await inject({
@@ -297,8 +324,22 @@ describe("MCP control-plane API", () => {
 			members: [{ connectionId: atCapacity.id, namespace: "fixture", runtimeGeneration: 1 }],
 			counts: { tools: 1, resources: 1, prompts: 1 },
 		});
+		expect(
+			parse(
+				await inject({
+					method: "GET",
+					url: "/v1/mcp/hub/catalog?expectedHubRevision=1",
+					expectedStatus: 409,
+				}),
+				problemSchema,
+			).code,
+		).toBe("MCP_HUB_REVISION_CONFLICT");
 		const hubCatalog = parse(
-			await inject({ method: "GET", url: "/v1/mcp/hub/catalog", expectedStatus: 200 }),
+			await inject({
+				method: "GET",
+				url: `/v1/mcp/hub/catalog?expectedHubRevision=${String(attachedHub.revision)}`,
+				expectedStatus: 200,
+			}),
 			hubCatalogSchema,
 		);
 		expect(hubCatalog.tools).toMatchObject([{ namespace: "fixture", sourceName: "echo" }]);
@@ -430,8 +471,16 @@ function createUpstream(): McpServerRuntime {
 							properties: { text: { type: "string" } },
 							required: ["text"],
 						}),
+						outputSchema: fromJsonSchema<{ echoed: string }>({
+							type: "object",
+							properties: { echoed: { type: "string" } },
+							required: ["echoed"],
+						}),
 					},
-					async ({ text }) => ({ content: [{ type: "text", text }] }),
+					async ({ text }) => ({
+						content: [{ type: "text", text }],
+						structuredContent: { echoed: text },
+					}),
 				);
 				server.registerResource(
 					"guide",

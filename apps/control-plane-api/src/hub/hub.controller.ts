@@ -15,7 +15,12 @@ import {
 } from "@nestjs/common";
 import { ApiNoContentResponse, ApiOkResponse, ApiOperation, ApiTags } from "@nestjs/swagger";
 
-import { AttachHubMemberDto, DetachHubMemberQueryDto, RefreshHubCatalogDto } from "./hub.dto.ts";
+import {
+	AttachHubMemberDto,
+	DetachHubMemberQueryDto,
+	HubCatalogQueryDto,
+	RefreshHubCatalogDto,
+} from "./hub.dto.ts";
 import { HubCatalogResponseDto, HubResponseDto } from "./hub.response.ts";
 import { HubService } from "./hub.service.ts";
 
@@ -54,8 +59,8 @@ export class HubController {
 	@Get("catalog")
 	@Header("Cache-Control", "no-store")
 	@ApiOkResponse({ type: HubCatalogResponseDto })
-	catalog() {
-		return this.hub.catalog();
+	catalog(@Query() query: HubCatalogQueryDto) {
+		return this.hub.catalog(query.expectedHubRevision);
 	}
 
 	@Post("catalog/refresh")

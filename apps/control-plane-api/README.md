@@ -50,7 +50,7 @@ Connections can be attached and detached without restarting the API:
 - `GET /v1/mcp/hub`
 - `PUT /v1/mcp/hub/members/:connectionId`
 - `DELETE /v1/mcp/hub/members/:connectionId`
-- `GET /v1/mcp/hub/catalog`
+- `GET /v1/mcp/hub/catalog?expectedHubRevision=...`
 - `POST /v1/mcp/hub/catalog/refresh`
 
 Membership is in memory and resets when the API restarts. Each attachment receives a fresh opaque
@@ -76,6 +76,9 @@ authorization and durable authority; those concerns do not move into `@nestm/mcp
   should remain ephemeral until credential residency has its own reviewed contract.
 - Responses never expose the stored endpoint path, runtime server name, session ID, upstream
   instructions, raw discovery result, or caught error message.
+- Direct tool execution resolves the tool from the catalog captured for the current runtime
+  generation, validates arguments before dispatch, and passes the pinned definition to the client
+  runtime so advertised structured outputs are validated as well.
 - This exact-host fetch guard demonstrates the admission seam; an internet-facing product still
   needs DNS pinning/rebinding protection, response-body limits, authentication, and rate limiting.
 
