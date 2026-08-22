@@ -4,3 +4,6 @@ dist-tsc
 coverage
 references
 pnpm-lock.yaml
+.next
+.vinext
+.wrangler

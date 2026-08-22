@@ -105,6 +105,43 @@ const gateway = new McpGateway({
 });
 ```
 
+## Dynamic upstream topology
+
+Set `dynamicUpstreams: true` when an application-owned control plane must publish already-admitted
+upstreams without rebuilding its Nest application or inbound HTTP runtime:
+
+```ts
+const gateway = new McpGateway({
+	dynamicUpstreams: true,
+	upstreams: [],
+	policy,
+});
+
+const attached = await gateway.attachUpstream(
+	{ name: freshRouteId, client: managedClient },
+	{ expectedRevision: gateway.topology().revision },
+);
+
+await gateway.detachUpstream(freshRouteId, { expectedRevision: attached.revision });
+```
+
+Mutations are serialized and optionally compare-and-swap fenced. `topology()` exposes only the
+process-local revision and routing names; upstream clients and credentials are never projected.
+`replaceUpstream()` swaps one routing identity atomically. Accepted requests retain the immutable
+topology snapshot they captured, while later requests see the committed topology.
+
+Use a fresh, non-secret routing identity for every attachment generation. Do not reuse a detached
+name for different runtime material: a fresh identity ensures a held old tool, prompt, or resource
+identifier can only become stale, never target a replacement generation. Human display aliases and
+tenant/workspace authority belong in the host control plane, not in `McpGateway`.
+
+Dynamic mode advertises tools, prompts, and resources from the empty topology and declares
+`listChanged: true`. After a successful topology commit, the owning persistent
+`McpServerRuntime.notify` must emit `toolsChanged()`, `promptsChanged()`, and
+`resourcesChanged()`. The gateway cannot emit those itself because it is framework-neutral and may
+be hosted by more than one runtime. Resource subscriptions and upstream notification bridging are
+still unavailable.
+
 ## Lifecycle
 
 `McpGateway` implements `AsyncDisposable`. `close()` is idempotent: it rejects new work with
@@ -223,7 +260,14 @@ Multi-round-trip `input_required` flows are not proxied. Every generic structura
 
 Transport/client response-body limits remain mandatory for production. Gateway discovery adds post-parse structural and byte bounds, but execution results (tool, prompt, resource, and completion payloads) can already have been allocated by a custom structural client before the gateway receives them; configure equivalent upstream response limits at that boundary.
 
-The gateway does not bridge upstream subscription streams or list-change notifications. It advertises `listChanged: false` for projected tools/prompts/resources and `subscribe: false` for resources. To keep those claims truthful, `asServerFeature()` is dedicated-server-only in this alpha: pre-existing tool, prompt, resource, completion handlers or notification capability ownership produce `CAPABILITY_CONFLICT`. Run local decorated capabilities on a separate MCP server. Call `invalidateDiscovery()` for one upstream/authorization partition or `invalidateAllDiscovery()` for a concurrency-safe global clear from application-owned change handling; clients receive a refreshed snapshot on a new server instance/request.
+The gateway does not bridge upstream subscription streams or resource subscriptions. Static mode
+advertises `listChanged: false`; dynamic mode advertises `listChanged: true` and requires its host
+to publish invalidations after committed topology changes as described above. Both modes advertise
+`subscribe: false` for resources. `asServerFeature()` remains dedicated-server-only in this alpha:
+pre-existing tool, prompt, resource, completion handlers or notification capability ownership
+produce `CAPABILITY_CONFLICT`. Run local decorated capabilities on a separate MCP server. Call
+`invalidateDiscovery()` for one upstream/authorization partition or `invalidateAllDiscovery()` for
+a concurrency-safe global clear from application-owned change handling.
 
 ## Entry points
 

@@ -83,6 +83,8 @@ export type {
 	McpGatewayResourceTemplateUriCodec,
 	McpGatewayResourceUriCodec,
 	McpGatewayToolClient,
+	McpGatewayTopologyMutationOptions,
+	McpGatewayTopologySnapshot,
 	McpGatewayTransform,
 	McpGatewayUpstream,
 } from "./mcp-gateway.types.ts";

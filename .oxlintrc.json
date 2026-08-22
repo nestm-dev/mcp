@@ -14,7 +14,7 @@
 		"no-console": "error",
 		"import/no-default-export": "error"
 	},
-	"ignorePatterns": ["dist", "dist-tsc", "coverage", "references"],
+	"ignorePatterns": ["dist", "dist-tsc", "coverage", "references", "apps/control-plane-web"],
 	"overrides": [
 		{
 			"files": ["*.config.ts", "**/*.config.ts"],

@@ -68,5 +68,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
+      - run: pnpm run verify:apps
       - run: pnpm --filter "./packages/*" exec publint --strict
       - run: pnpm run verify:attw

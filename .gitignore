@@ -5,6 +5,9 @@ dist/
 dist-tsc/
 coverage/
 *.tsbuildinfo
+.next/
+.vinext/
+.wrangler/
 
 .env
 .env.*

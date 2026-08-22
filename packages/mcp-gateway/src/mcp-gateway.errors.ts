@@ -26,7 +26,9 @@ export type McpGatewayErrorCode =
 	| "UNSUPPORTED_UPSTREAM_CAPABILITY"
 	| "UPSTREAM_INPUT_REQUIRED"
 	| "UNKNOWN_TOOL"
-	| "UNKNOWN_UPSTREAM";
+	| "UNKNOWN_UPSTREAM"
+	| "STATIC_TOPOLOGY"
+	| "TOPOLOGY_REVISION_CONFLICT";
 
 /** Stable operational error raised by gateway routing and discovery validation. */
 export class McpGatewayError extends Error {

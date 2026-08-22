@@ -1,0 +1,54 @@
+{
+	"name": "@nestm/mcp-control-plane-api",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Reference NestJS control plane that validates the public NestM MCP client runtime.",
+	"type": "module",
+	"engines": {
+		"node": ">=22.13.0"
+	},
+	"scripts": {
+		"build": "tsdown",
+		"build:watch": "tsdown --watch src",
+		"dev": "tsdown --watch src --on-success \"node --env-file-if-exists=.env --enable-source-maps dist/main.mjs\"",
+		"start": "node --enable-source-maps dist/main.mjs",
+		"smoke:dist": "node --enable-source-maps dist/smoke.mjs",
+		"typecheck": "tsc -b",
+		"test": "vitest run",
+		"lint": "oxlint --type-aware .",
+		"format": "prettier --write . --ignore-unknown",
+		"format:check": "prettier --check . --ignore-unknown"
+	},
+	"dependencies": {
+		"@fastify/static": "9.3.0",
+		"@modelcontextprotocol/client": "2.0.0",
+		"@modelcontextprotocol/node": "2.0.0",
+		"@modelcontextprotocol/server": "2.0.0",
+		"@nestjs/common": "12.0.0-alpha.5",
+		"@nestjs/config": "4.0.4",
+		"@nestjs/core": "12.0.0-alpha.5",
+		"@nestjs/platform-fastify": "12.0.0-alpha.5",
+		"@nestjs/swagger": "12.0.0-alpha.2",
+		"@nestm/mcp": "workspace:^",
+		"@nestm/mcp-client": "workspace:^",
+		"@nestm/mcp-gateway": "workspace:^",
+		"@nestm/mcp-manager": "workspace:^",
+		"@nestm/mcp-observability": "workspace:^",
+		"@nestm/mcp-server": "workspace:^",
+		"class-transformer": "0.5.1",
+		"class-validator": "0.14.2",
+		"fastify": "5.11.2",
+		"reflect-metadata": "0.2.2",
+		"rxjs": "7.8.2",
+		"zod": "4.4.3"
+	},
+	"devDependencies": {
+		"@nestjs/testing": "12.0.0-alpha.5",
+		"@types/node": "26.1.2",
+		"oxlint": "1.77.0",
+		"prettier": "3.9.6",
+		"tsdown": "0.22.14",
+		"typescript": "7.0.2",
+		"vitest": "4.1.10"
+	}
+}

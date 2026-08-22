@@ -3,10 +3,12 @@
 	"references": [
 		{ "path": "./packages/mcp-core" },
 		{ "path": "./packages/mcp-client" },
+		{ "path": "./packages/mcp-manager" },
 		{ "path": "./packages/mcp-server" },
 		{ "path": "./packages/mcp-auth" },
 		{ "path": "./packages/mcp-observability" },
 		{ "path": "./packages/mcp-gateway" },
-		{ "path": "./packages/mcp" }
+		{ "path": "./packages/mcp" },
+		{ "path": "./apps/control-plane-api" }
 	]
 }

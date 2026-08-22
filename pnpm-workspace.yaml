@@ -1,6 +1,9 @@
 packages:
   - "packages/*"
-  - "examples/*"
+  - "apps/*"
+
+overrides:
+  "vite": "8.0.16"
 
 peerDependencyRules:
   allowedVersions:
@@ -11,6 +14,8 @@ peerDependencyRules:
 
 allowBuilds:
   "@nestjs/core": false
+  "@scarf/scarf": false
   esbuild: false
+  workerd: true
 
 provenance: true

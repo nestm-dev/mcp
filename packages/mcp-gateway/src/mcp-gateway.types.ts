@@ -215,6 +215,18 @@ export interface McpGatewayUpstream {
 	readonly client: McpGatewayToolClient | McpGatewayClientResolver;
 }
 
+/** Immutable, credential-free view of the gateway's current upstream topology. */
+export interface McpGatewayTopologySnapshot {
+	/** Monotonic process-local revision. Initial configuration is revision zero. */
+	readonly revision: number;
+	readonly upstreamNames: readonly string[];
+}
+
+export interface McpGatewayTopologyMutationOptions {
+	/** Optional compare-and-swap fence for concurrent control-plane writers. */
+	readonly expectedRevision?: number;
+}
+
 /** Public runtime surface consumed by the first-party gateway adapter. */
 export type McpGatewayClientRuntime = Pick<
 	McpClientRuntime,
@@ -500,6 +512,11 @@ export type McpGatewayLifecycleObserver = McpLifecycleObserver<McpGatewayOperati
 
 export interface McpGatewayOptions {
 	readonly upstreams: readonly McpGatewayUpstream[];
+	/**
+	 * Enables runtime attach/detach and advertises tools, prompts, and resources even while empty.
+	 * Completion and notification/subscription bridging remain deliberately unavailable.
+	 */
+	readonly dynamicUpstreams?: boolean;
 	/** Required and fail-closed. Use `allowAllMcpGatewayPolicy()` only for trusted deployments. */
 	readonly policy: McpGatewayPolicy;
 	readonly nameCodec?: McpGatewayNameCodec;

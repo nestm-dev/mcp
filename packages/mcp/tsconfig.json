@@ -10,6 +10,7 @@
 	"references": [
 		{ "path": "../mcp-core" },
 		{ "path": "../mcp-client" },
+		{ "path": "../mcp-manager" },
 		{ "path": "../mcp-server" },
 		{ "path": "../mcp-auth" },
 		{ "path": "../mcp-gateway" }
