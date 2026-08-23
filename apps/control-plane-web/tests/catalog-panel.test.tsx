@@ -51,7 +51,7 @@ describe("CatalogPanel", () => {
       </QueryClientProvider>,
     );
 
-    expect(html).toContain("Connection validation");
+    expect(html).toContain("Current observations");
     expect(html).toContain("Resources");
     expect(html).toContain("Prompts");
 

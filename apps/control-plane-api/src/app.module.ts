@@ -4,6 +4,7 @@ import { StandardSchemaModule } from "@nestm/standard-schema";
 
 import { ApiExceptionFilter } from "./common/api-exception.filter.ts";
 import { ConnectionControlModule } from "./connections/connection-control.module.ts";
+import { ConformanceModule } from "./conformance/conformance.module.ts";
 import { ControlPlaneConfigModule } from "./config/control-plane-config.module.ts";
 import { HealthModule } from "./health/health.module.ts";
 import { OAuthControlModule } from "./oauth/oauth-control.module.ts";
@@ -28,6 +29,7 @@ import { OAuthControlModule } from "./oauth/oauth-control.module.ts";
 		}),
 		ControlPlaneConfigModule,
 		ConnectionControlModule,
+		ConformanceModule,
 		OAuthControlModule,
 		HealthModule,
 	],

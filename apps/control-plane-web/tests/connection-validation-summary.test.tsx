@@ -50,7 +50,7 @@ describe("ConnectionValidationSummary", () => {
       <ConnectionValidationSummary catalog={catalog} connection={connection} />,
     );
 
-    expect(html).toContain("Connection validation");
+    expect(html).toContain("Current observations");
     expect(html).toContain("Authorization");
     expect(html).toContain("Runtime online");
     expect(html).toContain("Protocol observed");

@@ -18,6 +18,9 @@ Use the exact pnpm version declared in `package.json`. Do not edit the vendored 
 
 - `mcp-core` must remain free of NestJS and official MCP SDK runtime dependencies.
 - `mcp-client` imports client-side official SDK surfaces only.
+- `mcp-manager` owns dynamic generation lifecycle without importing product connection records.
+- `mcp-conformance` owns bounded plan/report semantics without importing Nest, MCP SDK, client,
+  manager, or product code.
 - `mcp-server` imports server and hosting-adapter surfaces only.
 - `mcp-gateway` may compose client and server packages but must not move routing or token policy into core.
 - `mcp` owns Nest decorators, discovery, DI, and application lifecycle—not protocol behavior.
@@ -89,7 +92,7 @@ always use the alpha dist-tag:
 
 ```sh
 pnpm run verify
-for PKG in mcp-core mcp-client mcp-server mcp-observability mcp-auth mcp-gateway mcp; do
+for PKG in mcp-core mcp-client mcp-manager mcp-conformance mcp-server mcp-observability mcp-auth mcp-gateway mcp; do
   (cd "packages/$PKG" && pnpm publish --access public --tag alpha --provenance=false)
 done
 ```
@@ -99,7 +102,7 @@ npm's browser or two-factor flow locally; never add an npm token to this reposit
 package to the routine release workflow:
 
 ```sh
-for PKG in @nestm/mcp-core @nestm/mcp-client @nestm/mcp-server @nestm/mcp-auth @nestm/mcp-observability @nestm/mcp-gateway @nestm/mcp; do
+for PKG in @nestm/mcp-core @nestm/mcp-client @nestm/mcp-manager @nestm/mcp-conformance @nestm/mcp-server @nestm/mcp-auth @nestm/mcp-observability @nestm/mcp-gateway @nestm/mcp; do
   npm trust github "$PKG" \
     --file release.yml \
     --repository nestm-dev/mcp \

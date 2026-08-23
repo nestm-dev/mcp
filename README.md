@@ -14,6 +14,7 @@ The primary use case is an artifact or agent runtime that needs to expose truste
 | `@nestm/mcp-core`          | Framework-neutral operation context, middleware, authorization decisions, and lifecycle observation                                                 | Implemented |
 | `@nestm/mcp-client`        | Named v2 client runtime, strict outbound OAuth, isolated leases, transports, typed requests, managed listening, and middleware                      | Implemented |
 | `@nestm/mcp-manager`       | Framework-neutral bounded ownership and lifecycle for opaque, dynamically resolved MCP client generations                                           | Implemented |
+| `@nestm/mcp-conformance`   | Framework-neutral bounded plan execution, immutable reports, semantic regression comparison, fingerprints, and JSON/JUnit export                    | Alpha       |
 | `@nestm/mcp-server`        | Framework-neutral per-request server runtime, feature registry, web-standard/Node/stdio serving, and OAuth resource-server wrapper                  | Implemented |
 | `@nestm/mcp-gateway`       | Tool, prompt, resource, resource-template, and completion projection with policy enforcement and auth-scoped discovery caching                      | Implemented |
 | `@nestm/mcp-auth`          | OAuth toolkit: Client ID Metadata Document resolution, SSRF-hardened discovery fetch, bounded token stores, and asymmetric JWT issuing/verification | Alpha       |
@@ -28,6 +29,7 @@ flowchart BT
   client["@nestm/mcp-client"] --> core
   manager["@nestm/mcp-manager"] --> core
   manager --> client
+  conformance["@nestm/mcp-conformance"]
   server["@nestm/mcp-server"] --> core
   gateway["@nestm/mcp-gateway"] --> core
   gateway --> client
@@ -61,8 +63,8 @@ they use.
 
 The private [`apps/control-plane-api`](apps/control-plane-api) NestJS application validates dynamic
 desired state, the public `@nestm/mcp-manager` lifecycle, generation replacement, catalog discovery,
-operation execution, bounded process-local metrics, and a live aggregate `/mcp/hub` whose upstreams
-can be attached or detached without restarting. The companion
+operation execution, repeatable `@nestm/mcp-conformance` reports, bounded process-local metrics, and
+a live aggregate `/mcp/hub` whose upstreams can be attached or detached without restarting. The companion
 [`apps/control-plane-web`](apps/control-plane-web) application is an Inspector-style local manager
 built with the same Vinext, React, Tailwind, shadcn, TanStack Query, and Zod stack as Artifact
 Studio. Run both with `pnpm dev`.

@@ -18,6 +18,8 @@ flowchart TB
   subgraph Neutral["Framework-neutral"]
     core["@nestm/mcp-core\noperation + policy + lifecycle"]
     client["@nestm/mcp-client\nmulti-server client"]
+    manager["@nestm/mcp-manager\ndynamic generation lifecycle"]
+    conformance["@nestm/mcp-conformance\nplans + immutable reports"]
     server["@nestm/mcp-server\nper-request server"]
     gateway["@nestm/mcp-gateway\ncapability projection + policy"]
     auth["@nestm/mcp-auth\nOAuth proxy + CIMD + tokens"]
@@ -31,6 +33,8 @@ flowchart TB
 
   client --> core
   client --> sdkClient
+  manager --> core
+  manager --> client
   server --> core
   server --> sdkServer
   server --> sdkNode
@@ -75,6 +79,27 @@ The client runtime owns a registry of named upstream definitions and an independ
   bounded refresh ownership.
 
 An upstream name is a routing key, not a security identity. Policies should additionally bind the resolved URL, authorization issuer/resource, and expected server identity.
+
+### `@nestm/mcp-manager`
+
+The manager owns bounded, opaque runtime generations above the client runtime. A host resolves an
+opaque generation key into already-admitted transport material; connection records, endpoints,
+credentials, tenancy, and persistence stay behind that resolver. Generation leases fence
+replacement and retirement while discovery or execution is in flight, and cleanup failures enter a
+capacity-charging quarantine instead of being silently forgotten.
+
+### `@nestm/mcp-conformance`
+
+The conformance package is an independent orchestration and evidence boundary. A trusted host
+defines an ordered plan against an ephemeral target, runs it under the host's existing lifecycle
+lease, and receives a bounded immutable Zod/Standard Schema report. The package provides explicit
+side-effect gating, cancellation and time bounds, stable fingerprints, semantic report comparison,
+and JSON/JUnit export. It imports no Nest, MCP SDK, client, manager, or product application code.
+
+Connections, transports, credentials, fixture selection, durable history, baseline approval, and
+dashboard access policy remain host responsibilities. This separation lets the same plan run in
+different builds or containers and compare their reports without swapping library versions inside
+one process.
 
 ### `@nestm/mcp-server`
 

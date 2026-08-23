@@ -3,6 +3,7 @@ import { mutationOptions, queryOptions } from "@tanstack/react-query";
 import {
   controlPlaneApi,
   type Connection,
+  type ConformanceRun,
   type Hub,
   type HubMember,
   type GetPromptInput,
@@ -32,6 +33,11 @@ export const controlPlaneKeys = {
   catalog: (connectionId: string, runtimeGeneration: number) =>
     ["control-plane", "catalog", connectionId, runtimeGeneration] as const,
   catalogPrefix: (connectionId: string) => ["control-plane", "catalog", connectionId] as const,
+  conformanceRuns: (connectionId: string, runtimeGeneration: number) =>
+    ["control-plane", "conformance", "runs", connectionId, runtimeGeneration] as const,
+  conformanceRun: (runId: string) => ["control-plane", "conformance", "run", runId] as const,
+  conformancePrefix: (connectionId: string) =>
+    ["control-plane", "conformance", "runs", connectionId] as const,
 };
 
 const transientPhases: ReadonlySet<RuntimePhase> = new Set([
@@ -44,6 +50,7 @@ const transientPhases: ReadonlySet<RuntimePhase> = new Set([
 export const TRANSIENT_POLL_INTERVAL_MS = 1_250;
 export const METRICS_POLL_INTERVAL_MS = 5_000;
 export const HEALTH_POLL_INTERVAL_MS = 10_000;
+export const CONFORMANCE_RUN_POLL_INTERVAL_MS = 1_000;
 
 export function isTransientPhase(phase: RuntimePhase): boolean {
   return transientPhases.has(phase);
@@ -62,6 +69,52 @@ export function runtimePollInterval(runtime: RuntimeManager | undefined): number
     (runtime.pendingConnectionCount > 0 || runtime.closingConnectionCount > 0)
     ? TRANSIENT_POLL_INTERVAL_MS
     : false;
+}
+
+export function conformanceRunPollInterval(run: ConformanceRun | undefined): number | false {
+  return run?.status === "queued" || run?.status === "running" || run?.status === "cancelling"
+    ? CONFORMANCE_RUN_POLL_INTERVAL_MS
+    : false;
+}
+
+export function conformanceRunsQueryOptions(connection: Connection) {
+  return queryOptions({
+    queryKey: controlPlaneKeys.conformanceRuns(connection.id, connection.runtimeGeneration),
+    queryFn: ({ signal }) =>
+      controlPlaneApi.listConformanceRuns(connection.id, connection.runtimeGeneration, 5, signal),
+    retry: false,
+  });
+}
+
+export function conformanceRunQueryOptions(runId: string | undefined) {
+  return queryOptions({
+    enabled: runId !== undefined,
+    queryKey: controlPlaneKeys.conformanceRun(runId ?? "pending"),
+    queryFn: ({ signal }) => {
+      if (runId === undefined)
+        return Promise.reject(new Error("A conformance run ID is required."));
+      return controlPlaneApi.getConformanceRun(runId, signal);
+    },
+    refetchInterval: (query) => conformanceRunPollInterval(query.state.data),
+    refetchIntervalInBackground: false,
+    retry: false,
+  });
+}
+
+export function startConformanceRunMutationOptions() {
+  return mutationOptions<ConformanceRun, Error, Connection>({
+    mutationKey: ["control-plane", "conformance", "start"] as const,
+    mutationFn: (connection) => controlPlaneApi.startConformanceRun(connection),
+    retry: false,
+  });
+}
+
+export function cancelConformanceRunMutationOptions() {
+  return mutationOptions<ConformanceRun, Error, string>({
+    mutationKey: ["control-plane", "conformance", "cancel"] as const,
+    mutationFn: (runId) => controlPlaneApi.cancelConformanceRun(runId),
+    retry: false,
+  });
 }
 
 export function metricsQueryOptions() {

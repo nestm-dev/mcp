@@ -18,6 +18,12 @@ import {
 	SetDesiredStateSchema,
 } from "../src/connections/connection.dto.ts";
 import {
+	CreateConformanceRunDto,
+	CreateConformanceRunSchema,
+	ListConformanceRunsQueryDto,
+	ListConformanceRunsQuerySchema,
+} from "../src/conformance/conformance.dto.ts";
+import {
 	AttachHubMemberDto,
 	AttachHubMemberSchema,
 	DetachHubMemberQueryDto,
@@ -38,6 +44,8 @@ describe("control-plane Standard Schema DTOs", () => {
 			[CallToolDto, CallToolSchema],
 			[ReadResourceDto, ReadResourceSchema],
 			[GetPromptDto, GetPromptSchema],
+			[CreateConformanceRunDto, CreateConformanceRunSchema],
+			[ListConformanceRunsQueryDto, ListConformanceRunsQuerySchema],
 			[AttachHubMemberDto, AttachHubMemberSchema],
 			[DetachHubMemberQueryDto, DetachHubMemberQuerySchema],
 			[HubCatalogQueryDto, HubCatalogQuerySchema],
@@ -89,6 +97,54 @@ describe("control-plane Standard Schema DTOs", () => {
 			const result = await HubCatalogQueryDto.schema["~standard"].validate({
 				expectedHubRevision,
 			});
+			expect(result).toHaveProperty("issues");
+		}
+	});
+
+	it("strictly validates generation-fenced conformance inputs", async () => {
+		const connectionId = "8589b4f6-6a4d-4610-9c5f-bf46f6471629";
+		expect(
+			await CreateConformanceRunDto.schema["~standard"].validate({
+				target: {
+					kind: "connection",
+					connectionId,
+					expectedRevision: 2,
+					runtimeGeneration: 3,
+				},
+			}),
+		).toEqual({
+			value: {
+				target: {
+					kind: "connection",
+					connectionId,
+					expectedRevision: 2,
+					runtimeGeneration: 3,
+				},
+			},
+		});
+		expect(
+			await ListConformanceRunsQueryDto.schema["~standard"].validate({
+				connectionId,
+				runtimeGeneration: "3",
+			}),
+		).toEqual({ value: { connectionId, runtimeGeneration: 3, limit: 20 } });
+
+		for (const input of [
+			{
+				target: {
+					kind: "connection",
+					connectionId,
+					expectedRevision: 2,
+					runtimeGeneration: 3,
+				},
+				planId: "untrusted-plan",
+			},
+			{ connectionId, runtimeGeneration: ["3"] },
+			{ connectionId, runtimeGeneration: "3", unexpected: true },
+		]) {
+			const schema =
+				"target" in input ? CreateConformanceRunDto.schema : ListConformanceRunsQueryDto.schema;
+			const result = await schema["~standard"].validate(input);
 			expect(result).toHaveProperty("issues");
 		}
 	});

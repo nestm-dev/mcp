@@ -59,6 +59,10 @@ export default defineConfig({
 				replacement: new URL("./packages/mcp-manager/src/index.ts", import.meta.url).pathname,
 			},
 			{
+				find: /^@nestm\/mcp-conformance$/,
+				replacement: new URL("./packages/mcp-conformance/src/index.ts", import.meta.url).pathname,
+			},
+			{
 				find: /^@nestm\/mcp-server$/,
 				replacement: new URL("./packages/mcp-server/src/index.ts", import.meta.url).pathname,
 			},

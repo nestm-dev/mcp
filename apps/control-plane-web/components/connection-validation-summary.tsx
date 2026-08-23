@@ -48,10 +48,10 @@ export function ConnectionValidationSummary({
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="text-sm font-medium" id="validation-summary-heading">
-            Connection validation
+            Current observations
           </h3>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            Explicit checks from the current runtime and loaded catalog; no aggregate score.
+            Live hints from the current runtime and loaded catalog; repeatable checks are below.
           </p>
         </div>
         <div className="flex gap-1.5 text-[10px] text-muted-foreground">

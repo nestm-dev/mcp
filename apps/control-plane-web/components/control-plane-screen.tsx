@@ -652,8 +652,9 @@ function ValidationHostNotice() {
       <LockKeyhole className="mt-0.5 size-3.5 shrink-0 text-info" />
       <p>
         <span className="font-medium text-foreground">Volatile validation host.</span> Connections,
-        OAuth state, unified-endpoint membership, catalogs, and metrics reset when the API restarts.
-        Administrative access is enforced by the deployment boundary, not this UI.
+        OAuth state, unified-endpoint membership, catalogs, conformance reports, and metrics reset
+        when the API restarts. Administrative access is enforced by the deployment boundary, not
+        this UI.
       </p>
     </div>
   );
