@@ -16,6 +16,7 @@ The primary use case is an artifact or agent runtime that needs to expose truste
 | `@nestm/mcp-manager`       | Framework-neutral bounded ownership and lifecycle for opaque, dynamically resolved MCP client generations                                           | Implemented |
 | `@nestm/mcp-conformance`   | Framework-neutral bounded plan execution, immutable reports, semantic regression comparison, fingerprints, and JSON/JUnit export                    | Alpha       |
 | `@nestm/mcp-server`        | Framework-neutral per-request server runtime, feature registry, web-standard/Node/stdio serving, and OAuth resource-server wrapper                  | Implemented |
+| `@nestm/mcp-apps`          | Stable MCP Apps server metadata, validation, decorator/native fragments, capability advertisement, and direct-server feature composition            | Alpha       |
 | `@nestm/mcp-gateway`       | Tool, prompt, resource, resource-template, and completion projection with policy enforcement and auth-scoped discovery caching                      | Implemented |
 | `@nestm/mcp-auth`          | OAuth toolkit: Client ID Metadata Document resolution, SSRF-hardened discovery fetch, bounded token stores, and asymmetric JWT issuing/verification | Alpha       |
 | `@nestm/mcp-observability` | Backend-neutral structured logging, metrics, tracing, bounded attributes, and redaction policies                                                    | Implemented |
@@ -31,6 +32,7 @@ flowchart BT
   manager --> client
   conformance["@nestm/mcp-conformance"]
   server["@nestm/mcp-server"] --> core
+  apps["@nestm/mcp-apps"] --> server
   gateway["@nestm/mcp-gateway"] --> core
   gateway --> client
   gateway --> server

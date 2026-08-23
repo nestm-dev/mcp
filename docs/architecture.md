@@ -21,6 +21,7 @@ flowchart TB
     manager["@nestm/mcp-manager\ndynamic generation lifecycle"]
     conformance["@nestm/mcp-conformance\nplans + immutable reports"]
     server["@nestm/mcp-server\nper-request server"]
+    apps["@nestm/mcp-apps\ndirect-server Apps extension"]
     gateway["@nestm/mcp-gateway\ncapability projection + policy"]
     auth["@nestm/mcp-auth\nOAuth proxy + CIMD + tokens"]
     observability["@nestm/mcp-observability\nlogs + metrics + tracing"]
@@ -38,6 +39,8 @@ flowchart TB
   server --> core
   server --> sdkServer
   server --> sdkNode
+  apps --> server
+  apps --> sdkServer
   gateway --> core
   gateway --> client
   gateway --> server
@@ -111,6 +114,20 @@ Modern interactive operations use the official `inputRequired` result and retry 
 re-exports the official response readers and signed request-state codec rather than adding a task
 abstraction. The 2025 task status value also named `input_required` is unrelated deprecated wire
 vocabulary: it is not the modern result type and has no v2 runtime API.
+
+### `@nestm/mcp-apps`
+
+The optional Apps package implements the stable `2026-01-26` server extension surface against the
+split official server SDK v2. It owns wire constants, date-pinned metadata types, strict
+normalization, plain tool/resource fragments, capability-advertisement helpers, and an
+`McpServerFeature` wrapper. The fragments structurally compose with both official
+`McpServer.registerTool()`/`registerResource()` configs and the Nest `@Tool()`/`@Resource()` options;
+the lower package imports neither NestJS nor the Nest adapter.
+
+This first boundary applies only to direct servers. It does not change gateway projection,
+negotiate registration at feature-build time, or include browser `App`/`AppBridge` code. Tools
+remain useful without an Apps-capable host by returning a meaningful text result alongside any
+structured content.
 
 ### `@nestm/mcp-gateway`
 

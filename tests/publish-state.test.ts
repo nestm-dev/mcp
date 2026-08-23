@@ -15,6 +15,7 @@ const FIXED_GROUP = [
 	"@nestm/mcp-manager",
 	"@nestm/mcp-conformance",
 	"@nestm/mcp-server",
+	"@nestm/mcp-apps",
 	"@nestm/mcp-auth",
 	"@nestm/mcp-observability",
 	"@nestm/mcp-gateway",

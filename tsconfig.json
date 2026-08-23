@@ -6,6 +6,7 @@
 		{ "path": "./packages/mcp-manager" },
 		{ "path": "./packages/mcp-conformance" },
 		{ "path": "./packages/mcp-server" },
+		{ "path": "./packages/mcp-apps" },
 		{ "path": "./packages/mcp-auth" },
 		{ "path": "./packages/mcp-observability" },
 		{ "path": "./packages/mcp-gateway" },
