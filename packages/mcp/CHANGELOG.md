@@ -1,5 +1,16 @@
 # @nestm/mcp
 
+## 0.1.0-alpha.5
+
+### Patch Changes
+
+- @nestm/mcp-core@0.1.0-alpha.5
+- @nestm/mcp-client@0.1.0-alpha.5
+- @nestm/mcp-manager@0.1.0-alpha.5
+- @nestm/mcp-server@0.1.0-alpha.5
+- @nestm/mcp-auth@0.1.0-alpha.5
+- @nestm/mcp-gateway@0.1.0-alpha.5
+
 ## 0.1.0-alpha.4
 
 ### Minor Changes

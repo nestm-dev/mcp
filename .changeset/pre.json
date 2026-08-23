@@ -27,6 +27,7 @@
 		"opaque-client-leases",
 		"plain-capability-decorators",
 		"portable-tool-schema",
+		"repeatable-mcp-conformance",
 		"secure-catalog-transforms",
 		"strict-outbound-oauth-runtime"
 	]
