@@ -20,6 +20,7 @@
 		"http-hardening-posture",
 		"initial-mcp-runtime",
 		"managed-runtime-generations",
+		"mcp-apps-foundation",
 		"mcp-auth-runtime-dependency",
 		"nest-client-module",
 		"nest-native-public-surface",

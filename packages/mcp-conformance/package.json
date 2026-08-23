@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/mcp-conformance",
-	"version": "0.1.0-alpha.5",
+	"version": "0.1.0-alpha.6",
 	"description": "Framework-neutral conformance runner, immutable reports, and semantic regression comparison for MCP systems.",
 	"type": "module",
 	"sideEffects": false,

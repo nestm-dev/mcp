@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/mcp-server",
-	"version": "0.1.0-alpha.5",
+	"version": "0.1.0-alpha.6",
 	"description": "Framework-neutral MCP v2 server runtime and OAuth resource-server composition for NestM.",
 	"type": "module",
 	"sideEffects": false,
