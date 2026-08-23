@@ -42,6 +42,57 @@ const schema = {
   },
 } as const;
 
+const zohoCriteriaSchema = {
+  type: "object",
+  required: ["query_params", "path_variables"],
+  properties: {
+    path_variables: {
+      type: "object",
+      required: ["portal_id"],
+      properties: {
+        portal_id: { type: "string" },
+      },
+    },
+    query_params: {
+      type: "object",
+      required: ["page", "per_page"],
+      properties: {
+        page: { type: "integer" },
+        per_page: { type: "integer" },
+        filter: {
+          type: "object",
+          properties: {
+            pattern: { type: "string" },
+            criteria: {
+              type: "array",
+              items: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    criteria_condition: { type: "string" },
+                    value: { type: "array", items: { type: "string" } },
+                  },
+                  anyOf: [
+                    {
+                      type: "object",
+                      properties: {
+                        api_name: { type: "string" },
+                        cfid: { type: "string" },
+                        field_name: { type: "string" },
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
 function structuredData(): FormData {
   const data = new FormData();
   data.set(argumentModeName(), "fields");
@@ -67,22 +118,61 @@ describe("analyzeArgumentSchema", () => {
     });
   });
 
-  it("falls back for ambiguous and unsupported schemas", () => {
+  it("falls back for an ambiguous root while keeping a complex child local", () => {
     expect(analyzeArgumentSchema({ type: ["object", "null"] })).toEqual(
       expect.objectContaining({ supported: false }),
     );
-    expect(
-      analyzeArgumentSchema({
-        type: "object",
-        properties: { query: { oneOf: [{ type: "string" }, { type: "number" }] } },
-      }),
-    ).toEqual(
-      expect.objectContaining({ supported: false, reason: expect.stringContaining("oneOf") }),
-    );
+    const analysis = analyzeArgumentSchema({
+      type: "object",
+      properties: { query: { oneOf: [{ type: "string" }, { type: "number" }] } },
+    });
+    expect(analysis.supported).toBe(true);
+    if (!analysis.supported) return;
+    expect(analysis.root.properties[0]?.node).toMatchObject({
+      kind: "json",
+      path: "/query",
+      fallbackReason: expect.stringContaining("oneOf"),
+    });
+  });
+
+  it("keeps the Zoho form available when an array item uses anyOf", () => {
+    const analysis = analyzeArgumentSchema(zohoCriteriaSchema);
+
+    expect(analysis.supported).toBe(true);
+    if (!analysis.supported) return;
+    const queryParams = analysis.root.properties.find(
+      (property) => property.name === "query_params",
+    )?.node;
+    expect(queryParams?.kind).toBe("object");
+    if (queryParams?.kind !== "object") return;
+    const filter = queryParams.properties.find((property) => property.name === "filter")?.node;
+    expect(filter?.kind).toBe("object");
+    if (filter?.kind !== "object") return;
+    const criteria = filter.properties.find((property) => property.name === "criteria")?.node;
+    expect(criteria?.kind).toBe("array");
+    if (criteria?.kind !== "array" || criteria.items.kind !== "array") return;
+    expect(criteria.items.items).toMatchObject({
+      kind: "json",
+      expectedType: "object",
+      path: "/query_params/filter/criteria/*/*",
+      fallbackReason: expect.stringContaining("anyOf"),
+    });
   });
 
   it("collects nested defaults without inventing required values", () => {
     expect(createDefaultArguments(schema)).toEqual({ limit: 5, exact: false });
+    expect(
+      createDefaultArguments({
+        type: "object",
+        properties: {
+          configuration: {
+            type: "object",
+            oneOf: [{ type: "object", properties: { mode: { type: "string" } } }],
+            default: { mode: "safe" },
+          },
+        },
+      }),
+    ).toEqual({ configuration: { mode: "safe" } });
   });
 });
 
@@ -147,12 +237,113 @@ describe("parseJsonSchemaArguments", () => {
     });
   });
 
-  it("accepts raw JSON objects for unsupported schemas", () => {
+  it("preserves Zoho's two-dimensional criteria JSON while parsing sibling fields", () => {
+    const data = structuredData();
+    data.set(argumentValueName("/path_variables/portal_id"), "123456");
+    data.set(argumentValueName("/query_params/page"), "1");
+    data.set(argumentValueName("/query_params/per_page"), "20");
+    data.set(argumentIncludedName("/query_params/filter"), "true");
+    data.set(argumentIncludedName("/query_params/filter/pattern"), "true");
+    data.set(argumentValueName("/query_params/filter/pattern"), "1");
+    data.set(argumentIncludedName("/query_params/filter/criteria"), "true");
+    data.set(
+      argumentValueName("/query_params/filter/criteria"),
+      JSON.stringify([
+        [
+          {
+            criteria_condition: "equals",
+            value: ["open"],
+            cfid: "456",
+          },
+        ],
+      ]),
+    );
+
+    expect(parseJsonSchemaArguments(zohoCriteriaSchema, data)).toEqual({
+      success: true,
+      mode: "fields",
+      data: {
+        path_variables: { portal_id: "123456" },
+        query_params: {
+          page: 1,
+          per_page: 20,
+          filter: {
+            pattern: "1",
+            criteria: [
+              [
+                {
+                  criteria_condition: "equals",
+                  value: ["open"],
+                  cfid: "456",
+                },
+              ],
+            ],
+          },
+        },
+      },
+    });
+  });
+
+  it("keeps the declared array shape around a complex item schema", () => {
+    const data = structuredData();
+    data.set(argumentValueName("/path_variables/portal_id"), "123456");
+    data.set(argumentValueName("/query_params/page"), "1");
+    data.set(argumentValueName("/query_params/per_page"), "20");
+    data.set(argumentIncludedName("/query_params/filter"), "true");
+    data.set(argumentIncludedName("/query_params/filter/criteria"), "true");
+    data.set(
+      argumentValueName("/query_params/filter/criteria"),
+      JSON.stringify([{ criteria_condition: "equals" }]),
+    );
+
+    expect(parseJsonSchemaArguments(zohoCriteriaSchema, data)).toEqual({
+      success: false,
+      mode: "fields",
+      errors: {
+        "/query_params/filter/criteria": expect.stringContaining("/query_params/filter/criteria/0"),
+      },
+    });
+  });
+
+  it("parses a field-local complex schema as typed JSON", () => {
+    const complex = {
+      type: "object",
+      required: ["value"],
+      properties: { value: { anyOf: [{ type: "string" }, { type: "number" }] } },
+    };
+    const data = structuredData();
+    data.set(argumentValueName("/value"), "42");
+
+    expect(parseJsonSchemaArguments(complex, data)).toEqual({
+      success: true,
+      mode: "fields",
+      data: { value: 42 },
+    });
+  });
+
+  it("rejects an invalid field-local JSON draft instead of omitting it", () => {
+    const complex = {
+      type: "object",
+      required: ["value"],
+      properties: { value: { anyOf: [{ type: "string" }, { type: "number" }] } },
+    };
+    const data = structuredData();
+    data.set(argumentValueName("/value"), "{");
+
+    expect(parseJsonSchemaArguments(complex, data)).toEqual({
+      success: false,
+      mode: "fields",
+      errors: { "/value": "Enter valid JSON." },
+    });
+  });
+
+  it("accepts raw JSON objects for complex schemas", () => {
     const unsupported = {
       type: "object",
       properties: { value: { anyOf: [{ type: "string" }, { type: "number" }] } },
     };
     const data = new FormData();
+    data.set(argumentModeName(), "raw");
     data.set(argumentRawName(), '{"value": 42}');
 
     expect(parseJsonSchemaArguments(unsupported, data)).toEqual({

@@ -1,5 +1,6 @@
 import { BookOpenText, FileJson2, MessageSquareText } from "lucide-react";
 
+import { JsonCodeDetails } from "@/components/json-code-editor";
 import { Badge } from "@/components/ui/badge";
 import type {
   GetPromptResult,
@@ -100,15 +101,15 @@ function ResultShell({
       </div>
       <div className="grid max-h-[42vh] gap-3 overflow-y-auto p-4">
         {children}
-        <details className="group rounded-lg border bg-background/60">
-          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground group-open:text-foreground">
-            <FileJson2 className="size-3.5" />
-            Bounded raw response
-          </summary>
-          <pre className="max-h-72 overflow-auto border-t p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words">
-            {formatBoundedJson(raw)}
-          </pre>
-        </details>
+        <JsonCodeDetails
+          ariaLabel="Bounded raw capability response JSON"
+          className="bg-background/60"
+          code={formatBoundedJson(raw)}
+          summaryClassName="flex items-center gap-2 px-3"
+        >
+          <FileJson2 className="size-3.5" />
+          Bounded raw response
+        </JsonCodeDetails>
       </div>
     </section>
   );

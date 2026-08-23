@@ -43,6 +43,25 @@ pnpm --filter @nestm/mcp-control-plane-web test
 pnpm --filter @nestm/mcp-control-plane-web build
 ```
 
+## Schema-driven tool arguments
+
+The tool console deliberately uses JSON Schema Draft 2020-12 as its UI boundary. Public server
+APIs can still be authored with Zod or any other implementation of Standard Schema plus Standard
+JSON Schema; MCP discovery projects that contract into a portable `inputSchema`, which is what the
+browser receives. Standard Schema itself is a validation interface and does not expose enough
+portable shape information to generate form controls safely.
+
+The private web app compiles a conservative subset of each advertised schema into an app-local
+field model. It renders nested objects, strings and enums, numbers, integers, booleans, and typed
+arrays, while ambiguous constructs fall back to raw JSON. CodeMirror is loaded only when a JSON
+editor or an opened JSON details panel needs it, and provides syntax diagnostics and formatting.
+Submission is still revalidated by the API against the discovered tool definition before dispatch;
+the browser form is an interaction aid, not the trust boundary.
+
+All renderer code, editor dependencies, and tests live under this `private: true` app.
+Release scripts enumerate only `packages/*`, and published packages use explicit file allowlists, so
+none of this UI surface or its CodeMirror dependency graph is included in npm tarballs.
+
 ## Production routing
 
 Production must put the UI and API behind one trusted reverse proxy. Route `/api/*` to the
@@ -85,8 +104,9 @@ do not expose this validation console as a public endpoint.
 - Catalog cache entries include both connection ID and runtime generation, preventing a retired
   endpoint's discovery data from being shown for its replacement.
 - Tool arguments support nested object fields, strings and enums, numbers, integers, booleans, and
-  typed arrays. Unsupported or ambiguous JSON Schema keywords (for example `anyOf`, `oneOf`, and
-  `$ref`) switch the entire editor to a JSON-object fallback instead of guessing.
+  typed arrays. A complex property or array item that cannot be mapped faithfully (for example an
+  ambiguous `anyOf`, `oneOf`, or `$ref`) stays in a field-local JSON editor while supported sibling
+  fields remain interactive. Only an unsupported root schema switches the entire editor to raw JSON.
 - Tool calls require a deliberate click, are limited to a 64 KiB argument object, and are never
   retried automatically. The API revalidates against the pinned discovered definition before
   dispatch and supplies that definition to the client runtime for structured-output validation.

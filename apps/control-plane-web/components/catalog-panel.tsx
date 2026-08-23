@@ -17,6 +17,7 @@ import { toast } from "sonner";
 
 import { ConnectionValidationSummary } from "@/components/connection-validation-summary";
 import { ConnectionConformancePanel } from "@/components/connection-conformance-panel";
+import { JsonCodeDetails } from "@/components/json-code-editor";
 import { PromptGetDialog } from "@/components/prompt-get-dialog";
 import { ResourceReadDialog } from "@/components/resource-read-dialog";
 import { ToolExecutionDialog } from "@/components/tool-execution-dialog";
@@ -37,6 +38,7 @@ import {
   type Tool,
 } from "@/lib/control-plane-api";
 import { controlPlaneKeys } from "@/lib/control-plane-queries";
+import { stringifyJsonDocument } from "@/lib/json-document";
 
 const utcDateTime = new Intl.DateTimeFormat("en", {
   dateStyle: "medium",
@@ -574,14 +576,13 @@ function CatalogItem({
 
 function SchemaDetails({ label, schema }: { readonly label: string; readonly schema: unknown }) {
   return (
-    <details className="group rounded-lg border bg-muted/20">
-      <summary className="cursor-pointer list-none px-2.5 py-2 text-xs font-medium text-muted-foreground group-open:text-foreground">
-        {label}
-      </summary>
-      <pre className="max-h-52 overflow-auto border-t p-2.5 font-mono text-[10px] leading-relaxed">
-        {JSON.stringify(schema, null, 2)}
-      </pre>
-    </details>
+    <JsonCodeDetails
+      ariaLabel={`${label} JSON`}
+      code={stringifyJsonDocument(schema, "[Unable to serialize schema]")}
+      maxHeight="13rem"
+    >
+      {label}
+    </JsonCodeDetails>
   );
 }
 

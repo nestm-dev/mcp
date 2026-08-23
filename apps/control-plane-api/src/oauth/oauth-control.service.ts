@@ -109,7 +109,7 @@ export class OAuthControlService {
 	}
 
 	uiRedirect(outcome: OAuthCallbackOutcome): string {
-		const redirect = new URL(this.config.uiOrigin ?? "http://127.0.0.1:5174");
+		const redirect = new URL(this.config.uiOrigin ?? "http://127.0.0.1:5173");
 		redirect.search = "";
 		redirect.hash = "";
 		redirect.searchParams.set("oauth", outcome.oauth);

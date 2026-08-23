@@ -146,7 +146,7 @@ async function createService(options: {
 			{ provide: VolatileOAuthAuthorityService, useValue: options.authority },
 			{ provide: MCP_RUNTIME_SUPERVISOR, useValue: options.runtime },
 			{ provide: HubService, useValue: options.hub },
-			{ provide: ControlPlaneConfigService, useValue: { uiOrigin: "http://127.0.0.1:5174" } },
+			{ provide: ControlPlaneConfigService, useValue: { uiOrigin: "http://127.0.0.1:5173" } },
 		],
 	}).compile();
 	return module.get(OAuthControlService);

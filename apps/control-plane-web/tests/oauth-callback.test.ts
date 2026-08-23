@@ -31,7 +31,7 @@ describe("OAuth callback markers", () => {
 
   it("removes callback markers immediately while preserving unrelated navigation state", () => {
     const url = new URL(
-      `http://127.0.0.1:5174/?view=metrics&oauth=failed&connectionId=${connectionId}&code=OAUTH_DENIED#activity`,
+      `http://127.0.0.1:5173/?view=metrics&oauth=failed&connectionId=${connectionId}&code=OAUTH_DENIED#activity`,
     );
 
     expect(stripOAuthCallbackMarker(url)).toBe("/?view=metrics#activity");

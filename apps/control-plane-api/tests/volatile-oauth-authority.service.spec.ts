@@ -167,7 +167,7 @@ function config(): ControlPlaneConfigService {
 		new ConfigService({
 			MCP_ALLOWED_HOSTS: ["resource.example.test"],
 			MCP_OAUTH_ALLOWED_HOSTS: ["auth.example.test"],
-			CONTROL_PLANE_OAUTH_CALLBACK_URL: "http://127.0.0.1:5174/api/v1/mcp/oauth/callback",
+			CONTROL_PLANE_OAUTH_CALLBACK_URL: "http://127.0.0.1:5173/api/v1/mcp/oauth/callback",
 			MCP_OAUTH_TRANSACTION_TTL_MS: 600_000,
 			MCP_REQUEST_TIMEOUT_MS: 10_000,
 		}),
