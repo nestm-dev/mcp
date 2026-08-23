@@ -332,6 +332,15 @@ importers:
         specifier: ^7.8.0
         version: 7.8.2
 
+  packages/mcp-apps:
+    dependencies:
+      '@modelcontextprotocol/server':
+        specifier: '>=2.0.0 <3.0.0'
+        version: 2.0.0
+      '@nestm/mcp-server':
+        specifier: workspace:^
+        version: link:../mcp-server
+
   packages/mcp-auth:
     dependencies:
       '@modelcontextprotocol/client':
