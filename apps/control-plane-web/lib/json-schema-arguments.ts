@@ -46,12 +46,22 @@ export interface ArgumentArrayNode extends ArgumentNodeBase {
   readonly maxItems?: number;
 }
 
+export type ArgumentJsonExpectedType =
+  "object" | "string" | "number" | "integer" | "boolean" | "array";
+
+export interface ArgumentJsonNode extends ArgumentNodeBase {
+  readonly kind: "json";
+  readonly expectedType?: ArgumentJsonExpectedType;
+  readonly fallbackReason: string;
+}
+
 export type ArgumentSchemaNode =
   | ArgumentObjectNode
   | ArgumentStringNode
   | ArgumentNumberNode
   | ArgumentBooleanNode
-  | ArgumentArrayNode;
+  | ArgumentArrayNode
+  | ArgumentJsonNode;
 
 export interface ArgumentProperty {
   readonly name: string;
@@ -227,7 +237,10 @@ function buildNode(
 
   for (const keyword of UNSUPPORTED_KEYWORDS) {
     if (Object.hasOwn(schema, keyword)) {
-      throw unsupported(path, `uses unsupported keyword '${keyword}'`);
+      throw unsupported(
+        path,
+        `uses JSON Schema keyword '${keyword}', which cannot be mapped faithfully to fields`,
+      );
     }
   }
 
@@ -260,6 +273,43 @@ function buildNode(
   }
 }
 
+function buildChildNode(
+  schemaValue: unknown,
+  pathParts: readonly string[],
+  required: boolean,
+  depth: number,
+  stack: WeakSet<object>,
+): ArgumentSchemaNode {
+  try {
+    return buildNode(schemaValue, pathParts, required, depth, stack);
+  } catch (error) {
+    if (!(error instanceof UnsupportedSchemaError)) throw error;
+    return buildJsonNode(schemaValue, pathParts, required, error.message);
+  }
+}
+
+function buildJsonNode(
+  schemaValue: unknown,
+  pathParts: readonly string[],
+  required: boolean,
+  fallbackReason: string,
+): ArgumentJsonNode {
+  const schema = asObject(schemaValue);
+  const hasDefault = schema !== undefined && Object.hasOwn(schema, "default");
+  const expectedType = isJsonExpectedType(schema?.type) ? schema.type : undefined;
+  return {
+    kind: "json",
+    path: argumentPath(pathParts),
+    required,
+    hasDefault,
+    fallbackReason,
+    ...(typeof schema?.title === "string" ? { title: schema.title } : {}),
+    ...(typeof schema?.description === "string" ? { description: schema.description } : {}),
+    ...(hasDefault ? { defaultValue: schema?.default } : {}),
+    ...(expectedType === undefined ? {} : { expectedType }),
+  };
+}
+
 function buildObjectNode(
   schema: JsonObject,
   base: ArgumentNodeBase,
@@ -285,7 +335,13 @@ function buildObjectNode(
 
   const properties = Object.entries(propertiesObject).map(([name, childSchema]) => ({
     name,
-    node: buildNode(childSchema, [...pathParts, name], requiredNames.has(name), depth + 1, stack),
+    node: buildChildNode(
+      childSchema,
+      [...pathParts, name],
+      requiredNames.has(name),
+      depth + 1,
+      stack,
+    ),
   }));
 
   if (base.hasDefault && !asObject(base.defaultValue)) {
@@ -370,7 +426,7 @@ function buildArrayNode(
   return {
     ...base,
     kind: "array",
-    items: buildNode(schema.items, [...pathParts, "*"], true, depth + 1, stack),
+    items: buildChildNode(schema.items, [...pathParts, "*"], true, depth + 1, stack),
     minItems,
     maxItems,
   };
@@ -504,15 +560,19 @@ function parseFieldValue(
       return { success: false };
     }
     value = raw === "true";
-  } else if (node.kind === "array") {
+  } else if (node.kind === "array" || node.kind === "json") {
     if (raw.trim().length === 0) {
-      addError(errors, node.path, "Enter a JSON array.");
+      addError(errors, node.path, node.kind === "array" ? "Enter a JSON array." : "Enter JSON.");
       return { success: false };
     }
     try {
       value = JSON.parse(raw);
     } catch {
-      addError(errors, node.path, "Enter a valid JSON array.");
+      addError(
+        errors,
+        node.path,
+        node.kind === "array" ? "Enter a valid JSON array." : "Enter valid JSON.",
+      );
       return { success: false };
     }
   }
@@ -551,6 +611,9 @@ function validateValue(
       return;
     case "array":
       validateArray(node, value, path, errors);
+      return;
+    case "json":
+      validateJsonNode(node, value, path, errors);
       return;
     case "object":
       validateObject(node, value, path, errors);
@@ -619,6 +682,40 @@ function validateArray(
   value.forEach((item, index) => {
     validateValue(node.items, item, appendPointer(path, String(index)), errors);
   });
+}
+
+function validateJsonNode(
+  node: ArgumentJsonNode,
+  value: unknown,
+  path: string,
+  errors: Map<string, string>,
+): void {
+  switch (node.expectedType) {
+    case "object":
+      if (!asObject(value)) addError(errors, path, "Expected an object.");
+      return;
+    case "array":
+      if (!Array.isArray(value)) addError(errors, path, "Expected an array.");
+      return;
+    case "string":
+      if (typeof value !== "string") addError(errors, path, "Expected a string.");
+      return;
+    case "number":
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        addError(errors, path, "Expected a finite number.");
+      }
+      return;
+    case "integer":
+      if (typeof value !== "number" || !Number.isInteger(value)) {
+        addError(errors, path, "Expected a whole number.");
+      }
+      return;
+    case "boolean":
+      if (typeof value !== "boolean") addError(errors, path, "Expected a boolean.");
+      return;
+    case undefined:
+      return;
+  }
 }
 
 function validateObject(
@@ -770,6 +867,17 @@ function asObject(value: unknown): JsonObject | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as JsonObject)
     : undefined;
+}
+
+function isJsonExpectedType(value: unknown): value is ArgumentJsonExpectedType {
+  return (
+    value === "object" ||
+    value === "string" ||
+    value === "number" ||
+    value === "integer" ||
+    value === "boolean" ||
+    value === "array"
+  );
 }
 
 function unsupported(path: string, message: string): UnsupportedSchemaError {

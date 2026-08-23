@@ -50,9 +50,9 @@ const environmentSchema = z
 				(value) => value.length > 0,
 				"MCP_OAUTH_ALLOWED_HOSTS must contain at least one host.",
 			),
-		CONTROL_PLANE_UI_ORIGIN: loopbackOrHttpsUrl.default("http://127.0.0.1:5174"),
+		CONTROL_PLANE_UI_ORIGIN: loopbackOrHttpsUrl.default("http://127.0.0.1:5173"),
 		CONTROL_PLANE_OAUTH_CALLBACK_URL: loopbackOrHttpsUrl.default(
-			"http://127.0.0.1:5174/api/v1/mcp/oauth/callback",
+			"http://127.0.0.1:5173/api/v1/mcp/oauth/callback",
 		),
 		MCP_OAUTH_TRANSACTION_TTL_MS: z.coerce
 			.number()

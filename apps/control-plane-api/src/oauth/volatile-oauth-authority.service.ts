@@ -103,7 +103,7 @@ export class VolatileOAuthAuthorityService implements OnApplicationShutdown {
 		this.#states.set(input.connectionId, authorizingState());
 		const provider = new VolatileOAuthProvider({
 			redirectUrl:
-				this.config.oauthCallbackUrl ?? "http://127.0.0.1:5174/api/v1/mcp/oauth/callback",
+				this.config.oauthCallbackUrl ?? "http://127.0.0.1:5173/api/v1/mcp/oauth/callback",
 			clientName: "NestM local MCP manager",
 		});
 		const guardedFetch = this.network.createFetch(input.endpoint, () => provider.discoveryState());

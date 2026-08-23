@@ -3,10 +3,10 @@
 import { useMemo, useState } from "react";
 import { Braces, ListTree } from "lucide-react";
 
+import { JsonCodeEditor } from "@/components/json-code-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   RAW_ARGUMENTS_ERROR_PATH,
   ROOT_ARGUMENTS_ERROR_PATH,
@@ -73,8 +73,10 @@ function ArgumentFormContent({
   const [preferredMode, setPreferredMode] = useState<"fields" | "raw">(
     analysis.supported ? "fields" : "raw",
   );
+  const [rawValue, setRawValue] = useState(() =>
+    JSON.stringify(createDefaultArguments(schema), null, 2),
+  );
   const mode = analysis.supported ? preferredMode : "raw";
-  const rawDefault = JSON.stringify(createDefaultArguments(schema), null, 2);
 
   return (
     <div className={cn("grid gap-4", className)}>
@@ -119,9 +121,10 @@ function ArgumentFormContent({
       {analysis.supported ? (
         <div hidden={mode !== "fields"}>
           {analysis.root.properties.length > 0 ? (
-            <div className="grid gap-4">
+            <div className="grid gap-3 sm:gap-4">
               {analysis.root.properties.map((property) => (
                 <SchemaPropertyField
+                  depth={0}
                   disabled={disabled}
                   errors={errors}
                   key={property.node.path}
@@ -144,28 +147,35 @@ function ArgumentFormContent({
         </p>
       ) : null}
 
-      <div className="grid gap-2" hidden={mode !== "raw"}>
-        <Label htmlFor={`${prefix}-raw-json`}>Arguments JSON</Label>
-        <Textarea
-          aria-describedby={`${prefix}-raw-json-hint${errors[RAW_ARGUMENTS_ERROR_PATH] ? ` ${prefix}-raw-json-error` : ""}`}
-          aria-invalid={errors[RAW_ARGUMENTS_ERROR_PATH] !== undefined}
-          className="min-h-48 font-mono text-xs leading-relaxed"
-          defaultValue={rawDefault}
-          disabled={disabled}
-          id={`${prefix}-raw-json`}
-          maxLength={MAX_ARGUMENT_JSON_BYTES}
-          name={argumentRawName(prefix)}
-          spellCheck={false}
-        />
-        {errors[RAW_ARGUMENTS_ERROR_PATH] ? (
-          <p className="text-xs text-destructive" id={`${prefix}-raw-json-error`}>
-            {errors[RAW_ARGUMENTS_ERROR_PATH]}
+      {mode === "raw" ? (
+        <div className="grid gap-2">
+          <Label htmlFor={`${prefix}-raw-json`}>Arguments JSON</Label>
+          <JsonCodeEditor
+            ariaDescribedBy={`${prefix}-raw-json-hint${errors[RAW_ARGUMENTS_ERROR_PATH] ? ` ${prefix}-raw-json-error` : ""}`}
+            ariaInvalid={errors[RAW_ARGUMENTS_ERROR_PATH] !== undefined}
+            ariaLabel="Tool arguments as JSON"
+            disabled={disabled}
+            editorId={`${prefix}-raw-json`}
+            maxBytes={MAX_ARGUMENT_JSON_BYTES}
+            minHeight="12rem"
+            name={argumentRawName(prefix)}
+            onChange={setRawValue}
+            value={rawValue}
+          />
+          {errors[RAW_ARGUMENTS_ERROR_PATH] ? (
+            <p className="text-xs text-destructive" id={`${prefix}-raw-json-error`}>
+              {errors[RAW_ARGUMENTS_ERROR_PATH]}
+            </p>
+          ) : null}
+          <p
+            className="text-xs leading-relaxed text-muted-foreground"
+            id={`${prefix}-raw-json-hint`}
+          >
+            Provide one JSON object. Syntax is checked while you edit, and the value is parsed as
+            data—never evaluated as code.
           </p>
-        ) : null}
-        <p className="text-xs leading-relaxed text-muted-foreground" id={`${prefix}-raw-json-hint`}>
-          Provide one JSON object. It is parsed as data and is never evaluated as code.
-        </p>
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -175,11 +185,15 @@ function SchemaPropertyField({
   prefix,
   errors,
   disabled,
+  depth,
+  wide = false,
 }: {
   readonly property: ArgumentProperty;
   readonly prefix: string;
   readonly errors: ArgumentFieldErrors;
   readonly disabled: boolean;
+  readonly depth: number;
+  readonly wide?: boolean;
 }) {
   const node = property.node;
   const initiallyIncluded = node.required || node.hasDefault || hasNestedDefaults(node);
@@ -189,30 +203,77 @@ function SchemaPropertyField({
   const hintId = `${inputId}-hint`;
   const errorId = `${inputId}-error`;
   const error = errors[node.path];
+  const hint = fieldHintText(node);
+  const describedBy = [hint ? hintId : undefined, error ? errorId : undefined]
+    .filter(Boolean)
+    .join(" ");
+  const isRootSection = depth === 0;
+  const isObject = node.kind === "object";
+  const spansGrid = wide || isObject || node.kind === "array" || node.kind === "json";
 
   return (
     <fieldset
+      aria-describedby={isObject && describedBy ? describedBy : undefined}
+      data-included={included}
+      data-schema-depth={depth}
+      data-schema-kind={node.kind}
+      data-schema-path={node.path}
       className={cn(
-        "grid min-w-0 gap-2 rounded-xl border p-3",
-        !included && "bg-muted/20 text-muted-foreground",
+        "min-w-0",
+        isRootSection
+          ? "overflow-hidden rounded-xl border bg-card/35 shadow-sm"
+          : isObject
+            ? "rounded-lg border bg-muted/15 p-2.5 sm:p-3"
+            : "grid content-start gap-2 border-b border-border/60 py-3",
+        !isRootSection && spansGrid && "md:col-span-2",
+        !included && isRootSection && "bg-muted/15",
+        !included && !isRootSection && "text-muted-foreground",
       )}
     >
       <legend className="sr-only">{node.title ?? property.name}</legend>
-      <div className="flex min-w-0 items-center justify-between gap-3">
-        <Label className="min-w-0 truncate" htmlFor={inputId}>
-          {node.title ?? property.name}
-          {node.required ? <span className="ml-1 text-destructive">*</span> : null}
-        </Label>
+      <div
+        className={cn(
+          "flex min-w-0 items-start justify-between gap-3",
+          isRootSection && "px-3 py-3 sm:px-4",
+        )}
+      >
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {isObject ? (
+            <span className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">
+              {node.title ?? property.name}
+              {node.required ? (
+                <span aria-hidden="true" className="ml-1 text-destructive">
+                  *
+                </span>
+              ) : null}
+            </span>
+          ) : (
+            <Label className="min-w-0 [overflow-wrap:anywhere]" htmlFor={inputId}>
+              {node.title ?? property.name}
+              {node.required ? (
+                <span aria-hidden="true" className="ml-1 text-destructive">
+                  *
+                </span>
+              ) : null}
+            </Label>
+          )}
+          <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] leading-none text-muted-foreground">
+            {nodeTypeLabel(node)}
+          </span>
+        </div>
         {node.required ? (
-          <span className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+          <span className="mt-0.5 shrink-0 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
             Required
           </span>
         ) : (
-          <label className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+          <label className="flex h-7 shrink-0 items-center gap-2 rounded-full border bg-background px-2.5 text-xs text-muted-foreground shadow-xs transition-colors hover:text-foreground">
             <input
+              aria-controls={`${inputId}-body`}
+              aria-label={`Include ${node.title ?? property.name}`}
               checked={included}
-              className="size-4 accent-[var(--primary)]"
+              className="size-3.5 accent-[var(--primary)]"
               disabled={disabled}
+              id={`${inputId}-included`}
               name={argumentIncludedName(node.path, prefix)}
               onChange={(event) => setIncluded(event.target.checked)}
               type="checkbox"
@@ -223,25 +284,42 @@ function SchemaPropertyField({
         )}
       </div>
 
-      {node.kind === "object" ? (
-        <ObjectFields disabled={fieldDisabled} errors={errors} node={node} prefix={prefix} />
-      ) : (
-        <PrimitiveField
-          describedBy={`${hintId}${error ? ` ${errorId}` : ""}`}
-          disabled={fieldDisabled}
-          id={inputId}
-          invalid={error !== undefined}
-          node={node}
-          prefix={prefix}
-        />
-      )}
+      <div
+        className={cn(
+          "grid gap-2",
+          isRootSection && "border-t bg-background px-3 py-1 sm:px-4",
+          !isRootSection && isObject && "mt-3 border-t pt-1",
+        )}
+        hidden={!included}
+        id={`${inputId}-body`}
+      >
+        {isObject && hint ? <FieldHint id={hintId} text={hint} /> : null}
+        {node.kind === "object" ? (
+          <ObjectFields
+            depth={depth}
+            disabled={fieldDisabled}
+            errors={errors}
+            node={node}
+            prefix={prefix}
+          />
+        ) : (
+          <PrimitiveField
+            describedBy={describedBy || undefined}
+            disabled={fieldDisabled}
+            id={inputId}
+            invalid={error !== undefined}
+            node={node}
+            prefix={prefix}
+          />
+        )}
 
-      <FieldHint node={node} propertyName={property.name} id={hintId} />
-      {error ? (
-        <p className="text-xs text-destructive" id={errorId}>
-          {error}
-        </p>
-      ) : null}
+        {!isObject && hint ? <FieldHint id={hintId} text={hint} /> : null}
+        {error ? (
+          <p className="text-xs text-destructive" id={errorId} role="alert">
+            {error}
+          </p>
+        ) : null}
+      </div>
     </fieldset>
   );
 }
@@ -251,24 +329,28 @@ function ObjectFields({
   prefix,
   errors,
   disabled,
+  depth,
 }: {
   readonly node: ArgumentObjectNode;
   readonly prefix: string;
   readonly errors: ArgumentFieldErrors;
   readonly disabled: boolean;
+  readonly depth: number;
 }) {
   if (node.properties.length === 0) {
     return <p className="text-xs text-muted-foreground">Empty object</p>;
   }
   return (
-    <div className="grid gap-3 border-l pl-3">
+    <div className="grid min-w-0 gap-x-4 md:grid-cols-2">
       {node.properties.map((property) => (
         <SchemaPropertyField
+          depth={depth + 1}
           disabled={disabled}
           errors={errors}
           key={property.node.path}
           prefix={prefix}
           property={property}
+          wide={node.properties.length === 1}
         />
       ))}
     </div>
@@ -288,7 +370,7 @@ function PrimitiveField({
   readonly id: string;
   readonly disabled: boolean;
   readonly invalid: boolean;
-  readonly describedBy: string;
+  readonly describedBy?: string;
 }) {
   const common = {
     "aria-describedby": describedBy,
@@ -330,13 +412,38 @@ function PrimitiveField({
     );
   }
 
+  if (node.kind === "json") {
+    return (
+      <JsonCodeEditor
+        ariaDescribedBy={describedBy}
+        ariaInvalid={invalid}
+        ariaLabel={`JSON value for ${node.title ?? node.path}`}
+        ariaRequired={node.required}
+        defaultValue={jsonNodeDefaultValue(node)}
+        disabled={disabled}
+        editorId={id}
+        maxBytes={MAX_ARGUMENT_JSON_BYTES}
+        maxHeight="14rem"
+        minHeight="7rem"
+        name={argumentValueName(node.path, prefix)}
+      />
+    );
+  }
+
   if (node.kind === "array") {
     return (
-      <Textarea
-        {...common}
-        className="min-h-28 font-mono text-xs leading-relaxed"
+      <JsonCodeEditor
+        ariaDescribedBy={describedBy}
+        ariaInvalid={invalid}
+        ariaLabel={`JSON array for ${node.title ?? node.path}`}
+        ariaRequired={node.required}
         defaultValue={node.hasDefault ? JSON.stringify(node.defaultValue, null, 2) : "[]"}
-        spellCheck={false}
+        disabled={disabled}
+        editorId={id}
+        maxBytes={MAX_ARGUMENT_JSON_BYTES}
+        maxHeight="14rem"
+        minHeight="7rem"
+        name={argumentValueName(node.path, prefix)}
       />
     );
   }
@@ -369,22 +476,22 @@ function PrimitiveField({
   return null;
 }
 
-function FieldHint({
-  node,
-  propertyName,
-  id,
-}: {
-  readonly node: ArgumentSchemaNode;
-  readonly propertyName: string;
-  readonly id: string;
-}) {
-  const constraints = constraintDescription(node);
+function FieldHint({ text, id }: { readonly text: string; readonly id: string }) {
   return (
-    <p className="text-xs leading-relaxed text-muted-foreground" id={id}>
-      {node.description ?? propertyName}
-      {constraints ? ` · ${constraints}` : ""}
+    <p
+      className="min-w-0 text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]"
+      id={id}
+    >
+      {text}
     </p>
   );
+}
+
+function fieldHintText(node: ArgumentSchemaNode): string | undefined {
+  const description = node.description?.trim();
+  const constraints = constraintDescription(node);
+  if (description && constraints) return `${description} · ${constraints}`;
+  return description || constraints;
 }
 
 function constraintDescription(node: ArgumentSchemaNode): string | undefined {
@@ -407,11 +514,28 @@ function constraintDescription(node: ArgumentSchemaNode): string | undefined {
   if (node.kind === "array") {
     const parts = [
       "JSON array",
+      node.items.kind === "json" ? "complex items stay in JSON" : undefined,
       node.minItems !== undefined ? `min ${String(node.minItems)} items` : undefined,
       node.maxItems !== undefined ? `max ${String(node.maxItems)} items` : undefined,
     ].filter(Boolean);
     return parts.join(", ");
   }
+  if (node.kind === "json") {
+    return node.expectedType
+      ? `JSON ${node.expectedType} · complex schema validated when run`
+      : "JSON value · complex schema validated when run";
+  }
+  return undefined;
+}
+
+function nodeTypeLabel(node: ArgumentSchemaNode): string {
+  if (node.kind === "object") {
+    const count = node.properties.length;
+    return `object · ${String(count)} ${count === 1 ? "field" : "fields"}`;
+  }
+  if (node.kind === "array") return "JSON array";
+  if (node.kind === "json") return node.expectedType ? `JSON ${node.expectedType}` : "JSON";
+  if (node.kind === "integer") return "integer";
   return node.kind;
 }
 
@@ -427,6 +551,15 @@ function inputTypeForFormat(format: string | undefined): "text" | "email" | "url
   if (format === "uri" || format === "url") return "url";
   if (format === "date") return "date";
   return "text";
+}
+
+function jsonNodeDefaultValue(node: Extract<ArgumentSchemaNode, { kind: "json" }>): string {
+  if (!node.hasDefault) return "";
+  try {
+    return JSON.stringify(node.defaultValue, null, 2) ?? "";
+  } catch {
+    return "";
+  }
 }
 
 function fieldId(prefix: string, path: string): string {

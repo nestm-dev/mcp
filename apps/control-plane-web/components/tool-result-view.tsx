@@ -1,5 +1,6 @@
 import { AlertCircle, CheckCircle2, FileJson2 } from "lucide-react";
 
+import { JsonCodeDetails } from "@/components/json-code-editor";
 import { Badge } from "@/components/ui/badge";
 import type { ToolCallResult, ToolResultContent } from "@/lib/control-plane-api";
 
@@ -57,15 +58,15 @@ export function ToolResultView({ result }: { readonly result: ToolCallResult }) 
           <JsonResult label="Structured content" value={result.structuredContent} />
         )}
 
-        <details className="group rounded-lg border bg-background/60">
-          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground group-open:text-foreground">
-            <FileJson2 className="size-3.5" />
-            Raw response
-          </summary>
-          <pre className="max-h-72 overflow-auto border-t p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words">
-            {formatJson(result)}
-          </pre>
-        </details>
+        <JsonCodeDetails
+          ariaLabel="Raw tool response JSON"
+          className="bg-background/60"
+          code={formatJson(result)}
+          summaryClassName="flex items-center gap-2 px-3"
+        >
+          <FileJson2 className="size-3.5" />
+          Raw response
+        </JsonCodeDetails>
       </div>
     </section>
   );
@@ -159,14 +160,15 @@ function ContentHeading({ index, type }: { readonly index: number; readonly type
 
 function JsonResult({ label, value }: { readonly label: string; readonly value: unknown }) {
   return (
-    <details className="group rounded-lg border bg-background/60" open>
-      <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-muted-foreground group-open:text-foreground">
-        {label}
-      </summary>
-      <pre className="max-h-72 overflow-auto border-t p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words">
-        {formatJson(value)}
-      </pre>
-    </details>
+    <JsonCodeDetails
+      ariaLabel={`${label} JSON`}
+      className="bg-background/60"
+      code={formatJson(value)}
+      defaultOpen
+      summaryClassName="px-3"
+    >
+      {label}
+    </JsonCodeDetails>
   );
 }
 

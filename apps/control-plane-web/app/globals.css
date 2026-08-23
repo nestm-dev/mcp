@@ -100,3 +100,51 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+@layer components {
+  [data-json-code-editor]:has(.cm-editor.cm-focused) {
+    border-color: var(--ring);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 30%, transparent);
+  }
+
+  [data-json-code-editor][aria-disabled="true"] .cm-editor {
+    cursor: not-allowed;
+  }
+
+  .json-code-mirror .cm-editor {
+    background: transparent;
+    color: var(--foreground);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+  }
+
+  .json-code-mirror .cm-scroller {
+    line-height: 1.625;
+  }
+
+  .json-code-mirror .cm-content {
+    min-width: max-content;
+    padding-block: 0.65rem;
+  }
+
+  .json-code-mirror .cm-line {
+    padding-inline: 0.75rem;
+  }
+
+  .json-code-mirror .cm-gutters {
+    border-right-color: var(--border);
+    background: color-mix(in oklab, var(--muted) 45%, transparent);
+    color: var(--muted-foreground);
+  }
+
+  .json-code-mirror .cm-activeLine,
+  .json-code-mirror .cm-activeLineGutter {
+    background: color-mix(in oklab, var(--accent) 55%, transparent);
+  }
+
+  .json-code-mirror .cm-tooltip {
+    border-color: var(--border);
+    background: var(--popover);
+    color: var(--popover-foreground);
+  }
+}

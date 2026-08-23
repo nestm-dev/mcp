@@ -5,6 +5,7 @@ import { Play, ShieldAlert, TriangleAlert, Wrench } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 
+import { JsonCodeDetails } from "@/components/json-code-editor";
 import { JsonSchemaArgumentForm } from "@/components/json-schema-argument-form";
 import { ToolResultView } from "@/components/tool-result-view";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +21,7 @@ import {
 import { getApiErrorMessage, type Connection, type Tool } from "@/lib/control-plane-api";
 import { controlPlaneKeys, toolCallMutationOptions } from "@/lib/control-plane-queries";
 import { parseJsonSchemaArguments, type ArgumentFieldErrors } from "@/lib/json-schema-arguments";
+import { stringifyJsonDocument } from "@/lib/json-document";
 
 const ARGUMENT_FIELD_PREFIX = "tool-call-arguments";
 
@@ -81,7 +83,7 @@ export function ToolExecutionDialog({
 
   return (
     <Dialog onOpenChange={(open) => (!open && !mutation.isPending ? onDismiss() : undefined)} open>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-w-4xl">
         <form className="contents" onSubmit={handleSubmit}>
           <DialogHeader>
             <div className="mb-1 flex flex-wrap items-center gap-2">
@@ -94,10 +96,15 @@ export function ToolExecutionDialog({
               {tool.annotations?.openWorldHint ? <Badge variant="warning">Open world</Badge> : null}
               {destructive ? <Badge variant="destructive">Destructive</Badge> : null}
             </div>
-            <DialogTitle>Run {tool.title ?? tool.name}</DialogTitle>
+            <DialogTitle className="[overflow-wrap:anywhere]">
+              Run {tool.title ?? tool.name}
+            </DialogTitle>
             <DialogDescription>
-              Execute <span className="font-mono text-foreground">{tool.name}</span> on{" "}
-              {connection.displayName}. Every run is explicit and is never retried automatically.
+              Execute{" "}
+              <span className="font-mono text-foreground [overflow-wrap:anywhere]">
+                {tool.name}
+              </span>{" "}
+              on {connection.displayName}. Every run is explicit and is never retried automatically.
             </DialogDescription>
           </DialogHeader>
 
@@ -133,14 +140,15 @@ export function ToolExecutionDialog({
               schema={tool.inputSchema}
             />
 
-            <details className="group rounded-xl border bg-muted/15">
-              <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-muted-foreground group-open:text-foreground">
-                Advertised input schema
-              </summary>
-              <pre className="max-h-56 overflow-auto border-t p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words">
-                {formatSchema(tool.inputSchema)}
-              </pre>
-            </details>
+            <JsonCodeDetails
+              ariaLabel="Advertised tool input schema JSON"
+              className="rounded-xl bg-muted/15"
+              code={stringifyJsonDocument(tool.inputSchema, "[Unable to serialize schema]")}
+              maxHeight="14rem"
+              summaryClassName="px-3"
+            >
+              Advertised input schema
+            </JsonCodeDetails>
           </div>
 
           {destructive ? (
@@ -228,12 +236,4 @@ function CallWarning({
       </div>
     </div>
   );
-}
-
-function formatSchema(schema: unknown): string {
-  try {
-    return JSON.stringify(schema, null, 2);
-  } catch {
-    return "[Unable to serialize schema]";
-  }
 }
