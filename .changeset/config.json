@@ -7,6 +7,7 @@
 			"@nestm/mcp-core",
 			"@nestm/mcp-client",
 			"@nestm/mcp-manager",
+			"@nestm/mcp-conformance",
 			"@nestm/mcp-server",
 			"@nestm/mcp-auth",
 			"@nestm/mcp-observability",

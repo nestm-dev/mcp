@@ -31,6 +31,7 @@
 		"@nestjs/swagger": "12.0.0-alpha.2",
 		"@nestm/mcp": "workspace:^",
 		"@nestm/mcp-client": "workspace:^",
+		"@nestm/mcp-conformance": "workspace:^",
 		"@nestm/mcp-gateway": "workspace:^",
 		"@nestm/mcp-manager": "workspace:^",
 		"@nestm/mcp-observability": "workspace:^",

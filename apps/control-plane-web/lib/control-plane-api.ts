@@ -737,6 +737,282 @@ export const problemDetailsSchema = z
   })
   .strict();
 
+const conformanceIdentifierSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/u);
+const conformanceCodeSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Z][A-Z0-9_]*$/u);
+const conformanceFingerprintSchema = z.string().regex(/^sha256:[A-Za-z0-9_-]{43}$/u);
+const conformanceCheckRiskSchema = z.enum(["read-only", "side-effecting"]);
+const conformanceCheckStatusSchema = z.enum(["pass", "warn", "fail", "skip", "error"]);
+const conformanceVerdictSchema = z.enum(["pass", "warn", "fail", "inconclusive"]);
+const conformanceSafeIntegerSchema = z.number().int().max(Number.MAX_SAFE_INTEGER);
+const conformanceCountSchema = conformanceSafeIntegerSchema.nonnegative();
+const conformancePositiveIntegerSchema = conformanceSafeIntegerSchema.positive();
+
+const conformancePlanCheckSchema = z
+  .object({
+    id: conformanceIdentifierSchema,
+    title: z.string().min(1).max(120),
+    risk: conformanceCheckRiskSchema,
+  })
+  .strict();
+
+export const conformanceReportSchema = z
+  .object({
+    reportSchemaVersion: z.literal(1),
+    fingerprintVersion: z.literal(1),
+    runId: z.string().min(1).max(128),
+    plan: z
+      .object({
+        id: conformanceIdentifierSchema,
+        version: z.string().min(1).max(64),
+        title: z.string().min(1).max(120),
+        digest: conformanceFingerprintSchema,
+        checks: z.array(conformancePlanCheckSchema).min(1).max(128),
+      })
+      .strict(),
+    descriptor: z
+      .object({
+        target: z
+          .object({
+            kind: conformanceIdentifierSchema,
+            id: z.string().min(1).max(256),
+            revision: conformancePositiveIntegerSchema.optional(),
+            generation: conformancePositiveIntegerSchema.optional(),
+          })
+          .strict(),
+        subject: z
+          .object({
+            name: z.string().min(1).max(256),
+            version: z.string().min(1).max(256),
+            revision: z.string().min(1).max(256).optional(),
+          })
+          .strict(),
+        fixtureVersion: z.string().min(1).max(256).optional(),
+      })
+      .strict(),
+    startedAt: dateTimeSchema,
+    finishedAt: dateTimeSchema,
+    durationMs: conformanceCountSchema,
+    completion: z.enum(["completed", "cancelled", "timed-out"]),
+    verdict: conformanceVerdictSchema,
+    counts: z
+      .object({
+        pass: conformanceCountSchema,
+        warn: conformanceCountSchema,
+        fail: conformanceCountSchema,
+        skip: conformanceCountSchema,
+        error: conformanceCountSchema,
+      })
+      .strict(),
+    checks: z
+      .array(
+        z
+          .object({
+            id: conformanceIdentifierSchema,
+            title: z.string().min(1).max(120),
+            risk: conformanceCheckRiskSchema,
+            status: conformanceCheckStatusSchema,
+            code: conformanceCodeSchema,
+            durationMs: conformanceCountSchema,
+            facts: z
+              .record(
+                z
+                  .string()
+                  .min(1)
+                  .max(64)
+                  .regex(/^[a-z][A-Za-z0-9]*(?:[._-][A-Za-z0-9]+)*$/u),
+                z.union([
+                  z.string().max(1_024),
+                  z.number().finite().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
+                  z.boolean(),
+                  z.null(),
+                ]),
+              )
+              .refine((facts) => Object.keys(facts).length <= 64, {
+                message: "A conformance check contains too many facts.",
+              }),
+            factsOmittedCount: conformanceCountSchema,
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(128),
+  })
+  .strict()
+  .superRefine((report, context) => {
+    if (report.plan.checks.length !== report.checks.length) {
+      context.addIssue({ code: "custom", message: "Plan and report check counts differ." });
+      return;
+    }
+    const ids = new Set<string>();
+    report.checks.forEach((check, index) => {
+      const planned = report.plan.checks[index];
+      if (ids.has(check.id)) {
+        context.addIssue({
+          code: "custom",
+          message: "Conformance check IDs must be unique.",
+          path: ["checks", index, "id"],
+        });
+      }
+      ids.add(check.id);
+      if (
+        planned === undefined ||
+        planned.id !== check.id ||
+        planned.title !== check.title ||
+        planned.risk !== check.risk
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Plan and report check order differ.",
+          path: ["checks", index],
+        });
+      }
+    });
+    for (const status of conformanceCheckStatusSchema.options) {
+      const observed = report.checks.filter((check) => check.status === status).length;
+      if (observed !== report.counts[status]) {
+        context.addIssue({
+          code: "custom",
+          message: "Conformance status counts are inconsistent.",
+          path: ["counts", status],
+        });
+      }
+    }
+    const expectedVerdict =
+      report.completion !== "completed" || report.counts.error > 0
+        ? "inconclusive"
+        : report.counts.fail > 0
+          ? "fail"
+          : report.counts.warn > 0
+            ? "warn"
+            : report.counts.pass > 0
+              ? "pass"
+              : "inconclusive";
+    if (report.verdict !== expectedVerdict) {
+      context.addIssue({
+        code: "custom",
+        message: "The conformance verdict is inconsistent.",
+        path: ["verdict"],
+      });
+    }
+    if (Date.parse(report.finishedAt) - Date.parse(report.startedAt) !== report.durationMs) {
+      context.addIssue({
+        code: "custom",
+        message: "The conformance duration is inconsistent.",
+        path: ["durationMs"],
+      });
+    }
+  });
+
+export const conformanceRunStatusSchema = z.enum([
+  "queued",
+  "running",
+  "cancelling",
+  "completed",
+  "cancelled",
+  "timed-out",
+  "failed",
+]);
+
+export const conformanceRunSchema = z
+  .object({
+    runId: z.string().uuid(),
+    planId: z.literal("safe-discovery-v1"),
+    status: conformanceRunStatusSchema,
+    target: z
+      .object({
+        kind: z.literal("connection"),
+        connectionId: z.string().uuid(),
+        expectedRevision: conformancePositiveIntegerSchema,
+        runtimeGeneration: conformancePositiveIntegerSchema,
+      })
+      .strict(),
+    createdAt: dateTimeSchema,
+    startedAt: dateTimeSchema.optional(),
+    finishedAt: dateTimeSchema.optional(),
+    report: conformanceReportSchema.optional(),
+    errorCode: conformanceCodeSchema.optional(),
+  })
+  .strict()
+  .superRefine((run, context) => {
+    const terminal = ["completed", "cancelled", "timed-out", "failed"].includes(run.status);
+    if (terminal && run.finishedAt === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Terminal conformance runs require finishedAt.",
+        path: ["finishedAt"],
+      });
+    }
+    if (!terminal && (run.finishedAt !== undefined || run.report !== undefined || run.errorCode)) {
+      context.addIssue({
+        code: "custom",
+        message: "Active conformance runs cannot carry terminal evidence.",
+      });
+    }
+    if (run.status === "failed") {
+      if (run.errorCode === undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "Failed conformance runs require an error code.",
+          path: ["errorCode"],
+        });
+      }
+      if (run.report !== undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "Failed conformance runs cannot carry an accepted report.",
+          path: ["report"],
+        });
+      }
+    } else if (run.errorCode !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Only failed conformance runs can carry an error code.",
+        path: ["errorCode"],
+      });
+    }
+    if ((run.status === "completed" || run.status === "timed-out") && run.report === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "This terminal conformance status requires a report.",
+        path: ["report"],
+      });
+    }
+    if (run.report === undefined) return;
+    const expectedStatus =
+      run.report.completion === "completed"
+        ? "completed"
+        : run.report.completion === "cancelled"
+          ? "cancelled"
+          : "timed-out";
+    if (
+      run.status !== expectedStatus ||
+      run.report.runId !== run.runId ||
+      run.report.plan.id !== run.planId ||
+      run.report.descriptor.target.kind !== run.target.kind ||
+      run.report.descriptor.target.id !== run.target.connectionId ||
+      run.report.descriptor.target.revision !== run.target.expectedRevision ||
+      run.report.descriptor.target.generation !== run.target.runtimeGeneration
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "The conformance report does not match its run envelope.",
+        path: ["report"],
+      });
+    }
+  });
+
+export const conformanceRunsSchema = z
+  .object({ runs: z.array(conformanceRunSchema).max(100) })
+  .strict();
+
 const endpointSchema = z
   .string()
   .trim()
@@ -814,6 +1090,10 @@ export type Probe = z.infer<typeof probeSchema>;
 export type ConnectionDraft = z.infer<typeof connectionDraftSchema>;
 export type ConnectionUpdate = z.infer<typeof connectionUpdateSchema>;
 export type DesiredConnectionState = Connection["desiredState"];
+export type ConformanceRunStatus = z.infer<typeof conformanceRunStatusSchema>;
+export type ConformanceReport = z.infer<typeof conformanceReportSchema>;
+export type ConformanceRun = z.infer<typeof conformanceRunSchema>;
+export type ConformanceRunView = ConformanceRun;
 
 export class ControlPlaneApiError extends Error {
   readonly status: number;
@@ -975,6 +1255,10 @@ function hubMemberPath(connectionId: string): string {
   return `/v1/mcp/hub/members/${encodeURIComponent(connectionId)}`;
 }
 
+function conformanceRunPath(runId: string): string {
+  return `/v1/mcp/conformance/runs/${encodeURIComponent(runId)}`;
+}
+
 export const controlPlaneApi = {
   listConnections(signal?: AbortSignal): Promise<Connection[]> {
     return requestJson("/v1/mcp/connections", connectionsSchema, { signal });
@@ -994,6 +1278,46 @@ export const controlPlaneApi = {
 
   metricsSnapshot(signal?: AbortSignal): Promise<MetricsSnapshot> {
     return requestJson("/v1/mcp/metrics", metricsSnapshotSchema, { signal });
+  },
+
+  startConformanceRun(connection: Pick<Connection, "id" | "revision" | "runtimeGeneration">) {
+    return requestJson("/v1/mcp/conformance/runs", conformanceRunSchema, {
+      method: "POST",
+      body: {
+        target: {
+          kind: "connection",
+          connectionId: connection.id,
+          expectedRevision: connection.revision,
+          runtimeGeneration: connection.runtimeGeneration,
+        },
+      },
+    });
+  },
+
+  listConformanceRuns(
+    connectionId: string,
+    runtimeGeneration: number,
+    limit = 5,
+    signal?: AbortSignal,
+  ): Promise<ConformanceRun[]> {
+    const params = new URLSearchParams({
+      connectionId,
+      runtimeGeneration: String(runtimeGeneration),
+      limit: String(limit),
+    });
+    return requestJson(`/v1/mcp/conformance/runs?${params.toString()}`, conformanceRunsSchema, {
+      signal,
+    }).then((response) => response.runs);
+  },
+
+  getConformanceRun(runId: string, signal?: AbortSignal): Promise<ConformanceRun> {
+    return requestJson(conformanceRunPath(runId), conformanceRunSchema, { signal });
+  },
+
+  cancelConformanceRun(runId: string): Promise<ConformanceRun> {
+    return requestJson(`${conformanceRunPath(runId)}/cancel`, conformanceRunSchema, {
+      method: "POST",
+    });
   },
 
   hubSnapshot(signal?: AbortSignal): Promise<Hub> {

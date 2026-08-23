@@ -125,6 +125,9 @@ importers:
       '@nestm/mcp-client':
         specifier: workspace:^
         version: link:../../packages/mcp-client
+      '@nestm/mcp-conformance':
+        specifier: workspace:^
+        version: link:../../packages/mcp-conformance
       '@nestm/mcp-gateway':
         specifier: workspace:^
         version: link:../../packages/mcp-gateway
@@ -360,6 +363,12 @@ importers:
       '@modelcontextprotocol/server':
         specifier: 2.0.0
         version: 2.0.0
+
+  packages/mcp-conformance:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/mcp-core: {}
 

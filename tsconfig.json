@@ -4,6 +4,7 @@
 		{ "path": "./packages/mcp-core" },
 		{ "path": "./packages/mcp-client" },
 		{ "path": "./packages/mcp-manager" },
+		{ "path": "./packages/mcp-conformance" },
 		{ "path": "./packages/mcp-server" },
 		{ "path": "./packages/mcp-auth" },
 		{ "path": "./packages/mcp-observability" },

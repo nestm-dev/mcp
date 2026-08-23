@@ -32,13 +32,14 @@ exposing lifecycle operations directly to a browser.
 
 ## Layer map
 
-| Layer                        | This reference API                 | NestM packages                     | Artifact Studio later                           |
-| ---------------------------- | ---------------------------------- | ---------------------------------- | ----------------------------------------------- |
-| Desired connection authority | In-memory records and revision CAS | Opaque generation keys only        | Durable product records and approvals           |
-| Admission                    | Exact-host HTTP policy             | Admitted transport definition      | Network, executable, and credential policy      |
-| Runtime lifecycle            | Public Nest manager adapter        | `@nestm/mcp-manager`               | Invokes the manager through an application port |
-| Catalog and execution        | Safe HTTP projections              | Typed MCP discovery and operations | Tenant-scoped evidence and authorization        |
-| Aggregate inbound MCP hub    | Process-local membership + CAS     | Dynamic collision-safe gateway     | Product authorization around the same app port  |
+| Layer                        | This reference API                 | NestM packages                      | Artifact Studio later                           |
+| ---------------------------- | ---------------------------------- | ----------------------------------- | ----------------------------------------------- |
+| Desired connection authority | In-memory records and revision CAS | Opaque generation keys only         | Durable product records and approvals           |
+| Admission                    | Exact-host HTTP policy             | Admitted transport definition       | Network, executable, and credential policy      |
+| Runtime lifecycle            | Public Nest manager adapter        | `@nestm/mcp-manager`                | Invokes the manager through an application port |
+| Catalog and execution        | Safe HTTP projections              | Typed MCP discovery and operations  | Tenant-scoped evidence and authorization        |
+| Conformance evidence         | Bounded process-local run history  | Generic plans and immutable reports | Durable baselines and release policy            |
+| Aggregate inbound MCP hub    | Process-local membership + CAS     | Dynamic collision-safe gateway      | Product authorization around the same app port  |
 
 This separation is intentional. The runtime manager is a process-local lifecycle component, not
 a tenant or credential authority. Artifact Studio's durable control plane and outbound gateway stay
@@ -68,6 +69,35 @@ host's endpoint admission checks. Artifact Studio must replace that policy with 
 authorization and durable authority; those concerns do not move into `@nestm/mcp-manager` or
 `@nestm/mcp-gateway`.
 
+## Process-local conformance runs
+
+The validation host can run its server-owned `safe-discovery-v1` plan against one exact connection
+revision and runtime generation. The runner holds that generation's manager lease for the complete
+plan, performs only bounded passive discovery and schema compilation, and rejects the report if the
+connection changes before completion. It never accepts executable checks, tool arguments, or
+side-effect authorization from HTTP.
+
+- `POST /v1/mcp/conformance/runs`
+- `GET /v1/mcp/conformance/runs?connectionId=...&runtimeGeneration=...&limit=...`
+- `GET /v1/mcp/conformance/runs/:runId`
+- `POST /v1/mcp/conformance/runs/:runId/cancel`
+
+Runs and reports live only in process memory. One run may be active per runtime generation, global
+active work is capped, and only a bounded terminal history is retained. Restarting the API clears
+that evidence. Reports contain stable check codes, counts, durations, safe scalar facts, and
+digests—not endpoints, credentials, runtime names, raw catalogs or schemas, result payloads, or
+caught error details.
+
+Dashboard history is operational convenience, not a durable release baseline. Cross-release
+regression checks must persist baseline and candidate JSON/JUnit artifacts outside this process and
+compare reports produced by separate library builds. This API intentionally provides neither
+baseline approval nor durable artifact storage.
+
+The conformance routes share this validation host's loopback/private deployment boundary. They do
+not add caller authentication or make the host safe to expose through a routable bind or public
+reverse proxy; a product deployment must add authenticated ownership, authorization, and rate
+limits before broadening that boundary.
+
 ## Safety posture
 
 - The API binds to loopback only and fails configuration if a routable bind address is supplied.
@@ -83,6 +113,9 @@ authorization and durable authority; those concerns do not move into `@nestm/mcp
 - Direct tool execution resolves the tool from the catalog captured for the current runtime
   generation, validates arguments before dispatch, and passes the pinned definition to the client
   runtime so advertised structured outputs are validated as well.
+- Conformance requests select only the host-owned passive plan, pin the full run to one managed
+  generation lease, enforce time/page/item/schema/concurrency bounds, and never infer permission
+  from upstream annotations.
 - This exact-host fetch guard demonstrates the admission seam; an internet-facing product still
   needs DNS pinning/rebinding protection, response-body limits, authentication, and rate limiting.
 
@@ -122,6 +155,10 @@ MCP_OAUTH_ALLOWED_HOSTS=127.0.0.1,localhost,::1,auth.example.com
 - `POST /v1/mcp/connections/:connectionId/tools/call`
 - `POST /v1/mcp/connections/:connectionId/resources/read`
 - `POST /v1/mcp/connections/:connectionId/prompts/get`
+- `POST /v1/mcp/conformance/runs`
+- `GET /v1/mcp/conformance/runs?connectionId=...&runtimeGeneration=...&limit=...`
+- `GET /v1/mcp/conformance/runs/:runId`
+- `POST /v1/mcp/conformance/runs/:runId/cancel`
 - `GET /v1/mcp/runtime`
 - `GET /v1/mcp/metrics`
 - `GET /metrics`

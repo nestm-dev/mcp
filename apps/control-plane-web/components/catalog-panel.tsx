@@ -16,6 +16,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { ConnectionValidationSummary } from "@/components/connection-validation-summary";
+import { ConnectionConformancePanel } from "@/components/connection-conformance-panel";
 import { PromptGetDialog } from "@/components/prompt-get-dialog";
 import { ResourceReadDialog } from "@/components/resource-read-dialog";
 import { ToolExecutionDialog } from "@/components/tool-execution-dialog";
@@ -121,6 +122,7 @@ export function CatalogPanel({ connection }: { readonly connection: Connection }
       </div>
 
       <ConnectionValidationSummary catalog={catalogQuery.data} connection={connection} />
+      <ConnectionConformancePanel connection={connection} />
 
       {catalogQuery.isPending ? <CatalogLoading /> : null}
       {catalogQuery.isError ? (

@@ -1,4 +1,7 @@
+import { readdir, readFile } from "node:fs/promises";
+
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
 	assertFixedGroup,
@@ -9,12 +12,23 @@ import {
 const FIXED_GROUP = [
 	"@nestm/mcp-core",
 	"@nestm/mcp-client",
+	"@nestm/mcp-manager",
+	"@nestm/mcp-conformance",
 	"@nestm/mcp-server",
 	"@nestm/mcp-auth",
 	"@nestm/mcp-observability",
 	"@nestm/mcp-gateway",
 	"@nestm/mcp",
 ];
+
+const packageManifestSchema = z.object({
+	name: z.string().min(1),
+	private: z.boolean().optional(),
+});
+const changesetConfigSchema = z.object({ fixed: z.array(z.array(z.string().min(1))) });
+const changesetPreStateSchema = z.object({
+	initialVersions: z.record(z.string(), z.string()),
+});
 
 const atVersion = (version: string) => FIXED_GROUP.map((name) => ({ name, version }));
 
@@ -95,6 +109,40 @@ describe("assertFixedVersions", () => {
 });
 
 describe("assertFixedGroup", () => {
+	it("matches every public workspace package and the documented bootstrap loops", async () => {
+		const packagesRoot = new URL("../packages/", import.meta.url);
+		const entries = await readdir(packagesRoot, { withFileTypes: true });
+		const manifests = await Promise.all(
+			entries
+				.filter((entry) => entry.isDirectory())
+				.map(async (entry) => {
+					const source = await readFile(
+						new URL(`${entry.name}/package.json`, packagesRoot),
+						"utf8",
+					);
+					return packageManifestSchema.parse(JSON.parse(source));
+				}),
+		);
+		const publicNames = manifests
+			.filter((manifest) => manifest.private !== true)
+			.map((manifest) => manifest.name)
+			.toSorted();
+		const config = changesetConfigSchema.parse(
+			JSON.parse(await readFile(new URL("../.changeset/config.json", import.meta.url), "utf8")),
+		);
+		expect(assertFixedGroup(publicNames, config.fixed)).toEqual(publicNames);
+		const preState = changesetPreStateSchema.parse(
+			JSON.parse(await readFile(new URL("../.changeset/pre.json", import.meta.url), "utf8")),
+		);
+		expect(publicNames.filter((name) => preState.initialVersions[name] === undefined)).toEqual([]);
+
+		const guide = await readFile(new URL("../CONTRIBUTING.md", import.meta.url), "utf8");
+		const publishPackages = readDocumentedLoop(guide, /for PKG in ([^;]+); do\n  \(cd/u);
+		const trustedPackages = readDocumentedLoop(guide, /for PKG in ([^;]+); do\n  npm trust/u);
+		expect(publishPackages.map((name) => `@nestm/${name}`).toSorted()).toEqual(publicNames);
+		expect(trustedPackages.toSorted()).toEqual(publicNames);
+	});
+
 	it("accepts a group that matches the workspace packages", () => {
 		expect(assertFixedGroup(FIXED_GROUP, [FIXED_GROUP])).toEqual(FIXED_GROUP.toSorted());
 	});
@@ -116,3 +164,9 @@ describe("assertFixedGroup", () => {
 		expect(() => assertFixedGroup(FIXED_GROUP, undefined)).toThrow("exactly one `fixed` group");
 	});
 });
+
+function readDocumentedLoop(source: string, pattern: RegExp): string[] {
+	const packages = pattern.exec(source)?.[1];
+	if (packages === undefined) throw new Error("The documented package loop is missing.");
+	return packages.trim().split(/\s+/u);
+}

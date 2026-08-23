@@ -1,0 +1,66 @@
+{
+	"name": "@nestm/mcp-conformance",
+	"version": "0.1.0-alpha.4",
+	"description": "Framework-neutral conformance runner, immutable reports, and semantic regression comparison for MCP systems.",
+	"type": "module",
+	"sideEffects": false,
+	"author": "nestm",
+	"license": "BSD-3-Clause",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nestm-dev/mcp.git",
+		"directory": "packages/mcp-conformance"
+	},
+	"homepage": "https://github.com/nestm-dev/mcp/tree/main/packages/mcp-conformance#readme",
+	"bugs": {
+		"url": "https://github.com/nestm-dev/mcp/issues"
+	},
+	"keywords": [
+		"mcp",
+		"model-context-protocol",
+		"conformance",
+		"regression",
+		"testing",
+		"junit",
+		"nestm"
+	],
+	"engines": {
+		"node": ">=22.13.0"
+	},
+	"types": "./dist/index.d.mts",
+	"files": [
+		"dist",
+		"README.md",
+		"CHANGELOG.md",
+		"LICENSE"
+	],
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs",
+			"default": "./dist/index.mjs"
+		},
+		"./package.json": "./package.json"
+	},
+	"dependencies": {
+		"zod": "^4.4.3"
+	},
+	"scripts": {
+		"build": "tsdown",
+		"build:watch": "tsdown --watch src",
+		"typecheck": "tsc -b",
+		"lint": "oxlint --type-aware .",
+		"lint:fix": "oxlint --type-aware --fix .",
+		"format": "prettier --write . --ignore-unknown",
+		"format:check": "prettier --check . --ignore-unknown",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage",
+		"verify:pack": "pnpm run build && publint --strict",
+		"prepack": "pnpm run build"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
+}

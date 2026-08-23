@@ -6,8 +6,10 @@ and inclusion in one unified MCP endpoint. The capability workbench can run tool
 resources, and render prompts through explicit, non-retried requests. Its tool console parses a safe
 subset of advertised JSON Schema and falls back to raw JSON for ambiguous schemas. Result previews
 are bounded and never interpret upstream HTML, URLs, or binary payloads. The Hub catalog explorer
-shows how upstream names and URIs are projected through the unified endpoint. The app does not
-collect MCP tokens, client secrets, custom authorization headers, or PKCE material.
+shows how upstream names and URIs are projected through the unified endpoint. A generation-scoped
+conformance panel can run the server-owned passive discovery plan and inspect its bounded report
+history. The app does not collect MCP tokens, client secrets, custom authorization headers, or PKCE
+material.
 
 ## Local development
 
@@ -96,9 +98,13 @@ do not expose this validation console as a public endpoint.
 - Concrete resource reads and prompt rendering use the same explicit, non-retried interaction
   model. Prompt arguments and rendered results are bounded; binary content is summarized instead
   of embedded.
-- Connection validation is displayed as individual pass, warning, or unknown checks from the safe
-  runtime and catalog projections. The console does not invent an aggregate readiness score or
-  persist validation evidence.
+- Current observations are displayed as individual pass, warning, or unknown checks derived from
+  the safe runtime and catalog projections; the console does not invent an aggregate readiness
+  score from them.
+- Repeatable conformance is separate evidence: the browser starts only the fixed passive plan,
+  scopes history by connection and runtime generation, polls only an active run, and never retries
+  start or cancellation mutations. The API retains a bounded process-local report history and the
+  panel displays its five most recent reports; an API restart clears them.
 - The projected Hub catalog is revision-fenced, cached by Hub revision, and exposes reversible
   namespace/source to projected-name and projected-URI mappings without fetching from inside the
   explorer component.
