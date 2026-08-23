@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/mcp-core",
-	"version": "0.1.0-alpha.4",
+	"version": "0.1.0-alpha.5",
 	"description": "Framework-neutral runtime primitives for composing MCP clients, servers, and gateways.",
 	"author": "nestm",
 	"repository": {
