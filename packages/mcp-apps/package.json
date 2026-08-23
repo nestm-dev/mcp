@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/mcp-apps",
-	"version": "0.1.0-alpha.5",
+	"version": "0.1.0-alpha.6",
 	"description": "Stable MCP Apps server metadata, validation, fragments, and direct-server feature composition for MCP SDK v2.",
 	"type": "module",
 	"sideEffects": false,

@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/mcp",
-	"version": "0.1.0-alpha.5",
+	"version": "0.1.0-alpha.6",
 	"description": "NestJS 12 module for the NestM Model Context Protocol v2 runtime.",
 	"type": "module",
 	"sideEffects": false,
