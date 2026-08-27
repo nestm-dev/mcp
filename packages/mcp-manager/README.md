@@ -42,10 +42,23 @@ await manager.close();
 `McpClientRuntime`. Runtime server names are random and never derived from the generation key;
 telemetry exporters should omit operation targets when aggregating across dynamic generations.
 
+`callTool(generationKey, name, arguments, options)` accepts either a positional `AbortSignal` or an
+`McpRuntimeToolCallOptions` object. Pinning `toolDefinition` keeps the managed client runtime's
+structured output validation bound to that exact definition instead of its cached `tools/list`
+view, so a host that already holds an approved definition never validates a result against a
+drifted schema.
+
 Retained state is bounded by `maxStateEntries` (1,000 by default and always at least
 `maxConnections`). Live and quarantined projections are protected; older offline or failed
 diagnostics are evicted first. State listeners still receive each bounded transition event even
 when its projection cannot be retained.
+
+`MCP_RUNTIME_PHASES` and `MCP_RUNTIME_PROTOCOL_ERAS` publish every lifecycle phase and negotiated
+protocol era as frozen tuples for hosts that persist state projections. The matching
+`mcpRuntimeStateSnapshotSchema`, `mcpRuntimeProbeSnapshotSchema`, and
+`mcpRuntimeCapabilitiesSnapshotSchema` validators implement [Standard
+Schema](https://standardschema.dev) v1 with no added runtime dependency: they accept exactly what
+the manager emits, reject unknown properties, and return a frozen normalized snapshot.
 
 Cleanup failures quarantine and continue charging the affected generation against the configured
 capacity. Runtime cleanup runs before admitted-material cleanup, and both are bounded by

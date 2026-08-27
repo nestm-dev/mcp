@@ -90,6 +90,70 @@ incompatible. Fingerprint inputs are capped at 8 MiB, 128 levels, and 100,000 JS
 canonical sorting. A confirmed regression remains the overall verdict even when another check is
 inconclusive.
 
+## Capture untrusted values and digest a catalog
+
+`canonicalizeMcpConformanceValue` enforces only its own fixed ceilings (8 MiB, 128 levels, 100,000
+nodes, 50,000 properties per object) and walks a hostile shape on the way there.
+`captureMcpConformanceValue` refuses the shape instead. It copies an untrusted value into
+deep-frozen, null-prototype JSON data under caller-supplied bounds, rejecting proxies, accessor and
+non-enumerable properties, symbol keys, sparse or subclassed arrays, exotic prototypes, cycles, and
+non-finite numbers. `undefined` follows the canonicalizer's own JSON semantics, so a captured value
+always canonicalizes exactly like its source.
+
+```ts
+import {
+	captureMcpConformanceValue,
+	captureMcpToolArguments,
+	digestMcpRuntimeCatalog,
+	toMcpConformanceFingerprintHex,
+	type McpConformanceCatalogSnapshot,
+} from "@nestm/mcp-conformance";
+
+declare const untrusted: unknown;
+declare const catalog: McpConformanceCatalogSnapshot;
+
+const limits = {
+	maxBytes: 262_144,
+	maxDepth: 24,
+	maxProperties: 8_192,
+	maxStringBytes: 32_768,
+	maxItems: 512,
+};
+
+const value = captureMcpConformanceValue(untrusted, limits);
+const arguments_ = captureMcpToolArguments(untrusted, limits);
+
+const digest = digestMcpRuntimeCatalog(catalog, {
+	domain: "acme/mcp/catalog/v1",
+	toolSchemaDomain: "acme/mcp/tool-schema/v1",
+	limits,
+});
+const hexadecimal = toMcpConformanceFingerprintHex(digest.catalogFingerprint);
+```
+
+Bounds are resolved against `MCP_CONFORMANCE_DEFAULT_CAPTURE_LIMITS` and
+`MCP_CONFORMANCE_HARD_CAPTURE_LIMITS` by `resolveMcpConformanceCaptureLimits`. A refusal is an
+`McpConformanceCaptureError` whose `code` states the structural reason; messages never quote the
+rejected value, its keys, or the limit that was reached.
+
+`captureMcpToolArguments` layers a `Readonly<Record<string, unknown>>` argument record on the same
+capture. Its byte accounting is predictive — every node spends exactly the canonical JSON bytes it
+will later serialize to, so an oversized payload is refused before it is materialized — and the
+prediction is then cross-checked against `canonicalizeMcpConformanceValue`'s exact output byte
+length. A fence that failed to hold rejects the arguments instead of passing them on.
+
+`digestMcpRuntimeCatalog` accepts a catalog structurally, by its `tools`, `resources`,
+`resourceTemplates`, and `prompts` collections, so a runtime manager's catalog snapshot satisfies it
+without this kernel depending on a runtime package. It returns one `catalogFingerprint` plus a
+per-tool `schemaDigest`, letting a management path and a serving path compare the same surface.
+Both domains are caller-supplied and validated with the fingerprint domain rule. Discovery order
+never reaches a digest: each collection is sorted on its identity (`name`, `uri`, or `uriTemplate`)
+with a canonical-form tiebreak, and a repeated identity is refused rather than silently collapsed.
+
+Fingerprints keep the package's `sha256:<base64url>` form. `toMcpConformanceFingerprintHex` renders
+one as 64 lowercase hexadecimal characters, so a digest column with a fixed-width hexadecimal
+`CHECK` can store it without hand-rolled transcoding.
+
 ## Release-regression workflow
 
 Run the same versioned plan and deterministic fixture in separate baseline and candidate

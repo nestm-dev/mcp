@@ -1,5 +1,7 @@
 import { lookup as dnsLookup } from "node:dns";
-import { Agent, request as httpsRequest } from "node:https";
+import { Agent as HttpAgent, request as httpRequest } from "node:http";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
+import type { RequestOptions as HttpsRequestOptions } from "node:https";
 import { isIP, isIPv4 } from "node:net";
 
 export interface McpDocumentFetchOptions {
@@ -25,7 +27,7 @@ export interface McpHttpDocumentFetcher {
 }
 
 export type McpDocumentFetchFailure =
-	"insecure-url" | "blocked-address" | "too-large" | "timeout" | "network";
+	"insecure-url" | "blocked-address" | "host-not-allowed" | "too-large" | "timeout" | "network";
 
 export class McpDocumentFetchError extends Error {
 	readonly code = "MCP_DOCUMENT_FETCH_FAILED";
@@ -40,27 +42,170 @@ export class McpDocumentFetchError extends Error {
 	}
 }
 
-interface ResolvedAddress {
+/** One DNS answer: the address literal plus its IP family (4 or 6). */
+export interface McpResolvedAddress {
 	readonly address: string;
 	readonly family: number;
 }
 
 export type McpDocumentLookup = (
 	hostname: string,
-	callback: (error: Error | null, addresses: readonly ResolvedAddress[]) => void,
+	callback: (error: Error | null, addresses: readonly McpResolvedAddress[]) => void,
 ) => void;
 
-export interface McpNodeDocumentFetcherOptions {
-	/** Injectable resolver for tests; defaults to `dns.lookup` with `all: true`. */
-	readonly lookup?: McpDocumentLookup;
+/**
+ * Scheme and host admission shared by every guarded transport in this package.
+ * Both switches are fail-closed: leaving them unset preserves the historical
+ * behavior (https only, any host outside the blocked ranges).
+ */
+export interface McpGuardedHostPolicyOptions {
+	/**
+	 * Exact hostnames admitted for outbound requests, compared after
+	 * normalization (lowercased, one trailing dot removed, IPv6 brackets
+	 * stripped). Unset admits any host that is not in a blocked range.
+	 */
+	readonly allowedHosts?: readonly string[];
+	/**
+	 * Permits `http:` to a host whose every resolved address is loopback
+	 * (127.0.0.0/8 or ::1) — the local-dev MCP server case. A mixed answer set
+	 * still fails, and `https:` keeps blocking loopback either way.
+	 */
+	readonly allowLoopbackHttp?: boolean;
 	/** Additional address predicate; blocking is additive to the built-in ranges. */
 	readonly isAddressBlocked?: (address: string) => boolean;
+}
+
+export interface McpNodeDocumentFetcherOptions extends McpGuardedHostPolicyOptions {
+	/** Injectable resolver for tests; defaults to `dns.lookup` with `all: true`. */
+	readonly lookup?: McpDocumentLookup;
 	/** Idle-socket timeout; the total budget comes from each fetch call. */
 	readonly socketTimeoutMs?: number;
 }
 
 const DEFAULT_SOCKET_TIMEOUT_MS = 5_000;
 const USER_AGENT = "nestm-mcp-auth";
+
+/** The connection an admitted URL resolves to; `secure` picks https vs loopback http. */
+export interface McpGuardedTarget {
+	readonly host: string;
+	readonly port: number;
+	readonly secure: boolean;
+}
+
+export interface McpGuardedHostPolicy {
+	/** Judges scheme, allowlist, and IP-literal hosts before any network I/O. */
+	admit(url: URL): McpGuardedTarget;
+	/** The per-address predicate the connect-time lookup hook must satisfy. */
+	admitsAddress(target: McpGuardedTarget): (address: string) => boolean;
+}
+
+/**
+ * Builds the shared scheme/host policy. Kept separate from the transports so
+ * the buffered fetch, the streaming fetch, and endpoint admission all judge a
+ * URL by exactly the same rules.
+ */
+export function createGuardedHostPolicy(
+	options?: McpGuardedHostPolicyOptions,
+): McpGuardedHostPolicy {
+	const extraBlock = options?.isAddressBlocked ?? ((): boolean => false);
+	const allowLoopbackHttp = options?.allowLoopbackHttp === true;
+	const allowedHosts =
+		options?.allowedHosts === undefined
+			? undefined
+			: new Set(options.allowedHosts.map(normalizeGuardedHost));
+	const admitsAddress =
+		(target: McpGuardedTarget) =>
+		(address: string): boolean =>
+			target.secure
+				? !isBlockedDocumentAddress(address) && !extraBlock(address)
+				: isLoopbackAddress(address) && !extraBlock(address);
+
+	return {
+		admit: (url) => {
+			const host = normalizeGuardedHost(url.hostname);
+			const secure = url.protocol === "https:";
+			if (!secure && !(url.protocol === "http:" && allowLoopbackHttp)) {
+				throw new McpDocumentFetchError(
+					"insecure-url",
+					"Guarded requests must use the https scheme.",
+				);
+			}
+			if (allowedHosts !== undefined && !allowedHosts.has(host)) {
+				throw new McpDocumentFetchError(
+					"host-not-allowed",
+					"Host is not in the configured allowlist.",
+				);
+			}
+			const target: McpGuardedTarget = {
+				host,
+				port: url.port === "" ? (secure ? 443 : 80) : Number(url.port),
+				secure,
+			};
+			// IP-literal hosts never reach the lookup hook, so judge them here.
+			if (isIP(host) !== 0 && !admitsAddress(target)(host)) {
+				throw new McpDocumentFetchError(
+					"blocked-address",
+					secure
+						? "Host is in a blocked address range."
+						: "Loopback http requires a loopback address.",
+				);
+			}
+			return target;
+		},
+		admitsAddress,
+	};
+}
+
+/**
+ * Canonical host form for exact allowlist comparison: lowercased, one trailing
+ * dot removed (`example.com.` is the same name as `example.com`), and IPv6
+ * brackets stripped so `[::1]` compares as `::1`.
+ */
+export function normalizeGuardedHost(hostname: string): string {
+	const trimmed = hostname.trim().toLowerCase();
+	return stripBrackets(trimmed.endsWith(".") ? trimmed.slice(0, -1) : trimmed);
+}
+
+/**
+ * True only for 127.0.0.0/8 and ::1 — the sole ranges `allowLoopbackHttp`
+ * opens. IPv4-mapped forms such as `::ffff:127.0.0.1` are deliberately not
+ * loopback here, so they cannot smuggle themselves through that door.
+ */
+export function isLoopbackAddress(address: string): boolean {
+	const candidate = stripBrackets(address.trim());
+	if (isIPv4(candidate)) return Number(candidate.split(".")[0]) === 127;
+	if (isIP(candidate) !== 6) return false;
+	const groups = expandIpv6(candidate);
+	if (groups === undefined) return false;
+	return groups.length === 8 && groups.every((group, index) => group === (index === 7 ? 1 : 0));
+}
+
+/**
+ * Lazily paired https/http agents. The http side only ever materializes for an
+ * `allowLoopbackHttp` target, and `destroy` gives leases a deterministic close.
+ */
+export function createGuardedAgents(options: {
+	readonly keepAlive: boolean;
+	readonly maxSockets: number;
+	readonly timeout?: number;
+}): {
+	readonly for: (secure: boolean) => HttpAgent;
+	readonly destroy: () => void;
+} {
+	const secureAgent = new HttpsAgent(options);
+	let plainAgent: HttpAgent | undefined;
+	return {
+		for: (secure) => {
+			if (secure) return secureAgent;
+			plainAgent ??= new HttpAgent(options);
+			return plainAgent;
+		},
+		destroy: () => {
+			secureAgent.destroy();
+			plainAgent?.destroy();
+		},
+	};
+}
 
 /**
  * `node:https`-based fetcher with connect-time DNS pinning: the `lookup` hook
@@ -73,31 +218,21 @@ const USER_AGENT = "nestm-mcp-auth";
 export function createNodeDocumentFetcher(
 	options?: McpNodeDocumentFetcherOptions,
 ): McpHttpDocumentFetcher {
-	const resolve = options?.lookup ?? defaultLookup;
-	const extraBlock = options?.isAddressBlocked ?? (() => false);
+	const resolve = options?.lookup ?? defaultGuardedLookup;
+	const policy = createGuardedHostPolicy(options);
 	const socketTimeoutMs = options?.socketTimeoutMs ?? DEFAULT_SOCKET_TIMEOUT_MS;
-	const agent = new Agent({ keepAlive: false, maxSockets: 8 });
-	const blocked = (address: string): boolean =>
-		isBlockedDocumentAddress(address) || extraBlock(address);
+	const agents = createGuardedAgents({ keepAlive: false, maxSockets: 8 });
 
 	return {
 		fetchDocument: async (url, fetchOptions) => {
-			if (url.protocol !== "https:") {
-				throw new McpDocumentFetchError("insecure-url", "Document URLs must use the https scheme.");
-			}
-			const host = stripBrackets(url.hostname);
-			if (isIP(host) !== 0 && blocked(host)) {
-				throw new McpDocumentFetchError(
-					"blocked-address",
-					"Document host resolves to a blocked address range.",
-				);
-			}
+			const target = policy.admit(url);
 			const signals = [AbortSignal.timeout(fetchOptions.totalTimeoutMs)];
 			if (fetchOptions.signal !== undefined) signals.push(fetchOptions.signal);
 			return fetchOnce(url, fetchOptions, {
-				agent,
+				agent: agents.for(target.secure),
+				target,
 				resolve,
-				blocked,
+				admitsAddress: policy.admitsAddress(target),
 				socketTimeoutMs,
 				signal: AbortSignal.any(signals),
 			});
@@ -109,9 +244,10 @@ function fetchOnce(
 	url: URL,
 	options: McpDocumentFetchOptions,
 	transport: {
-		readonly agent: Agent;
+		readonly agent: HttpAgent;
+		readonly target: McpGuardedTarget;
 		readonly resolve: McpDocumentLookup;
-		readonly blocked: (address: string) => boolean;
+		readonly admitsAddress: (address: string) => boolean;
 		readonly socketTimeoutMs: number;
 		readonly signal: AbortSignal;
 	},
@@ -128,98 +264,55 @@ function fetchOnce(
 			settled = true;
 			resolvePromise(document);
 		};
-		const request = httpsRequest(
-			{
-				agent: transport.agent,
-				host: stripBrackets(url.hostname),
-				port: url.port === "" ? 443 : Number(url.port),
-				method: "GET",
-				path: `${url.pathname}${url.search}`,
-				servername: stripBrackets(url.hostname),
-				headers: {
-					accept: options.accept,
-					"accept-encoding": "identity",
-					host: url.host,
-					"user-agent": USER_AGENT,
-				},
-				signal: transport.signal,
-				timeout: transport.socketTimeoutMs,
-				// The socket's own resolution is the validation point: the addresses
-				// judged here are exactly the addresses the connection uses.
-				lookup: (hostname, lookupOptions, callback) => {
-					transport.resolve(hostname, (error, addresses) => {
-						if (error !== null) {
-							callback(error, "", 0);
-							return;
-						}
-						if (addresses.length === 0) {
-							callback(
-								new McpDocumentFetchError("network", "Document host did not resolve."),
-								"",
-								0,
-							);
-							return;
-						}
-						const offending = addresses.find((entry) => transport.blocked(entry.address));
-						if (offending !== undefined) {
-							callback(
-								new McpDocumentFetchError(
-									"blocked-address",
-									"Document host resolves to a blocked address range.",
-								),
-								"",
-								0,
-							);
-							return;
-						}
-						if (lookupOptions.all === true) {
-							// oxlint-disable-next-line typescript/no-unsafe-type-assertion
-							(callback as unknown as (e: null, a: readonly ResolvedAddress[]) => void)(
-								null,
-								addresses,
-							);
-							return;
-						}
-						const first = addresses[0];
-						if (first === undefined) {
-							callback(
-								new McpDocumentFetchError("network", "Document host did not resolve."),
-								"",
-								0,
-							);
-							return;
-						}
-						callback(null, first.address, first.family);
-					});
-				},
+		const requestOptions: HttpsRequestOptions = {
+			agent: transport.agent,
+			host: transport.target.host,
+			port: transport.target.port,
+			method: "GET",
+			path: `${url.pathname}${url.search}`,
+			headers: {
+				accept: options.accept,
+				"accept-encoding": "identity",
+				host: url.host,
+				"user-agent": USER_AGENT,
 			},
-			(response) => {
-				const status = response.statusCode ?? 0;
-				const contentType = headerValue(response.headers["content-type"]);
-				const cacheControl = headerValue(response.headers["cache-control"]);
-				const chunks: Buffer[] = [];
-				let total = 0;
-				response.on("data", (chunk: Buffer) => {
-					total += chunk.byteLength;
-					if (total > options.maxBytes) {
-						response.destroy();
-						request.destroy();
-						fail(new McpDocumentFetchError("too-large", "Document exceeds the byte limit."));
-						return;
-					}
-					chunks.push(chunk);
+			signal: transport.signal,
+			timeout: transport.socketTimeoutMs,
+			// The socket's own resolution is the validation point: the addresses
+			// judged here are exactly the addresses the connection uses.
+			// oxlint-disable-next-line typescript/no-unsafe-type-assertion
+			lookup: guardedLookup(transport.resolve, transport.admitsAddress) as never,
+			...(transport.target.secure ? { servername: transport.target.host } : {}),
+		};
+		const request = transport.target.secure
+			? httpsRequest(requestOptions)
+			: httpRequest(requestOptions);
+		request.on("response", (response) => {
+			const status = response.statusCode ?? 0;
+			const contentType = headerValue(response.headers["content-type"]);
+			const cacheControl = headerValue(response.headers["cache-control"]);
+			const chunks: Buffer[] = [];
+			let total = 0;
+			response.on("data", (chunk: Buffer) => {
+				total += chunk.byteLength;
+				if (total > options.maxBytes) {
+					response.destroy();
+					request.destroy();
+					fail(new McpDocumentFetchError("too-large", "Document exceeds the byte limit."));
+					return;
+				}
+				chunks.push(chunk);
+			});
+			response.on("end", () => {
+				succeed({
+					status,
+					contentType,
+					cacheControl,
+					body: Buffer.concat(chunks).toString("utf8"),
 				});
-				response.on("end", () => {
-					succeed({
-						status,
-						contentType,
-						cacheControl,
-						body: Buffer.concat(chunks).toString("utf8"),
-					});
-				});
-				response.on("error", fail);
-			},
-		);
+			});
+			response.on("error", fail);
+		});
 		request.on("timeout", () => {
 			request.destroy(new McpDocumentFetchError("timeout", "Document fetch timed out."));
 		});
@@ -244,9 +337,8 @@ export type McpFetchLike = (
 	},
 ) => Promise<Response>;
 
-export interface McpSsrfGuardedFetchOptions {
+export interface McpSsrfGuardedFetchOptions extends McpGuardedHostPolicyOptions {
 	readonly lookup?: McpDocumentLookup;
-	readonly isAddressBlocked?: (address: string) => boolean;
 	readonly totalTimeoutMs?: number;
 	readonly maxResponseBytes?: number;
 }
@@ -261,26 +353,20 @@ const DEFAULT_MAX_RESPONSE_BYTES = 262_144;
  * discovery and token endpoints (small JSON), not streaming.
  */
 export function createSsrfGuardedFetch(options?: McpSsrfGuardedFetchOptions): McpFetchLike {
-	const resolve = options?.lookup ?? defaultLookup;
-	const extraBlock = options?.isAddressBlocked ?? (() => false);
+	const resolve = options?.lookup ?? defaultGuardedLookup;
+	const policy = createGuardedHostPolicy(options);
 	const totalTimeoutMs = options?.totalTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
 	const maxResponseBytes = options?.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
-	const agent = new Agent({ keepAlive: false, maxSockets: 8 });
-	const blocked = (address: string): boolean =>
-		isBlockedDocumentAddress(address) || extraBlock(address);
+	const agents = createGuardedAgents({ keepAlive: false, maxSockets: 8 });
 
 	return (input, init) => {
-		const url = input instanceof URL ? input : new URL(input);
-		if (url.protocol !== "https:") {
-			return Promise.reject(
-				new McpDocumentFetchError("insecure-url", "OAuth requests must use https."),
-			);
-		}
-		const host = stripBrackets(url.hostname);
-		if (isIP(host) !== 0 && blocked(host)) {
-			return Promise.reject(
-				new McpDocumentFetchError("blocked-address", "OAuth endpoint host is blocked."),
-			);
+		let url: URL;
+		let target: McpGuardedTarget;
+		try {
+			url = input instanceof URL ? input : new URL(input);
+			target = policy.admit(url);
+		} catch (error) {
+			return Promise.reject(error instanceof Error ? error : new Error(String(error)));
 		}
 		const signals = [AbortSignal.timeout(totalTimeoutMs)];
 		if (init?.signal !== undefined) signals.push(init.signal);
@@ -303,63 +389,60 @@ export function createSsrfGuardedFetch(options?: McpSsrfGuardedFetchOptions): Mc
 				settled = true;
 				rejectPromise(translateFailure(error, signal));
 			};
-			const request = httpsRequest(
-				{
-					agent,
-					host,
-					port: url.port === "" ? 443 : Number(url.port),
-					method: init?.method ?? "GET",
-					path: `${url.pathname}${url.search}`,
-					servername: host,
-					headers: outgoing,
-					signal,
-					timeout: totalTimeoutMs,
-					// oxlint-disable-next-line typescript/no-unsafe-type-assertion
-					lookup: guardedLookup(resolve, blocked) as never,
-				},
-				(response) => {
-					const status = response.statusCode ?? 0;
-					if (status >= 300 && status < 400) {
+			const requestOptions: HttpsRequestOptions = {
+				agent: agents.for(target.secure),
+				host: target.host,
+				port: target.port,
+				method: init?.method ?? "GET",
+				path: `${url.pathname}${url.search}`,
+				headers: outgoing,
+				signal,
+				timeout: totalTimeoutMs,
+				// oxlint-disable-next-line typescript/no-unsafe-type-assertion
+				lookup: guardedLookup(resolve, policy.admitsAddress(target)) as never,
+				...(target.secure ? { servername: target.host } : {}),
+			};
+			const request = target.secure ? httpsRequest(requestOptions) : httpRequest(requestOptions);
+			request.on("response", (response) => {
+				const status = response.statusCode ?? 0;
+				if (status >= 300 && status < 400) {
+					response.destroy();
+					request.destroy();
+					fail(new McpDocumentFetchError("network", "OAuth endpoints must not redirect."));
+					return;
+				}
+				const chunks: Buffer[] = [];
+				let total = 0;
+				response.on("data", (chunk: Buffer) => {
+					total += chunk.byteLength;
+					if (total > maxResponseBytes) {
 						response.destroy();
 						request.destroy();
-						fail(new McpDocumentFetchError("network", "OAuth endpoints must not redirect."));
+						fail(new McpDocumentFetchError("too-large", "OAuth response exceeds the byte limit."));
 						return;
 					}
-					const chunks: Buffer[] = [];
-					let total = 0;
-					response.on("data", (chunk: Buffer) => {
-						total += chunk.byteLength;
-						if (total > maxResponseBytes) {
-							response.destroy();
-							request.destroy();
-							fail(
-								new McpDocumentFetchError("too-large", "OAuth response exceeds the byte limit."),
-							);
-							return;
-						}
-						chunks.push(chunk);
-					});
-					response.on("end", () => {
-						if (settled) return;
-						if (status < 200 || status > 599) {
-							fail(new McpDocumentFetchError("network", "Upstream returned an invalid status."));
-							return;
-						}
-						settled = true;
-						const headers = new Headers();
-						for (const [name, value] of Object.entries(response.headers)) {
-							if (typeof value === "string") headers.set(name, value);
-							else if (Array.isArray(value)) headers.set(name, value.join(", "));
-						}
-						// 204/205/304 must not carry a body; passing bytes throws in the Response ctor.
-						const nullBody = status === 204 || status === 205 || status === 304;
-						resolvePromise(
-							new Response(nullBody ? null : Buffer.concat(chunks), { status, headers }),
-						);
-					});
-					response.on("error", fail);
-				},
-			);
+					chunks.push(chunk);
+				});
+				response.on("end", () => {
+					if (settled) return;
+					if (status < 200 || status > 599) {
+						fail(new McpDocumentFetchError("network", "Upstream returned an invalid status."));
+						return;
+					}
+					settled = true;
+					const headers = new Headers();
+					for (const [name, value] of Object.entries(response.headers)) {
+						if (typeof value === "string") headers.set(name, value);
+						else if (Array.isArray(value)) headers.set(name, value.join(", "));
+					}
+					// 204/205/304 must not carry a body; passing bytes throws in the Response ctor.
+					const nullBody = status === 204 || status === 205 || status === 304;
+					resolvePromise(
+						new Response(nullBody ? null : Buffer.concat(chunks), { status, headers }),
+					);
+				});
+				response.on("error", fail);
+			});
 			request.on("timeout", () => {
 				request.destroy(new McpDocumentFetchError("timeout", "OAuth request timed out."));
 			});
@@ -418,18 +501,25 @@ function normalizeBody(body: BodyInit | null | undefined): Buffer | undefined {
 	);
 }
 
-function guardedLookup(
-	resolve: McpDocumentLookup,
-	blocked: (address: string) => boolean,
-): (
+export type McpGuardedLookupHook = (
 	hostname: string,
 	lookupOptions: { all?: boolean },
 	callback: (
 		error: Error | null,
-		address: string | readonly ResolvedAddress[],
+		address: string | readonly McpResolvedAddress[],
 		family?: number,
 	) => void,
-) => void {
+) => void;
+
+/**
+ * The connect-time validation point. Every answer must pass `admitsAddress` —
+ * a mixed result set is treated as a rebinding attempt — and the addresses
+ * handed back are exactly the addresses the socket connects to.
+ */
+export function guardedLookup(
+	resolve: McpDocumentLookup,
+	admitsAddress: (address: string) => boolean,
+): McpGuardedLookupHook {
 	return (hostname, lookupOptions, callback) => {
 		resolve(hostname, (error, addresses) => {
 			if (error !== null) {
@@ -440,7 +530,7 @@ function guardedLookup(
 				callback(new McpDocumentFetchError("network", "Host did not resolve."), "", 0);
 				return;
 			}
-			if (addresses.some((entry) => blocked(entry.address))) {
+			if (!addresses.every((entry) => admitsAddress(entry.address))) {
 				callback(
 					new McpDocumentFetchError("blocked-address", "Host resolves to a blocked range."),
 					"",
@@ -472,9 +562,10 @@ function translateFailure(error: Error, signal: AbortSignal): Error {
 	return new McpDocumentFetchError("network", "Document fetch failed.", { cause: error });
 }
 
-function defaultLookup(
+/** `dns.lookup` with `all: true`, projected onto the injectable seam. */
+export function defaultGuardedLookup(
 	hostname: string,
-	callback: (error: Error | null, addresses: readonly ResolvedAddress[]) => void,
+	callback: (error: Error | null, addresses: readonly McpResolvedAddress[]) => void,
 ): void {
 	dnsLookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
 		if (error !== null && error !== undefined) {

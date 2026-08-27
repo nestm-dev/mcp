@@ -22,6 +22,9 @@ export type McpRuntimePhase =
 	| "failed"
 	| "quarantined";
 
+/** Protocol era negotiated by a connected managed runtime generation. */
+export type McpRuntimeProtocolEra = NonNullable<McpClientConnectionSnapshot["protocolEra"]>;
+
 export interface McpRuntimeCapabilitiesSnapshot {
 	readonly tools: boolean;
 	readonly resources: boolean;
@@ -34,7 +37,7 @@ export interface McpRuntimeStateSnapshot {
 	readonly phase: McpRuntimePhase;
 	readonly lastTransitionAt: string;
 	readonly protocolVersion?: string;
-	readonly protocolEra?: NonNullable<McpClientConnectionSnapshot["protocolEra"]>;
+	readonly protocolEra?: McpRuntimeProtocolEra;
 	readonly connectedAt?: string;
 	readonly errorCode?: McpRuntimeStateErrorCode;
 	readonly capabilities?: McpRuntimeCapabilitiesSnapshot;
@@ -65,7 +68,7 @@ export interface McpRuntimeProbeSnapshot {
 	readonly reachable: true;
 	readonly observedAt: string;
 	readonly protocolVersion?: string;
-	readonly protocolEra?: NonNullable<McpClientConnectionSnapshot["protocolEra"]>;
+	readonly protocolEra?: McpRuntimeProtocolEra;
 	readonly capabilities?: McpRuntimeCapabilitiesSnapshot;
 	readonly runtime: McpRuntimeStateSnapshot;
 }
@@ -130,7 +133,7 @@ export interface McpRuntimeStateTransitionEvent {
 	readonly phase: McpRuntimePhase;
 	readonly previousPhase?: McpRuntimePhase;
 	readonly errorCode?: McpRuntimeStateErrorCode;
-	readonly protocolEra?: NonNullable<McpClientConnectionSnapshot["protocolEra"]>;
+	readonly protocolEra?: McpRuntimeProtocolEra;
 	readonly capabilities?: McpRuntimeCapabilitiesSnapshot;
 }
 
@@ -158,6 +161,19 @@ export interface McpRuntimeManagerOptions<GenerationKey = string> {
 	) => MaybePromise<void>;
 }
 
+/**
+ * Per-call controls for the manager's convenience tool invocation.
+ *
+ * Pinning `toolDefinition` keeps the managed client runtime's structured output
+ * validation bound to that exact definition instead of a cached `tools/list`
+ * view, so a host that already holds an approved definition never validates a
+ * result against a drifted schema.
+ */
+export interface McpRuntimeToolCallOptions {
+	readonly signal?: AbortSignal;
+	readonly toolDefinition?: Tool;
+}
+
 export interface McpRuntimeManagerPort<GenerationKey = string> {
 	ensureOnline(
 		generationKey: GenerationKey,
@@ -176,11 +192,12 @@ export interface McpRuntimeManagerPort<GenerationKey = string> {
 		operation: McpManagedClientRuntimeOperation<Result>,
 		signal?: AbortSignal,
 	): Promise<Result>;
+	/** A positional `AbortSignal` stays accepted as the cancellation-only form of the options. */
 	callTool(
 		generationKey: GenerationKey,
 		name: string,
 		arguments_: Readonly<Record<string, unknown>>,
-		signal?: AbortSignal,
+		options?: AbortSignal | McpRuntimeToolCallOptions,
 	): Promise<CallToolResult>;
 	readResource(
 		generationKey: GenerationKey,

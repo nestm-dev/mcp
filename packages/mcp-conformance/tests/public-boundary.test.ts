@@ -5,7 +5,10 @@ import { describe, expect, it } from "vitest";
 describe("@nestm/mcp-conformance public boundary", () => {
 	it("keeps the kernel free of Nest, manager, client, SDK, and product imports", async () => {
 		const files = [
+			"capture.ts",
+			"catalog.ts",
 			"comparison.ts",
+			"errors.ts",
 			"facts.ts",
 			"fingerprint.ts",
 			"index.ts",

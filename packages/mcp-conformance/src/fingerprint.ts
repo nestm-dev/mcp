@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 
 const FINGERPRINT_PREFIX = "nestm/mcp-conformance/fingerprint/v1";
+const FINGERPRINT_DOMAIN = /^[a-z0-9][a-z0-9._/-]{0,63}$/u;
+const FINGERPRINT_TEXT = /^sha256:[A-Za-z0-9_-]{43}$/u;
+const SHA256_BYTES = 32;
 const MAX_FINGERPRINT_INPUT_BYTES = 8_388_608;
 const MAX_FINGERPRINT_DEPTH = 128;
 const MAX_FINGERPRINT_NODES = 100_000;
@@ -20,9 +23,7 @@ interface CanonicalState {
 }
 
 export function fingerprintMcpConformanceValue(value: unknown, domain = "value"): string {
-	if (!/^[a-z0-9][a-z0-9._/-]{0,63}$/u.test(domain)) {
-		throw new TypeError("domain must be a bounded lowercase identifier.");
-	}
+	assertMcpConformanceDomain(domain, "domain");
 	const canonical = canonicalizeBounded(value);
 	const digest = createHash("sha256")
 		.update(FINGERPRINT_PREFIX)
@@ -36,6 +37,33 @@ export function fingerprintMcpConformanceValue(value: unknown, domain = "value")
 
 export function canonicalizeMcpConformanceValue(value: unknown): string {
 	return canonicalizeBounded(value);
+}
+
+/**
+ * Renders a `sha256:<base64url>` fingerprint as 64 lowercase hexadecimal
+ * characters. Persistence layers that constrain a digest column with a fixed
+ * hexadecimal CHECK can store the rendered form without hand-rolling transcoding.
+ */
+export function toMcpConformanceFingerprintHex(fingerprint: string): string {
+	if (typeof fingerprint !== "string" || !FINGERPRINT_TEXT.test(fingerprint)) {
+		throw new TypeError("fingerprint must be a sha256 conformance fingerprint.");
+	}
+	const encoded = fingerprint.slice("sha256:".length);
+	const bytes = Buffer.from(encoded, "base64url");
+	if (bytes.byteLength !== SHA256_BYTES || bytes.toString("base64url") !== encoded) {
+		throw new TypeError("fingerprint must be a sha256 conformance fingerprint.");
+	}
+	return bytes.toString("hex");
+}
+
+/** Shared validation for caller-supplied fingerprint domains. */
+export function assertMcpConformanceDomain(
+	domain: unknown,
+	name: string,
+): asserts domain is string {
+	if (typeof domain !== "string" || !FINGERPRINT_DOMAIN.test(domain)) {
+		throw new TypeError(`${name} must be a bounded lowercase identifier.`);
+	}
 }
 
 function canonicalizeBounded(value: unknown): string {

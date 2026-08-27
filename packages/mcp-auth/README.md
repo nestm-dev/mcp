@@ -22,7 +22,7 @@ pnpm add jose
 | Entry       | Contents                                                                                                  |
 | ----------- | --------------------------------------------------------------------------------------------------------- |
 | `.`         | JWT key ring + issuer/verifier, proxy and JWKS `OAuthTokenVerifier`s, principal-claims projection, errors |
-| `./cimd`    | Client ID Metadata Document resolver and the SSRF-hardened document fetcher                               |
+| `./cimd`    | Client ID Metadata Document resolver and the SSRF-hardened document, OAuth, and streaming fetchers        |
 | `./stores`  | `McpOAuthStore` contract and the bounded in-memory implementation                                         |
 | `./testing` | An ephemeral signing ring and access-token minter for tests                                               |
 
@@ -53,6 +53,77 @@ const metadata = await resolver.resolve("https://app.example.com/oauth/client.js
   IPv4-mapped IPv6 ranges are blocked.
 - Successful documents are cached (LRU, TTL clamped, `no-store` honored). Failures are never cached;
   repeated failures open a per-host circuit breaker.
+
+## Guarded outbound transports
+
+Three fetchers share one scheme/host policy and one connect-time `lookup` hook, so a URL is judged
+by identical rules whichever one carries it:
+
+| Export                            | Body handling                          | Use for                                            |
+| --------------------------------- | -------------------------------------- | -------------------------------------------------- |
+| `createNodeDocumentFetcher`       | Buffered, hard byte cap                | CIMD documents                                     |
+| `createSsrfGuardedFetch`          | Buffered (256 KiB), hard total timeout | OAuth discovery and token endpoints                |
+| `createStreamingSsrfGuardedFetch` | Streamed `ReadableStream`              | MCP HTTP transports, including `text/event-stream` |
+
+All three accept the same two policy switches, both fail-closed (unset preserves the historical
+behavior — https only, any host outside the blocked ranges):
+
+- `allowedHosts` — exact hostnames, compared after normalization (lowercased, one trailing dot
+  removed, IPv6 brackets stripped). `normalizeGuardedHost` is exported for hosts that keep their own
+  list.
+- `allowLoopbackHttp` — permits `http:` to a host whose **every** resolved address is loopback
+  (127.0.0.0/8 or `::1`); a mixed answer set still fails, `https:` keeps blocking loopback, and
+  `::ffff:127.0.0.1` is deliberately not loopback. `isLoopbackAddress` is exported.
+
+### Streaming transport fetch
+
+`createStreamingSsrfGuardedFetch` is a complete `FetchLike`, so it drops straight into
+`McpHttpClientTransportDefinition.fetch` (or `StreamableHTTPClientTransport`'s `fetch`) with no cast:
+
+```ts
+import { createStreamingSsrfGuardedFetch } from "@nestm/mcp-auth/cimd";
+
+const fetch = createStreamingSsrfGuardedFetch({
+	allowedHosts: ["mcp.example.com"],
+	idleTimeoutMs: 300_000,
+});
+```
+
+It keeps the connect-time DNS pinning, blocked-range predicate, SNI pinning, and forced
+`accept-encoding: identity` of the buffering fetch, is `redirect: "manual"` by construction (a 3xx is
+rejected, never followed), and hands back a live body:
+
+- `maxResponseBytes` (default 4 MiB) is a running total for ordinary responses, also checked against
+  a declared `Content-Length` before a byte is read.
+- `maxSseEventBytes` (default 1 MiB) replaces it for `text/event-stream`: the budget is **per event**
+  (CR/LF/CRLF framing, reset at each blank line) with no total cap, so a healthy session can stream
+  for as long as it lives.
+- `idleTimeoutMs` (default 5 minutes) bounds the gap between bytes while the body is being read.
+
+Any violation errors the stream and destroys the connection. Requests may carry the body shapes the
+transport and the OAuth helpers send — a JSON string, `URLSearchParams`, raw bytes, `Blob`,
+`FormData`, or a `ReadableStream`.
+
+### Admit before you decrypt
+
+For hosts that must reject an endpoint before unsealing the credential it would have carried,
+admission is a separate step. `admitMcpHttpEndpoint` resolves and judges the endpoint once;
+`openGuardedFetch` then binds a lease whose sockets replay only those pinned answers:
+
+```ts
+import { admitMcpHttpEndpoint, openGuardedFetch } from "@nestm/mcp-auth/cimd";
+
+const admitted = await admitMcpHttpEndpoint(endpoint, { allowedHosts, allowLoopbackHttp: false });
+const { fetch, close } = openGuardedFetch(admitted); // decrypt the token only past this line
+try {
+	/* … */
+} finally {
+	await close();
+}
+```
+
+Every request on the lease must stay on the admitted origin, and the record itself is not forgeable:
+`openGuardedFetch` refuses an object this module did not admit.
 
 ## Tokens
 

@@ -86,6 +86,9 @@ vi.mock("@nestm/mcp-client", async (importOriginal) => {
 
 import {
 	McpRuntimeManager,
+	mcpRuntimeCapabilitiesSnapshotSchema,
+	mcpRuntimeProbeSnapshotSchema,
+	mcpRuntimeStateSnapshotSchema,
 	type McpAdmittedRuntimeGeneration,
 	type McpRuntimeGenerationResolver,
 	type McpRuntimeStateTransitionEvent,
@@ -337,6 +340,132 @@ describe("McpRuntimeManager", () => {
 		const offline = manager.setOffline("generation-one");
 		await expect(operation).rejects.toMatchObject({ code: "MCP_GENERATION_RETIRED" });
 		await expect(offline).resolves.toMatchObject({ phase: "offline" });
+		await manager.close();
+	});
+
+	it("keeps a positional abort signal as the cancellation-only tool call option", async () => {
+		const operationStarted = deferred();
+		runtimeHarness.callToolHook = async (signal) => {
+			if (signal === undefined) throw new Error("The operation signal is required.");
+			operationStarted.resolve();
+			await rejectWhenAborted(signal);
+		};
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted()),
+		});
+		await manager.ensureOnline("generation-one");
+		const ownedRuntime = runtimeHarness.instances[0]!;
+		const actualServerName = ownedRuntime.options.servers?.[0]?.name;
+		if (actualServerName === undefined) throw new Error("The managed server name is required.");
+		const caller = new AbortController();
+		const callerCancellation = new Error("caller cancelled managed tool call");
+
+		const operation = manager.callTool(
+			"generation-one",
+			"controlled",
+			{ value: "kept" },
+			caller.signal,
+		);
+		await operationStarted.promise;
+
+		expect(ownedRuntime.callTool).toHaveBeenCalledWith(
+			actualServerName,
+			{ name: "controlled", arguments: { value: "kept" } },
+			{ signal: expect.any(AbortSignal) },
+		);
+		caller.abort(callerCancellation);
+		await expect(operation).rejects.toBe(callerCancellation);
+		await manager.close();
+	});
+
+	it("pins a caller-supplied tool definition on the managed client runtime call", async () => {
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted()),
+		});
+		await manager.ensureOnline("generation-one");
+		const ownedRuntime = runtimeHarness.instances[0]!;
+		const actualServerName = ownedRuntime.options.servers?.[0]?.name;
+		if (actualServerName === undefined) throw new Error("The managed server name is required.");
+		const caller = new AbortController();
+		const toolDefinition = Object.freeze({
+			name: "controlled",
+			inputSchema: {
+				type: "object" as const,
+				properties: { value: { type: "string" as const } },
+				required: ["value"],
+			},
+		}) satisfies Tool;
+
+		await expect(
+			manager.callTool(
+				"generation-one",
+				"controlled",
+				{ value: "kept" },
+				{ signal: caller.signal, toolDefinition },
+			),
+		).resolves.toMatchObject({ content: [] });
+
+		expect(ownedRuntime.callTool).toHaveBeenCalledWith(
+			actualServerName,
+			{ name: "controlled", arguments: { value: "kept" } },
+			{ signal: expect.any(AbortSignal), toolDefinition },
+		);
+		await manager.close();
+	});
+
+	it("rejects tool call options that are neither a signal nor an options object", async () => {
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted()),
+		});
+		await manager.ensureOnline("generation-one");
+		const ownedRuntime = runtimeHarness.instances[0]!;
+
+		await expect(
+			manager.callTool(
+				"generation-one",
+				"controlled",
+				{},
+				// Intentionally models malformed JavaScript input at the runtime boundary.
+				// oxlint-disable-next-line typescript/no-unsafe-type-assertion
+				"cancel" as unknown as AbortSignal,
+			),
+		).rejects.toMatchObject({
+			name: "TypeError",
+			message: "callTool options must be an AbortSignal or a tool call options object.",
+		});
+		expect(ownedRuntime.callTool).not.toHaveBeenCalled();
+		await manager.close();
+	});
+
+	it("publishes state and probe snapshots that satisfy the exported validators", async () => {
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted()),
+		});
+		const online = await manager.ensureOnline("generation-one");
+		const probe = await manager.probe("generation-one");
+		const untracked = manager.state("unknown-generation");
+
+		expect(mcpRuntimeStateSnapshotSchema["~standard"].validate(online)).toEqual({ value: online });
+		expect(mcpRuntimeStateSnapshotSchema["~standard"].validate(untracked)).toEqual({
+			value: untracked,
+		});
+		expect(mcpRuntimeProbeSnapshotSchema["~standard"].validate(probe)).toEqual({ value: probe });
+		expect(probe.capabilities).toBeDefined();
+		expect(mcpRuntimeCapabilitiesSnapshotSchema["~standard"].validate(probe.capabilities)).toEqual({
+			value: probe.capabilities,
+		});
+
+		runtimeHarness.instances[0]!.connected = false;
+		const degraded = manager.state("generation-one");
+		expect(degraded).toMatchObject({ phase: "degraded", errorCode: "MCP_CONNECTION_LOST" });
+		expect(mcpRuntimeStateSnapshotSchema["~standard"].validate(degraded)).toEqual({
+			value: degraded,
+		});
+
+		const offline = await manager.setOffline("generation-one");
+		expect(mcpRuntimeStateSnapshotSchema["~standard"].validate(offline)).toEqual({
+			value: offline,
+		});
 		await manager.close();
 	});
 
