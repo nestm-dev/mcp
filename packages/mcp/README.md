@@ -10,7 +10,7 @@ below.
 ## Install
 
 ```sh
-pnpm add @nestm/mcp@alpha @modelcontextprotocol/client@2 @modelcontextprotocol/core@2 @modelcontextprotocol/node@2 @modelcontextprotocol/server@2 @nestjs/common@12.0.0-alpha.5 @nestjs/core@12.0.0-alpha.5 reflect-metadata rxjs zod@^4.4.3
+pnpm add @nestm/mcp@alpha @modelcontextprotocol/client@2 @modelcontextprotocol/core@2 @modelcontextprotocol/node@2 @modelcontextprotocol/server@2 @nestjs/common@12 @nestjs/core@12 reflect-metadata rxjs zod@^4.4.3
 ```
 
 ```ts
