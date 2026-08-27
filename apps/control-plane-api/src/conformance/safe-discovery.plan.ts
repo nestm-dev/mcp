@@ -12,8 +12,11 @@ import {
 	type McpClientToolOutputSchema,
 } from "@nestm/mcp-client";
 import {
+	captureMcpConformanceValue,
 	defineMcpConformancePlan,
-	fingerprintMcpConformanceValue,
+	digestMcpRuntimeCatalog,
+	MCP_CONFORMANCE_HARD_CAPTURE_LIMITS,
+	type McpConformanceCaptureLimits,
 	type McpConformanceCheckOutcome,
 	type McpConformancePlan,
 } from "@nestm/mcp-conformance";
@@ -21,18 +24,41 @@ import type { McpManagedClientRuntime } from "@nestm/mcp-manager";
 
 import { SAFE_DISCOVERY_PLAN_ID } from "./conformance.types.ts";
 
-const MAX_TOOL_SCHEMA_BYTES = 262_144;
-const MAX_TOOL_SCHEMA_DEPTH = 64;
-const MAX_TOOL_SCHEMA_NODES = 10_000;
+/** Fingerprint domains that name what this control plane digests. */
+const CATALOG_DIGEST_DOMAIN = "mcp-catalog";
+const TOOL_SCHEMA_DIGEST_DOMAIN = "mcp-tool-schema";
+
+/** How many schemas one run may compile; capture limits bound each one's size. */
 const MAX_INSPECTED_SCHEMAS = 256;
-const MAX_INSPECTED_SCHEMA_BYTES = 2_097_152;
-const MAX_INSPECTED_SCHEMA_NODES = 50_000;
-const MAX_CATALOG_ITEM_BYTES = 2_097_152;
-const MAX_CATALOG_ITEM_NODES = 20_000;
-const MAX_CATALOG_BYTES = 4_194_304;
-const MAX_CATALOG_NODES = 100_000;
-const MAX_CATALOG_DEPTH = 72;
-const MAX_CATALOG_STRING_BYTES = 1_048_576;
+
+/**
+ * Capture bounds for untrusted upstream payloads. `@nestm/mcp-conformance`
+ * owns the walking and the refusal; this plan only picks the numbers, clamped
+ * to that package's hard ceilings wherever its limit is the tighter one.
+ */
+const TOOL_SCHEMA_CAPTURE_LIMITS: McpConformanceCaptureLimits = Object.freeze({
+	maxBytes: 262_144,
+	maxDepth: 64,
+	maxProperties: 10_000,
+	maxStringBytes: 262_144,
+	maxItems: MCP_CONFORMANCE_HARD_CAPTURE_LIMITS.maxItems,
+});
+
+const CATALOG_ITEM_CAPTURE_LIMITS: McpConformanceCaptureLimits = Object.freeze({
+	maxBytes: 2_097_152,
+	maxDepth: MCP_CONFORMANCE_HARD_CAPTURE_LIMITS.maxDepth,
+	maxProperties: 20_000,
+	maxStringBytes: 1_048_576,
+	maxItems: MCP_CONFORMANCE_HARD_CAPTURE_LIMITS.maxItems,
+});
+
+const CATALOG_DIGEST_CAPTURE_LIMITS: McpConformanceCaptureLimits = Object.freeze({
+	maxBytes: 4_194_304,
+	maxDepth: MCP_CONFORMANCE_HARD_CAPTURE_LIMITS.maxDepth,
+	maxProperties: MCP_CONFORMANCE_HARD_CAPTURE_LIMITS.maxProperties,
+	maxStringBytes: 1_048_576,
+	maxItems: MCP_CONFORMANCE_HARD_CAPTURE_LIMITS.maxItems,
+});
 
 export interface SafeDiscoveryCatalog {
 	readonly tools: readonly Tool[];
@@ -179,10 +205,11 @@ export const SAFE_DISCOVERY_PLAN: McpConformancePlan<SafeDiscoveryTarget> =
 					try {
 						const catalog = await target.catalog(signal);
 						return outcome("pass", "CATALOG_DIGESTED", {
-							catalogDigest: fingerprintMcpConformanceValue(
-								canonicalCatalog(catalog),
-								"mcp-catalog",
-							),
+							catalogDigest: digestMcpRuntimeCatalog(catalog, {
+								domain: CATALOG_DIGEST_DOMAIN,
+								toolSchemaDomain: TOOL_SCHEMA_DIGEST_DOMAIN,
+								limits: CATALOG_DIGEST_CAPTURE_LIMITS,
+							}).catalogFingerprint,
 						});
 					} catch {
 						signal.throwIfAborted();
@@ -225,11 +252,10 @@ async function discoverCatalog(
 	const snapshot = input.runtime.snapshot(input.serverName);
 	const capabilities = snapshot.serverCapabilities;
 	let totalItems = 0;
-	const catalogBudget = createCatalogBudget();
 	const account = <Value>(items: readonly Value[]): readonly Value[] => {
 		totalItems += items.length;
 		if (totalItems > input.maxItems) throw new RangeError("catalog item limit exceeded");
-		for (const item of items) assertBoundedCatalogItem(item, catalogBudget);
+		for (const item of items) captureMcpConformanceValue(item, CATALOG_ITEM_CAPTURE_LIMITS);
 		return items;
 	};
 
@@ -361,6 +387,10 @@ function catalogCounts(catalog: SafeDiscoveryCatalog): Record<string, number> {
 	};
 }
 
+/**
+ * Reports how many identities repeat. `digestMcpRuntimeCatalog` refuses a
+ * repeated identity outright, so the count this check publishes stays here.
+ */
 function countDuplicates(catalog: SafeDiscoveryCatalog): number {
 	return (
 		duplicates(catalog.tools.map(({ name }) => name)) +
@@ -374,210 +404,33 @@ function duplicates(identities: readonly string[]): number {
 	return identities.length - new Set(identities).size;
 }
 
-function canonicalCatalog(catalog: SafeDiscoveryCatalog): unknown {
-	return {
-		tools: [...catalog.tools].toSorted((left, right) => compare(left.name, right.name)),
-		resources: [...catalog.resources].toSorted((left, right) => compare(left.uri, right.uri)),
-		resourceTemplates: [...catalog.resourceTemplates].toSorted((left, right) =>
-			compare(left.uriTemplate, right.uriTemplate),
-		),
-		prompts: [...catalog.prompts].toSorted((left, right) => compare(left.name, right.name)),
-	};
-}
-
-function compare(left: string, right: string): number {
-	return left < right ? -1 : left > right ? 1 : 0;
-}
-
+/**
+ * Counts inspected schemas so one hostile catalog cannot spend the run on
+ * compilation. Every other schema bound is a capture limit enforced upstream.
+ */
 interface ToolSchemaBudget {
 	schemaCount: number;
-	bytes: number;
-	nodes: number;
-}
-
-interface CatalogBudget {
-	bytes: number;
-	nodes: number;
-}
-
-interface JsonMeasurement {
-	readonly bytes: number;
-	readonly nodes: number;
-}
-
-interface JsonMeasurementLimits {
-	readonly maxBytes: number;
-	readonly maxNodes: number;
-	readonly maxDepth: number;
-	readonly maxStringBytes: number;
 }
 
 class ToolSchemaBudgetExceededError extends Error {}
 
 function createToolSchemaBudget(): ToolSchemaBudget {
-	return { schemaCount: 0, bytes: 0, nodes: 0 };
-}
-
-function createCatalogBudget(): CatalogBudget {
-	return { bytes: 0, nodes: 0 };
-}
-
-function assertBoundedCatalogItem(item: unknown, budget: CatalogBudget): void {
-	const measurement = measureBoundedJsonValue(item, {
-		maxBytes: MAX_CATALOG_ITEM_BYTES,
-		maxNodes: MAX_CATALOG_ITEM_NODES,
-		maxDepth: MAX_CATALOG_DEPTH,
-		maxStringBytes: MAX_CATALOG_STRING_BYTES,
-	});
-	budget.bytes += measurement.bytes;
-	budget.nodes += measurement.nodes;
-	if (budget.bytes > MAX_CATALOG_BYTES || budget.nodes > MAX_CATALOG_NODES) {
-		throw new RangeError("catalog inspection budget exceeded");
-	}
+	return { schemaCount: 0 };
 }
 
 function toolSchemaCompiles(
 	schema: McpClientToolInputSchema | McpClientToolOutputSchema,
 	budget: ToolSchemaBudget,
 ): boolean {
-	try {
-		assertBoundedToolSchema(schema, budget);
-		createMcpClientToolSchema(schema);
-		return true;
-	} catch (error) {
-		if (error instanceof ToolSchemaBudgetExceededError) throw error;
-		return false;
-	}
-}
-
-function assertBoundedToolSchema(schema: unknown, budget: ToolSchemaBudget): void {
 	budget.schemaCount += 1;
 	if (budget.schemaCount > MAX_INSPECTED_SCHEMAS) {
 		throw new ToolSchemaBudgetExceededError("tool schema count budget exceeded");
 	}
-	const measurement = measureBoundedJsonValue(schema, {
-		maxBytes: MAX_TOOL_SCHEMA_BYTES,
-		maxNodes: MAX_TOOL_SCHEMA_NODES,
-		maxDepth: MAX_TOOL_SCHEMA_DEPTH,
-		maxStringBytes: MAX_TOOL_SCHEMA_BYTES,
-	});
-	budget.bytes += measurement.bytes;
-	budget.nodes += measurement.nodes;
-	if (budget.bytes > MAX_INSPECTED_SCHEMA_BYTES || budget.nodes > MAX_INSPECTED_SCHEMA_NODES) {
-		throw new ToolSchemaBudgetExceededError("aggregate tool schema budget exceeded");
+	try {
+		captureMcpConformanceValue(schema, TOOL_SCHEMA_CAPTURE_LIMITS);
+		createMcpClientToolSchema(schema);
+		return true;
+	} catch {
+		return false;
 	}
-}
-
-/** Measures JSON text incrementally so limits are enforced before serialization or sorting. */
-function measureBoundedJsonValue(value: unknown, limits: JsonMeasurementLimits): JsonMeasurement {
-	const ancestors = new Set<object>();
-	let bytes = 0;
-	let nodes = 0;
-	const addBytes = (additional: number): void => {
-		bytes += additional;
-		if (!Number.isSafeInteger(bytes) || bytes > limits.maxBytes) {
-			throw new RangeError("JSON byte limit exceeded");
-		}
-	};
-	const addString = (text: string): void => {
-		let stringBytes = 2;
-		addBytes(2);
-		for (let index = 0; index < text.length; index += 1) {
-			const codeUnit = text.charCodeAt(index);
-			let encodedBytes: number;
-			if (codeUnit < 0x20) {
-				encodedBytes =
-					codeUnit === 0x08 ||
-					codeUnit === 0x09 ||
-					codeUnit === 0x0a ||
-					codeUnit === 0x0c ||
-					codeUnit === 0x0d
-						? 2
-						: 6;
-			} else if (codeUnit === 0x22 || codeUnit === 0x5c) {
-				encodedBytes = 2;
-			} else if (codeUnit <= 0x7f) {
-				encodedBytes = 1;
-			} else if (codeUnit <= 0x7ff) {
-				encodedBytes = 2;
-			} else if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-				const next = text.charCodeAt(index + 1);
-				if (next >= 0xdc00 && next <= 0xdfff) {
-					encodedBytes = 4;
-					index += 1;
-				} else {
-					encodedBytes = 6;
-				}
-			} else {
-				encodedBytes = codeUnit >= 0xdc00 && codeUnit <= 0xdfff ? 6 : 3;
-			}
-			stringBytes += encodedBytes;
-			if (stringBytes > limits.maxStringBytes) {
-				throw new RangeError("JSON string byte limit exceeded");
-			}
-			addBytes(encodedBytes);
-		}
-	};
-	const visit = (current: unknown, depth: number): void => {
-		if (depth > limits.maxDepth) throw new RangeError("JSON depth limit exceeded");
-		nodes += 1;
-		if (nodes > limits.maxNodes) throw new RangeError("JSON node limit exceeded");
-		if (current === null) {
-			addBytes(4);
-			return;
-		}
-		switch (typeof current) {
-			case "string":
-				addString(current);
-				return;
-			case "boolean":
-				addBytes(current ? 4 : 5);
-				return;
-			case "number":
-				if (!Number.isFinite(current)) throw new TypeError("JSON numbers must be finite");
-				addBytes(String(Object.is(current, -0) ? 0 : current).length);
-				return;
-			case "object":
-				break;
-			default:
-				throw new TypeError("value is not JSON-compatible");
-		}
-
-		if (ancestors.has(current)) throw new TypeError("JSON value contains a cycle");
-		ancestors.add(current);
-		try {
-			if (Array.isArray(current)) {
-				addBytes(2);
-				for (let index = 0; index < current.length; index += 1) {
-					if (index > 0) addBytes(1);
-					if (Object.hasOwn(current, index)) visit(current[index], depth + 1);
-					else visit(null, depth + 1);
-				}
-				return;
-			}
-
-			const prototype = Object.getPrototypeOf(current) as unknown;
-			if (prototype !== Object.prototype && prototype !== null) {
-				throw new TypeError("JSON objects must have a plain prototype");
-			}
-			addBytes(2);
-			let propertyCount = 0;
-			for (const key in current) {
-				if (!Object.hasOwn(current, key)) continue;
-				const descriptor = Object.getOwnPropertyDescriptor(current, key);
-				if (descriptor === undefined || !descriptor.enumerable) continue;
-				if (!("value" in descriptor)) throw new TypeError("JSON properties must be data values");
-				if (propertyCount > 0) addBytes(1);
-				propertyCount += 1;
-				addString(key);
-				addBytes(1);
-				visit(descriptor.value, depth + 1);
-			}
-		} finally {
-			ancestors.delete(current);
-		}
-	};
-
-	visit(value, 0);
-	return { bytes, nodes };
 }

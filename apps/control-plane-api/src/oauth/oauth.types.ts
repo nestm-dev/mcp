@@ -1,4 +1,5 @@
-import type { AuthProvider, FetchLike } from "@modelcontextprotocol/client";
+import type { AuthProvider } from "@modelcontextprotocol/client";
+import type { McpFetchLike } from "@nestm/mcp-auth/cimd";
 
 export type OAuthConnectionStatus =
 	"authorization-required" | "authorizing" | "authorized" | "reauthorization-required" | "failed";
@@ -22,5 +23,5 @@ export interface OAuthCallbackOutcome {
 	readonly code?: string;
 }
 
-export const MCP_OAUTH_BASE_FETCH = Symbol("example-mcp-control-plane:oauth-base-fetch");
-export type McpOAuthBaseFetch = FetchLike;
+export const MCP_OAUTH_GUARDED_FETCH = Symbol("example-mcp-control-plane:oauth-guarded-fetch");
+export type McpOAuthGuardedFetch = McpFetchLike;

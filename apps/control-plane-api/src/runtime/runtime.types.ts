@@ -1,4 +1,4 @@
-import type { FetchLike } from "@modelcontextprotocol/client";
+import type { McpStreamingFetchLike } from "@nestm/mcp-auth/cimd";
 
 export type {
 	McpRuntimeCatalogSnapshot as RuntimeCatalogView,
@@ -9,7 +9,11 @@ export type {
 	McpRuntimeStateSnapshot as RuntimeStateView,
 } from "@nestm/mcp-manager";
 
-export const MCP_CONTROL_PLANE_BASE_FETCH = Symbol("example-mcp-control-plane:base-fetch");
+export const MCP_CONTROL_PLANE_GUARDED_FETCH = Symbol("example-mcp-control-plane:guarded-fetch");
 export const MCP_RUNTIME_SUPERVISOR = Symbol("example-mcp-control-plane:runtime-supervisor");
 
-export type McpBaseFetch = FetchLike;
+/**
+ * The outbound transport seam. Production binds it to NestM's streaming
+ * SSRF-guarded fetch; tests bind an in-process server fetch to the same token.
+ */
+export type McpGuardedTransportFetch = McpStreamingFetchLike;

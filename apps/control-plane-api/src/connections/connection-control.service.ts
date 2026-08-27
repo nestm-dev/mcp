@@ -6,6 +6,7 @@ import {
 	type GetPromptResult,
 	type ReadResourceResult,
 } from "@nestm/mcp-client";
+import { captureMcpToolArguments, type McpConformanceCaptureLimits } from "@nestm/mcp-conformance";
 import type {
 	McpRuntimeManagerPort,
 	McpRuntimeManagerSnapshot,
@@ -26,6 +27,15 @@ import type {
 } from "./connection.types.ts";
 import { ConnectionLifecycleCoordinator } from "./connection-lifecycle.coordinator.ts";
 import { ConnectionRepository } from "./connection.repository.ts";
+
+/** Control-plane ceiling for one untrusted tool-call argument payload. */
+const TOOL_ARGUMENTS_CAPTURE_LIMITS: McpConformanceCaptureLimits = Object.freeze({
+	maxBytes: 262_144,
+	maxDepth: 24,
+	maxProperties: 4_096,
+	maxStringBytes: 65_536,
+	maxItems: 1_024,
+});
 
 export interface ConnectionView {
 	readonly id: string;
@@ -219,13 +229,9 @@ export class ConnectionControlService {
 		const stableArguments = snapshotToolArguments(arguments_);
 		await validateToolArguments(toolDefinition, stableArguments);
 
-		return this.runtime.withClientRuntime(record.generationKey, ({ runtime, serverName, signal }) =>
-			runtime.callTool(
-				serverName,
-				{ name: toolDefinition.name, arguments: stableArguments },
-				{ signal, toolDefinition },
-			),
-		);
+		return this.runtime.callTool(record.generationKey, toolDefinition.name, stableArguments, {
+			toolDefinition,
+		});
 	}
 
 	readResource(connectionId: string, uri: string): Promise<ReadResourceResult> {
@@ -320,12 +326,12 @@ function snapshotToolArguments(
 	arguments_: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
 	try {
-		return Object.freeze(structuredClone(arguments_));
+		return captureMcpToolArguments(arguments_, TOOL_ARGUMENTS_CAPTURE_LIMITS);
 	} catch (cause) {
 		throw new ControlPlaneError(
 			"MCP_TOOL_ARGUMENTS_INVALID",
 			422,
-			"The MCP tool arguments must be JSON-compatible.",
+			"The MCP tool arguments must be bounded JSON-compatible data.",
 			{ cause },
 		);
 	}

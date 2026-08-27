@@ -1,24 +1,37 @@
 import { Inject, Injectable } from "@nestjs/common";
 import type { FetchLike } from "@modelcontextprotocol/client";
+import {
+	isLoopbackAddress,
+	McpDocumentFetchError,
+	normalizeGuardedHost,
+	type McpDocumentFetchFailure,
+} from "@nestm/mcp-auth/cimd";
 
 import { ControlPlaneError } from "../common/control-plane.error.ts";
 import { ControlPlaneConfigService } from "../config/control-plane-config.service.ts";
-import { MCP_CONTROL_PLANE_BASE_FETCH, type McpBaseFetch } from "./runtime.types.ts";
+import { MCP_CONTROL_PLANE_GUARDED_FETCH, type McpGuardedTransportFetch } from "./runtime.types.ts";
 
 export interface AdmittedHttpEndpoint {
 	readonly url: string;
 	readonly host: string;
 }
 
+/**
+ * Application policy over the guarded transport: which hosts this deployment
+ * accepts, which URL shapes may be stored, and how a rejection maps onto the
+ * control-plane error taxonomy. Address-level defence — DNS pinning, private
+ * ranges, redirects, and body/SSE caps — belongs to the injected guarded fetch.
+ */
 @Injectable()
 export class McpEndpointAdmissionService {
 	readonly #allowedHosts: ReadonlySet<string>;
 
 	constructor(
 		@Inject(ControlPlaneConfigService) private readonly config: ControlPlaneConfigService,
-		@Inject(MCP_CONTROL_PLANE_BASE_FETCH) private readonly baseFetch: McpBaseFetch,
+		@Inject(MCP_CONTROL_PLANE_GUARDED_FETCH)
+		private readonly guardedFetch: McpGuardedTransportFetch,
 	) {
-		this.#allowedHosts = new Set(config.allowedHosts.map(normalizeHostname));
+		this.#allowedHosts = new Set(config.allowedHosts.map(normalizeGuardedHost));
 	}
 
 	admit(rawEndpoint: string): AdmittedHttpEndpoint {
@@ -34,13 +47,17 @@ export class McpEndpointAdmissionService {
 
 	createFetch(admittedEndpoint: string): FetchLike {
 		const admittedOrigin = new URL(admittedEndpoint).origin;
-		return async (input, init) => {
-			const requested = requestUrl(input);
-			this.#assertAllowed(requested);
+		return async (url, init) => {
+			const requested = requestUrl(url);
 			if (requested.origin !== admittedOrigin) throw endpointRejectedError();
-			const response = await this.baseFetch(input, { ...init, redirect: "manual" });
-			if (response.status >= 300 && response.status < 400) throw endpointRejectedError();
-			return response;
+			try {
+				return await this.guardedFetch(requested, init);
+			} catch (cause) {
+				if (cause instanceof McpDocumentFetchError && ADMISSION_FAILURES.has(cause.reason)) {
+					throw endpointRejectedError(cause);
+				}
+				throw cause;
+			}
 		};
 	}
 
@@ -53,7 +70,7 @@ export class McpEndpointAdmissionService {
 		) {
 			throw endpointRejectedError();
 		}
-		const hostname = normalizeHostname(endpoint.hostname);
+		const hostname = normalizeGuardedHost(endpoint.hostname);
 		if (!this.#allowedHosts.has(hostname)) throw endpointRejectedError();
 		if (endpoint.protocol === "https:") return;
 		if (
@@ -67,18 +84,28 @@ export class McpEndpointAdmissionService {
 	}
 }
 
-function requestUrl(input: Parameters<FetchLike>[0]): URL {
-	if (input instanceof Request) return new URL(input.url);
-	return new URL(String(input));
+/**
+ * Guard failures this host reports as its own admission rejection. Transport
+ * faults (`network`, `timeout`, `too-large`) stay upstream failures, so a byte
+ * fence or a dropped socket is never reported as a rejected endpoint.
+ */
+const ADMISSION_FAILURES: ReadonlySet<McpDocumentFetchFailure> = new Set<McpDocumentFetchFailure>([
+	"blocked-address",
+	"host-not-allowed",
+	"insecure-url",
+]);
+
+function requestUrl(url: string | URL): URL {
+	return url instanceof URL ? url : new URL(url);
 }
 
-function normalizeHostname(value: string): string {
-	const lower = value.trim().toLowerCase();
-	return lower.startsWith("[") && lower.endsWith("]") ? lower.slice(1, -1) : lower;
-}
-
-function isLoopbackHostname(value: string): boolean {
-	return value === "127.0.0.1" || value === "localhost" || value === "::1";
+/**
+ * Name-level dev policy. `isLoopbackAddress` judges literals; `localhost` is a
+ * name this deployment additionally treats as loopback, and the guarded fetch
+ * still refuses it at connect time unless every resolved address is loopback.
+ */
+function isLoopbackHostname(hostname: string): boolean {
+	return hostname === "localhost" || isLoopbackAddress(hostname);
 }
 
 function endpointRejectedError(cause?: unknown): ControlPlaneError {
