@@ -71,3 +71,21 @@ jobs:
       - run: pnpm run verify:apps
       - run: pnpm --filter "./packages/*" exec publint --strict
       - run: pnpm run verify:attw
+
+  conformance:
+    name: Official MCP conformance suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/setup@v2
+        with:
+          install: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The fixture imports @nestm/mcp-server through its published export map.
+      - run: pnpm --filter "./packages/*" run build
+      - run: pnpm --filter @nestm/mcp-conformance-harness run conformance
