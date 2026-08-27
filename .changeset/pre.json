@@ -13,9 +13,12 @@
 		"@nestm/mcp-gateway": "0.0.0",
 		"@nestm/mcp": "0.0.0",
 		"@nestm/mcp-control-plane-api": "0.0.0",
-		"@nestm/mcp-control-plane-web": "0.1.0"
+		"@nestm/mcp-control-plane-web": "0.1.0",
+		"@nestm/mcp-conformance-harness": "0.0.0"
 	},
 	"changesets": [
+		"bounded-capture-catalog-digest",
+		"conformance-scope-clarification",
 		"dynamic-gateway-topology",
 		"http-hardening-posture",
 		"initial-mcp-runtime",
@@ -30,7 +33,9 @@
 		"plain-capability-decorators",
 		"portable-tool-schema",
 		"repeatable-mcp-conformance",
+		"runtime-snapshot-schemas",
 		"secure-catalog-transforms",
+		"streaming-guarded-transport",
 		"strict-outbound-oauth-runtime"
 	]
 }

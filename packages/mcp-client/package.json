@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/mcp-client",
-	"version": "0.1.0-alpha.6",
+	"version": "0.1.0-alpha.7",
 	"description": "Multi-server MCP v2 client runtime with transport, middleware, lifecycle, and discovery support.",
 	"license": "BSD-3-Clause",
 	"author": "nestm",
