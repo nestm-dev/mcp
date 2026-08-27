@@ -1,41 +1,4 @@
 {
 	"mode": "pre",
-	"tag": "alpha",
-	"initialVersions": {
-		"@nestm/mcp-core": "0.0.0",
-		"@nestm/mcp-client": "0.0.0",
-		"@nestm/mcp-manager": "0.0.0",
-		"@nestm/mcp-conformance": "0.0.0",
-		"@nestm/mcp-server": "0.0.0",
-		"@nestm/mcp-apps": "0.0.0",
-		"@nestm/mcp-auth": "0.0.0",
-		"@nestm/mcp-observability": "0.0.0",
-		"@nestm/mcp-gateway": "0.0.0",
-		"@nestm/mcp": "0.0.0",
-		"@nestm/mcp-control-plane-api": "0.0.0",
-		"@nestm/mcp-control-plane-web": "0.1.0",
-		"@nestm/mcp-conformance-harness": "0.0.0"
-	},
-	"changesets": [
-		"bounded-capture-catalog-digest",
-		"conformance-scope-clarification",
-		"dynamic-gateway-topology",
-		"http-hardening-posture",
-		"initial-mcp-runtime",
-		"managed-runtime-generations",
-		"mcp-apps-foundation",
-		"mcp-auth-runtime-dependency",
-		"nest-client-module",
-		"nest-native-public-surface",
-		"oauth-auth-package",
-		"oauth-durable-stores-token-exchange",
-		"opaque-client-leases",
-		"plain-capability-decorators",
-		"portable-tool-schema",
-		"repeatable-mcp-conformance",
-		"runtime-snapshot-schemas",
-		"secure-catalog-transforms",
-		"streaming-guarded-transport",
-		"strict-outbound-oauth-runtime"
-	]
+	"tag": "alpha"
 }

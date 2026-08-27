@@ -1,6 +1,6 @@
 # Contributing
 
-NestM MCP is an ESM-only pnpm workspace targeting Node.js `>=22.13.0`, NestJS 12 alpha, TypeScript 7, and the official MCP TypeScript SDK v2.
+NestM MCP is an ESM-only pnpm workspace targeting Node.js `>=22.13.0`, stable NestJS 12, TypeScript 7, and the official MCP TypeScript SDK v2.
 
 ## Set up the workspace
 

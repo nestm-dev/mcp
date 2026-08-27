@@ -28,7 +28,8 @@ const packageManifestSchema = z.object({
 });
 const changesetConfigSchema = z.object({ fixed: z.array(z.array(z.string().min(1))) });
 const changesetPreStateSchema = z.object({
-	initialVersions: z.record(z.string(), z.string()),
+	mode: z.literal("pre"),
+	tag: z.string().min(1),
 });
 
 const atVersion = (version: string) => FIXED_GROUP.map((name) => ({ name, version }));
@@ -135,7 +136,7 @@ describe("assertFixedGroup", () => {
 		const preState = changesetPreStateSchema.parse(
 			JSON.parse(await readFile(new URL("../.changeset/pre.json", import.meta.url), "utf8")),
 		);
-		expect(publicNames.filter((name) => preState.initialVersions[name] === undefined)).toEqual([]);
+		expect(preState).toEqual({ mode: "pre", tag: "alpha" });
 
 		const guide = await readFile(new URL("../CONTRIBUTING.md", import.meta.url), "utf8");
 		const publishPackages = readDocumentedLoop(guide, /for PKG in ([^;]+); do\n  \(cd/u);

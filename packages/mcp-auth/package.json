@@ -89,6 +89,6 @@
 		"provenance": true
 	},
 	"devDependencies": {
-		"jose": "^6.2.8"
+		"jose": "^6.2.10"
 	}
 }
