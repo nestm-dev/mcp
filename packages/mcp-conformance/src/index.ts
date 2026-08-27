@@ -58,15 +58,6 @@ export { defineMcpConformancePlan, digestMcpConformancePlan } from "./plan.ts";
 export { projectMcpConformanceFacts } from "./facts.ts";
 export type { McpConformanceFactProjection } from "./facts.ts";
 export { runMcpConformancePlan } from "./runner.ts";
-export { compareMcpConformanceReports } from "./comparison.ts";
-export type {
-	McpConformanceCheckChange,
-	McpConformanceComparableReportComparison,
-	McpConformanceComparisonVerdict,
-	McpConformanceIncomparableReportComparison,
-	McpConformanceReportComparison,
-} from "./comparison.ts";
-export { toMcpConformanceJUnit } from "./junit.ts";
 export type {
 	McpConformanceCheck,
 	McpConformanceCheckContext,

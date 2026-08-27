@@ -5,7 +5,6 @@ export const MCP_CONFORMANCE_DEFAULT_LIMITS = Object.freeze({
 	maxFactsPerCheck: 32,
 	maxFactStringLength: 256,
 	maxJsonBytes: 1_048_576,
-	maxJunitBytes: 1_048_576,
 });
 
 export const MCP_CONFORMANCE_HARD_LIMITS = Object.freeze({
@@ -15,7 +14,6 @@ export const MCP_CONFORMANCE_HARD_LIMITS = Object.freeze({
 	maxFactsPerCheck: 64,
 	maxFactStringLength: 1_024,
 	maxJsonBytes: 4_194_304,
-	maxJunitBytes: 4_194_304,
 });
 
 /**

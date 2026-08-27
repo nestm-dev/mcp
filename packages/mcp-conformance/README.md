@@ -1,6 +1,14 @@
 # `@nestm/mcp-conformance`
 
-A framework-neutral orchestration and report kernel for repeatable MCP validation.
+> **This is not the official MCP conformance suite.** For MCP _specification_ compliance testing,
+> use [`@modelcontextprotocol/conformance`](https://github.com/modelcontextprotocol/conformance).
+> This package instead runs bounded, read-only safety and integrity probes against third-party MCP
+> servers at runtime, and provides the canonicalization, bounded-capture, and catalog-fingerprinting
+> primitives used to detect catalog drift and refuse hostile payloads. It contains no spec
+> assertions.
+
+A framework-neutral orchestration and report kernel for repeatable runtime integrity probes against
+an MCP server you do not control.
 
 The package executes a host-defined, ordered plan against an ephemeral target and produces a
 bounded immutable report. It deliberately does not own transports, endpoints, credentials,
@@ -64,31 +72,25 @@ ignores cancellation. Hosts should compose the check signal with generation-reti
 signals, make adapter cleanup idempotent, and release the underlying lease only after cooperative
 work has settled.
 
-## Compare and export
+`descriptor.subject` records the build of the observing client that produced the report, not the
+server under test; the observed server is `descriptor.target`.
+
+## Serialize a report
 
 ```ts
 import {
-	compareMcpConformanceReports,
+	parseMcpConformanceReportJson,
 	serializeMcpConformanceReport,
-	toMcpConformanceJUnit,
 } from "@nestm/mcp-conformance";
 
-const comparison = compareMcpConformanceReports(baseline, report);
 const json = serializeMcpConformanceReport(report);
-const junit = toMcpConformanceJUnit(report);
+const parsed = parseMcpConformanceReportJson(json);
 ```
 
 JSON parsing, runner output, and serialization use a 1 MiB default report limit. Trusted hosts that
 need a larger report may set `limits.maxJsonBytes` on the runner and pass
-`{ maximumBytes: value }` to JSON parsing or serialization, up to the 4 MiB hard limit.
-
-Comparison requires the same report/fingerprint versions, plan digest, target identity, subject
-name, fixture version, and ordered checks. Subject versions and runtime generations may differ
-because comparing two builds or deployments is the intended use case. Same-status fact or omission
-changes are marked for review; a fingerprint change alone is not claimed to be schema-compatible or
-incompatible. Fingerprint inputs are capped at 8 MiB, 128 levels, and 100,000 JSON nodes before
-canonical sorting. A confirmed regression remains the overall verdict even when another check is
-inconclusive.
+`{ maximumBytes: value }` to JSON parsing or serialization, up to the 4 MiB hard limit. Fingerprint
+inputs are capped at 8 MiB, 128 levels, and 100,000 JSON nodes before canonical sorting.
 
 ## Capture untrusted values and digest a catalog
 
@@ -153,19 +155,6 @@ with a canonical-form tiebreak, and a repeated identity is refused rather than s
 Fingerprints keep the package's `sha256:<base64url>` form. `toMcpConformanceFingerprintHex` renders
 one as 64 lowercase hexadecimal characters, so a digest column with a fixed-width hexadecimal
 `CHECK` can store it without hand-rolled transcoding.
-
-## Release-regression workflow
-
-Run the same versioned plan and deterministic fixture in separate baseline and candidate
-processes or containers. Each process must load exactly one library build and record its real
-subject version or revision; do not swap two installed builds inside one running process. Persist
-each immutable report as a JSON build artifact and, when CI presentation needs it, persist its JUnit
-projection alongside it.
-
-A trusted comparison job should parse both bounded JSON artifacts with
-`parseMcpConformanceReportJson`, call `compareMcpConformanceReports`, and apply the repository's
-release policy to the verdict. Keep plan code, fixture admission, artifact storage, baseline
-approval, and release authorization outside untrusted dashboard input.
 
 ## Safety boundary
 

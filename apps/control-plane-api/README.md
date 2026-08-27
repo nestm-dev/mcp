@@ -89,9 +89,9 @@ digests—not endpoints, credentials, runtime names, raw catalogs or schemas, re
 caught error details.
 
 Dashboard history is operational convenience, not a durable release baseline. Cross-release
-regression checks must persist baseline and candidate JSON/JUnit artifacts outside this process and
-compare reports produced by separate library builds. This API intentionally provides neither
-baseline approval nor durable artifact storage.
+regression checks must persist bounded report JSON outside this process and compare reports produced
+by separate library builds. This API intentionally provides neither baseline approval nor durable
+artifact storage.
 
 The conformance routes share this validation host's loopback/private deployment boundary. They do
 not add caller authentication or make the host safe to expose through a routable bind or public

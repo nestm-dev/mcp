@@ -93,16 +93,17 @@ capacity-charging quarantine instead of being silently forgotten.
 
 ### `@nestm/mcp-conformance`
 
-The conformance package is an independent orchestration and evidence boundary. A trusted host
-defines an ordered plan against an ephemeral target, runs it under the host's existing lifecycle
-lease, and receives a bounded immutable Zod/Standard Schema report. The package provides explicit
-side-effect gating, cancellation and time bounds, stable fingerprints, semantic report comparison,
-and JSON/JUnit export. It imports no Nest, MCP SDK, client, manager, or product application code.
+The conformance package is an independent orchestration and evidence boundary. It runs bounded,
+read-only integrity and safety probes against a third-party MCP server; it does not assert MCP
+specification compliance. A trusted host defines an ordered plan against an ephemeral target, runs
+it under the host's existing lifecycle lease, and receives a bounded immutable Zod/Standard Schema
+report. The package provides explicit side-effect gating, cancellation and time bounds, stable
+fingerprints, bounded hostile-value capture, catalog-drift digests, and bounded JSON export. It
+imports no Nest, MCP SDK, client, manager, or product application code.
 
 Connections, transports, credentials, fixture selection, durable history, baseline approval, and
 dashboard access policy remain host responsibilities. This separation lets the same plan run in
-different builds or containers and compare their reports without swapping library versions inside
-one process.
+different builds or containers without swapping library versions inside one process.
 
 ### `@nestm/mcp-server`
 

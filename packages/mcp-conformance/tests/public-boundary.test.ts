@@ -7,12 +7,10 @@ describe("@nestm/mcp-conformance public boundary", () => {
 		const files = [
 			"capture.ts",
 			"catalog.ts",
-			"comparison.ts",
 			"errors.ts",
 			"facts.ts",
 			"fingerprint.ts",
 			"index.ts",
-			"junit.ts",
 			"limits.ts",
 			"plan.ts",
 			"report.ts",

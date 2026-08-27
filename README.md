@@ -14,7 +14,7 @@ The primary use case is an artifact or agent runtime that needs to expose truste
 | `@nestm/mcp-core`          | Framework-neutral operation context, middleware, authorization decisions, and lifecycle observation                                                 | Implemented |
 | `@nestm/mcp-client`        | Named v2 client runtime, strict outbound OAuth, isolated leases, transports, typed requests, managed listening, and middleware                      | Implemented |
 | `@nestm/mcp-manager`       | Framework-neutral bounded ownership and lifecycle for opaque, dynamically resolved MCP client generations                                           | Implemented |
-| `@nestm/mcp-conformance`   | Framework-neutral bounded plan execution, immutable reports, semantic regression comparison, fingerprints, and JSON/JUnit export                    | Alpha       |
+| `@nestm/mcp-conformance`   | Framework-neutral bounded probe execution, immutable reports, hostile-value capture, fingerprints, and catalog-drift digests                        | Alpha       |
 | `@nestm/mcp-server`        | Framework-neutral per-request server runtime, feature registry, web-standard/Node/stdio serving, and OAuth resource-server wrapper                  | Implemented |
 | `@nestm/mcp-apps`          | Stable MCP Apps server metadata, validation, decorator/native fragments, capability advertisement, and direct-server feature composition            | Alpha       |
 | `@nestm/mcp-gateway`       | Tool, prompt, resource, resource-template, and completion projection with policy enforcement and auth-scoped discovery caching                      | Implemented |
