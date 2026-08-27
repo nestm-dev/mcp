@@ -147,20 +147,6 @@ export class VolatileOAuthProvider implements OAuthClientProvider {
 		return this.tokens()?.access_token;
 	}
 
-	currentRefreshToken(): string | undefined {
-		return this.tokens()?.refresh_token;
-	}
-
-	currentGrantedScopes(): readonly string[] | undefined {
-		const scope = this.tokens()?.scope;
-		if (scope === undefined) return undefined;
-		return Object.freeze(
-			[...new Set(scope.split(/\s+/u).filter((value) => value.length > 0))]
-				.slice(0, 64)
-				.map((value) => value.slice(0, 256)),
-		);
-	}
-
 	issuer(): string | undefined {
 		return this.#latestIssuer;
 	}

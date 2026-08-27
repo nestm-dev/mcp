@@ -89,9 +89,9 @@ digests—not endpoints, credentials, runtime names, raw catalogs or schemas, re
 caught error details.
 
 Dashboard history is operational convenience, not a durable release baseline. Cross-release
-regression checks must persist baseline and candidate JSON/JUnit artifacts outside this process and
-compare reports produced by separate library builds. This API intentionally provides neither
-baseline approval nor durable artifact storage.
+regression checks must persist bounded report JSON outside this process and compare reports produced
+by separate library builds. This API intentionally provides neither baseline approval nor durable
+artifact storage.
 
 The conformance routes share this validation host's loopback/private deployment boundary. They do
 not add caller authentication or make the host safe to expose through a routable bind or public
@@ -116,8 +116,20 @@ limits before broadening that boundary.
 - Conformance requests select only the host-owned passive plan, pin the full run to one managed
   generation lease, enforce time/page/item/schema/concurrency bounds, and never infer permission
   from upstream annotations.
-- This exact-host fetch guard demonstrates the admission seam; an internet-facing product still
-  needs DNS pinning/rebinding protection, response-body limits, authentication, and rate limiting.
+- Outbound MCP transports run on NestM's streaming SSRF-guarded fetch, so this host inherits
+  connect-time DNS pinning, blocked private/link-local ranges, refused redirects, and response
+  fences (a total byte cap for ordinary responses, a per-event cap for SSE) without owning that
+  code. The application supplies only policy: the exact host allowlist and the loopback switch.
+  An internet-facing product still needs authentication, rate limiting, and egress authorization.
+- OAuth discovery, registration, and token requests run on the same package's buffered guarded
+  fetch, which is pinned to HTTPS here because the interactive redirect is a browser navigation.
+  This host adds only its own endpoint policy: a GET may reach the resource origin or an
+  allow-listed authorization host, and a credential-bearing POST must exactly equal the discovered
+  token or registration endpoint.
+- Runtime OAuth credentials are held as revisioned generations behind the client package's
+  credential-store port. Refresh, single-flight coalescing across concurrent 401s, claim/commit
+  fencing, and terminal invalidation belong to that package; this host owns only the projected
+  status, the process-local storage, and the fenced-generation lifecycle.
 
 ## Run
 

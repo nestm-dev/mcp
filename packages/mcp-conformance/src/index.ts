@@ -1,11 +1,42 @@
 export {
+	MCP_CONFORMANCE_DEFAULT_CAPTURE_LIMITS,
 	MCP_CONFORMANCE_DEFAULT_LIMITS,
+	MCP_CONFORMANCE_HARD_CAPTURE_LIMITS,
 	MCP_CONFORMANCE_HARD_LIMITS,
+	resolveMcpConformanceCaptureLimits,
 	resolveMcpConformanceLimits,
 } from "./limits.ts";
-export type { McpConformanceLimits, ResolvedMcpConformanceLimits } from "./limits.ts";
+export type {
+	McpConformanceCaptureLimits,
+	McpConformanceLimits,
+	ResolvedMcpConformanceCaptureLimits,
+	ResolvedMcpConformanceLimits,
+} from "./limits.ts";
 
-export { canonicalizeMcpConformanceValue, fingerprintMcpConformanceValue } from "./fingerprint.ts";
+export {
+	canonicalizeMcpConformanceValue,
+	fingerprintMcpConformanceValue,
+	toMcpConformanceFingerprintHex,
+} from "./fingerprint.ts";
+export { captureMcpConformanceValue, captureMcpToolArguments } from "./capture.ts";
+export {
+	MCP_CONFORMANCE_CAPTURE_LIMIT_EXCEEDED,
+	MCP_CONFORMANCE_CAPTURE_REJECTED,
+	MCP_CONFORMANCE_CATALOG_REJECTED,
+	McpConformanceCaptureError,
+} from "./errors.ts";
+export type { McpConformanceCaptureErrorCode } from "./errors.ts";
+export { digestMcpRuntimeCatalog } from "./catalog.ts";
+export type {
+	McpConformanceCatalogDigest,
+	McpConformanceCatalogDigestOptions,
+	McpConformanceCatalogPrompt,
+	McpConformanceCatalogResource,
+	McpConformanceCatalogResourceTemplate,
+	McpConformanceCatalogSnapshot,
+	McpConformanceCatalogTool,
+	McpConformanceToolDigest,
+} from "./catalog.ts";
 export {
 	McpConformanceDescriptorSchema,
 	McpConformanceReportSchema,
@@ -27,15 +58,6 @@ export { defineMcpConformancePlan, digestMcpConformancePlan } from "./plan.ts";
 export { projectMcpConformanceFacts } from "./facts.ts";
 export type { McpConformanceFactProjection } from "./facts.ts";
 export { runMcpConformancePlan } from "./runner.ts";
-export { compareMcpConformanceReports } from "./comparison.ts";
-export type {
-	McpConformanceCheckChange,
-	McpConformanceComparableReportComparison,
-	McpConformanceComparisonVerdict,
-	McpConformanceIncomparableReportComparison,
-	McpConformanceReportComparison,
-} from "./comparison.ts";
-export { toMcpConformanceJUnit } from "./junit.ts";
 export type {
 	McpConformanceCheck,
 	McpConformanceCheckContext,

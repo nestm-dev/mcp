@@ -1,6 +1,14 @@
 # `@nestm/mcp-conformance`
 
-A framework-neutral orchestration and report kernel for repeatable MCP validation.
+> **This is not the official MCP conformance suite.** For MCP _specification_ compliance testing,
+> use [`@modelcontextprotocol/conformance`](https://github.com/modelcontextprotocol/conformance).
+> This package instead runs bounded, read-only safety and integrity probes against third-party MCP
+> servers at runtime, and provides the canonicalization, bounded-capture, and catalog-fingerprinting
+> primitives used to detect catalog drift and refuse hostile payloads. It contains no spec
+> assertions.
+
+A framework-neutral orchestration and report kernel for repeatable runtime integrity probes against
+an MCP server you do not control.
 
 The package executes a host-defined, ordered plan against an ephemeral target and produces a
 bounded immutable report. It deliberately does not own transports, endpoints, credentials,
@@ -64,44 +72,89 @@ ignores cancellation. Hosts should compose the check signal with generation-reti
 signals, make adapter cleanup idempotent, and release the underlying lease only after cooperative
 work has settled.
 
-## Compare and export
+`descriptor.subject` records the build of the observing client that produced the report, not the
+server under test; the observed server is `descriptor.target`.
+
+## Serialize a report
 
 ```ts
 import {
-	compareMcpConformanceReports,
+	parseMcpConformanceReportJson,
 	serializeMcpConformanceReport,
-	toMcpConformanceJUnit,
 } from "@nestm/mcp-conformance";
 
-const comparison = compareMcpConformanceReports(baseline, report);
 const json = serializeMcpConformanceReport(report);
-const junit = toMcpConformanceJUnit(report);
+const parsed = parseMcpConformanceReportJson(json);
 ```
 
 JSON parsing, runner output, and serialization use a 1 MiB default report limit. Trusted hosts that
 need a larger report may set `limits.maxJsonBytes` on the runner and pass
-`{ maximumBytes: value }` to JSON parsing or serialization, up to the 4 MiB hard limit.
+`{ maximumBytes: value }` to JSON parsing or serialization, up to the 4 MiB hard limit. Fingerprint
+inputs are capped at 8 MiB, 128 levels, and 100,000 JSON nodes before canonical sorting.
 
-Comparison requires the same report/fingerprint versions, plan digest, target identity, subject
-name, fixture version, and ordered checks. Subject versions and runtime generations may differ
-because comparing two builds or deployments is the intended use case. Same-status fact or omission
-changes are marked for review; a fingerprint change alone is not claimed to be schema-compatible or
-incompatible. Fingerprint inputs are capped at 8 MiB, 128 levels, and 100,000 JSON nodes before
-canonical sorting. A confirmed regression remains the overall verdict even when another check is
-inconclusive.
+## Capture untrusted values and digest a catalog
 
-## Release-regression workflow
+`canonicalizeMcpConformanceValue` enforces only its own fixed ceilings (8 MiB, 128 levels, 100,000
+nodes, 50,000 properties per object) and walks a hostile shape on the way there.
+`captureMcpConformanceValue` refuses the shape instead. It copies an untrusted value into
+deep-frozen, null-prototype JSON data under caller-supplied bounds, rejecting proxies, accessor and
+non-enumerable properties, symbol keys, sparse or subclassed arrays, exotic prototypes, cycles, and
+non-finite numbers. `undefined` follows the canonicalizer's own JSON semantics, so a captured value
+always canonicalizes exactly like its source.
 
-Run the same versioned plan and deterministic fixture in separate baseline and candidate
-processes or containers. Each process must load exactly one library build and record its real
-subject version or revision; do not swap two installed builds inside one running process. Persist
-each immutable report as a JSON build artifact and, when CI presentation needs it, persist its JUnit
-projection alongside it.
+```ts
+import {
+	captureMcpConformanceValue,
+	captureMcpToolArguments,
+	digestMcpRuntimeCatalog,
+	toMcpConformanceFingerprintHex,
+	type McpConformanceCatalogSnapshot,
+} from "@nestm/mcp-conformance";
 
-A trusted comparison job should parse both bounded JSON artifacts with
-`parseMcpConformanceReportJson`, call `compareMcpConformanceReports`, and apply the repository's
-release policy to the verdict. Keep plan code, fixture admission, artifact storage, baseline
-approval, and release authorization outside untrusted dashboard input.
+declare const untrusted: unknown;
+declare const catalog: McpConformanceCatalogSnapshot;
+
+const limits = {
+	maxBytes: 262_144,
+	maxDepth: 24,
+	maxProperties: 8_192,
+	maxStringBytes: 32_768,
+	maxItems: 512,
+};
+
+const value = captureMcpConformanceValue(untrusted, limits);
+const arguments_ = captureMcpToolArguments(untrusted, limits);
+
+const digest = digestMcpRuntimeCatalog(catalog, {
+	domain: "acme/mcp/catalog/v1",
+	toolSchemaDomain: "acme/mcp/tool-schema/v1",
+	limits,
+});
+const hexadecimal = toMcpConformanceFingerprintHex(digest.catalogFingerprint);
+```
+
+Bounds are resolved against `MCP_CONFORMANCE_DEFAULT_CAPTURE_LIMITS` and
+`MCP_CONFORMANCE_HARD_CAPTURE_LIMITS` by `resolveMcpConformanceCaptureLimits`. A refusal is an
+`McpConformanceCaptureError` whose `code` states the structural reason; messages never quote the
+rejected value, its keys, or the limit that was reached.
+
+`captureMcpToolArguments` layers a `Readonly<Record<string, unknown>>` argument record on the same
+capture. Its byte accounting is predictive — every node spends exactly the canonical JSON bytes it
+will later serialize to, so an oversized payload is refused before it is materialized — and the
+prediction is then cross-checked against `canonicalizeMcpConformanceValue`'s exact output byte
+length. A fence that failed to hold rejects the arguments instead of passing them on.
+
+`digestMcpRuntimeCatalog` accepts a catalog structurally, by its `tools`, `resources`,
+`resourceTemplates`, and `prompts` collections, so a runtime manager's catalog snapshot satisfies it
+without this kernel depending on a runtime package. It returns one `catalogFingerprint` plus a
+per-tool `schemaDigest`, letting a management path and a serving path compare the same surface.
+Both domains are caller-supplied and validated with the fingerprint domain rule. Discovery order
+never reaches a digest: each collection is sorted on its identity (`name`, `uri`, or `uriTemplate`)
+with a canonical-form tiebreak, and a repeated identity is refused rather than silently collapsed.
+
+Fingerprints keep the package's `sha256:<base64url>` form. `toMcpConformanceFingerprintHex` renders
+one as 64 lowercase hexadecimal characters, so a digest column with a fixed-width hexadecimal
+`CHECK` can store it without hand-rolled transcoding.
 
 ## Safety boundary
 

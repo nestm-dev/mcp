@@ -11,6 +11,7 @@
 		{ "path": "./packages/mcp-observability" },
 		{ "path": "./packages/mcp-gateway" },
 		{ "path": "./packages/mcp" },
-		{ "path": "./apps/control-plane-api" }
+		{ "path": "./apps/control-plane-api" },
+		{ "path": "./tests/conformance" }
 	]
 }

@@ -129,7 +129,7 @@ function safeErrorCode(error: unknown): string {
 	}
 }
 
-function isRuntimeStateErrorCode(code: string): code is McpRuntimeStateErrorCode {
+export function isRuntimeStateErrorCode(code: string): code is McpRuntimeStateErrorCode {
 	return RUNTIME_STATE_ERROR_CODES.has(code);
 }
 

@@ -69,7 +69,27 @@ export type { McpOAuthServerOptions } from "./mcp-oauth-server.ts";
 // The ./cimd and ./stores subpaths remain independently importable and never
 // pull in @nestm/mcp-server.
 export { createSsrfGuardedFetch } from "./cimd/ssrf-fetch.ts";
-export type { McpFetchLike, McpSsrfGuardedFetchOptions } from "./cimd/ssrf-fetch.ts";
+export type {
+	McpFetchLike,
+	McpGuardedHostPolicyOptions,
+	McpSsrfGuardedFetchOptions,
+} from "./cimd/ssrf-fetch.ts";
+export {
+	admitMcpHttpEndpoint,
+	createStreamingSsrfGuardedFetch,
+	MCP_STREAM_IDLE_TIMEOUT_MS,
+	MCP_STREAM_MAX_RESPONSE_BYTES,
+	MCP_STREAM_MAX_SSE_EVENT_BYTES,
+	openGuardedFetch,
+} from "./cimd/streaming-fetch.ts";
+export type {
+	McpAdmittedHttpEndpoint,
+	McpEndpointAdmissionPolicy,
+	McpGuardedFetchLease,
+	McpGuardedFetchLeaseOptions,
+	McpStreamingFetchLike,
+	McpStreamingSsrfGuardedFetchOptions,
+} from "./cimd/streaming-fetch.ts";
 export {
 	createMcpClientIdMetadataResolver,
 	isClientIdMetadataUrl,

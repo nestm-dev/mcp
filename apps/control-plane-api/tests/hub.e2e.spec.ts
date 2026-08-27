@@ -10,7 +10,7 @@ import { z } from "zod";
 import { AppModule } from "../src/app.module.ts";
 import { configureApplication } from "../src/bootstrap.ts";
 import { ControlPlaneConfigService } from "../src/config/control-plane-config.service.ts";
-import { MCP_CONTROL_PLANE_BASE_FETCH } from "../src/runtime/runtime.types.ts";
+import { MCP_CONTROL_PLANE_GUARDED_FETCH } from "../src/runtime/runtime.types.ts";
 
 const connectionSchema = z.object({
 	id: z.string().uuid(),
@@ -52,13 +52,14 @@ describe("process-local MCP hub", () => {
 				: alphaFetch(input, init);
 		};
 		const module = await Test.createTestingModule({ imports: [AppModule] })
-			.overrideProvider(MCP_CONTROL_PLANE_BASE_FETCH)
+			.overrideProvider(MCP_CONTROL_PLANE_GUARDED_FETCH)
 			.useValue(routeFetch)
 			.overrideProvider(ControlPlaneConfigService)
 			.useValue({
 				host: "127.0.0.1",
 				port: 3400,
 				allowedHosts: ["127.0.0.1", "localhost", "::1"],
+				oauthAllowedHosts: ["127.0.0.1", "localhost", "::1"],
 				allowLoopbackHttp: true,
 				maxConnections: 2,
 				requestTimeoutMs: 10_000,

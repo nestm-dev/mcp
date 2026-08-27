@@ -434,6 +434,12 @@ function toMetadataError(cause: unknown): McpClientIdMetadataError {
 					"client_id host is in a blocked address range.",
 					{ cause },
 				);
+			case "host-not-allowed":
+				return new McpClientIdMetadataError(
+					"host-not-allowed",
+					"client_id host is not in the configured allowlist.",
+					{ cause },
+				);
 			case "too-large":
 				return new McpClientIdMetadataError(
 					"too-large",

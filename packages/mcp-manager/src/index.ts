@@ -14,6 +14,15 @@ export type { McpRuntimeManagerErrorCode, McpRuntimeStateErrorCode } from "./err
 
 export { MCP_RUNTIME_MANAGER_DEFAULTS, McpRuntimeManager } from "./runtime-manager.ts";
 
+export {
+	MCP_RUNTIME_PHASES,
+	MCP_RUNTIME_PROTOCOL_ERAS,
+	mcpRuntimeCapabilitiesSnapshotSchema,
+	mcpRuntimeProbeSnapshotSchema,
+	mcpRuntimeStateSnapshotSchema,
+} from "./runtime-snapshots.ts";
+export type { McpRuntimeSnapshotSchema } from "./runtime-snapshots.ts";
+
 export type {
 	McpAdmittedRuntimeGeneration,
 	McpManagedClientRuntime,
@@ -27,7 +36,9 @@ export type {
 	McpRuntimeManagerSnapshot,
 	McpRuntimePhase,
 	McpRuntimeProbeSnapshot,
+	McpRuntimeProtocolEra,
 	McpRuntimeStateListener,
 	McpRuntimeStateSnapshot,
 	McpRuntimeStateTransitionEvent,
+	McpRuntimeToolCallOptions,
 } from "./types.ts";

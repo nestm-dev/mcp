@@ -8,6 +8,7 @@
 	},
 	"include": ["src", "tests", "*.config.ts"],
 	"references": [
+		{ "path": "../../packages/mcp-auth" },
 		{ "path": "../../packages/mcp-client" },
 		{ "path": "../../packages/mcp-conformance" },
 		{ "path": "../../packages/mcp-gateway" },

@@ -1,11 +1,6 @@
 import { Test } from "@nestjs/testing";
-import {
-	McpClientRuntime,
-	type CallToolRequest,
-	type CallToolRequestOptions,
-	type CallToolResult,
-} from "@nestm/mcp-client";
-import type { McpManagedClientRuntimeOperation } from "@nestm/mcp-manager";
+import type { CallToolResult } from "@nestm/mcp-client";
+import type { McpRuntimeToolCallOptions } from "@nestm/mcp-manager";
 import type { Tool } from "@modelcontextprotocol/client";
 import { describe, expect, it, vi } from "vitest";
 
@@ -193,42 +188,31 @@ describe("ConnectionControlService", () => {
 
 	it("validates arguments and invokes the pinned generation with its catalog definition", async () => {
 		const repository = new ConnectionRepository();
-		const operationSignal = new AbortController().signal;
-		let invokedGenerationKey: string | undefined;
 		let runtimeCall:
 			| {
-					readonly serverName: string;
-					readonly params: CallToolRequest["params"];
-					readonly options: CallToolRequestOptions | undefined;
+					readonly generationKey: string;
+					readonly name: string;
+					readonly arguments: Readonly<Record<string, unknown>>;
+					readonly options: McpRuntimeToolCallOptions;
 			  }
 			| undefined;
-		const managedRuntime = new McpClientRuntime();
-		vi.spyOn(managedRuntime, "callTool").mockImplementation(
+		const callTool = vi.fn(
 			async (
-				serverName: string,
-				params: CallToolRequest["params"],
-				options?: CallToolRequestOptions,
+				generationKey: string,
+				name: string,
+				arguments_: Readonly<Record<string, unknown>>,
+				options?: AbortSignal | McpRuntimeToolCallOptions,
 			): Promise<CallToolResult> => {
-				runtimeCall = Object.freeze({ serverName, params, options });
+				if (options === undefined || options instanceof AbortSignal) {
+					throw new TypeError("the control plane must pin the catalog definition on every call");
+				}
+				runtimeCall = Object.freeze({ generationKey, name, arguments: arguments_, options });
 				return {
 					content: [{ type: "text", text: "accepted" }],
 					structuredContent: { accepted: true },
 				};
 			},
 		);
-		const withClientRuntime = async <Result>(
-			generationKey: string,
-			operation: McpManagedClientRuntimeOperation<Result>,
-		): Promise<Result> => {
-			invokedGenerationKey = generationKey;
-			return operation(
-				Object.freeze({
-					runtime: managedRuntime,
-					serverName: "managed-one",
-					signal: operationSignal,
-				}),
-			);
-		};
 		const module = await Test.createTestingModule({
 			providers: [
 				ConnectionControlService,
@@ -242,7 +226,7 @@ describe("ConnectionControlService", () => {
 					useValue: {
 						ensureOnline: async () => runtimeState("online"),
 						state: () => runtimeState("online"),
-						withClientRuntime,
+						callTool,
 					},
 				},
 			],
@@ -283,6 +267,12 @@ describe("ConnectionControlService", () => {
 			code: "MCP_TOOL_ARGUMENTS_INVALID",
 			status: 422,
 		});
+		await expect(
+			service.callTool(connection.id, "count", { count: 2, [Symbol("hostile")]: true }),
+		).rejects.toMatchObject({
+			code: "MCP_TOOL_ARGUMENTS_INVALID",
+			status: 422,
+		});
 		expect(runtimeCall).toBeUndefined();
 
 		const invocation = service.callTool(connection.id, "count", { count: 2 });
@@ -298,14 +288,12 @@ describe("ConnectionControlService", () => {
 			content: [{ type: "text", text: "accepted" }],
 			structuredContent: { accepted: true },
 		});
-		expect(invokedGenerationKey).toBe(
-			`control-plane-mcp/v1/${connection.id}/${String(connection.runtimeGeneration)}`,
-		);
+		expect(callTool).toHaveBeenCalledTimes(1);
 		expect(runtimeCall).toEqual({
-			serverName: "managed-one",
-			params: { name: "count", arguments: { count: 2 } },
+			generationKey: `control-plane-mcp/v1/${connection.id}/${String(connection.runtimeGeneration)}`,
+			name: "count",
+			arguments: { count: 2 },
 			options: {
-				signal: operationSignal,
 				toolDefinition: {
 					name: "count",
 					description: "catalog-v1",
@@ -319,13 +307,13 @@ describe("ConnectionControlService", () => {
 				},
 			},
 		});
-		expect(runtimeCall?.options?.toolDefinition).not.toBe(discoveredTool);
-		await managedRuntime.close();
+		expect(Object.isFrozen(runtimeCall?.arguments)).toBe(true);
+		expect(runtimeCall?.options.toolDefinition).not.toBe(discoveredTool);
 	});
 
 	it("rejects missing tools and uncompileable discovered input schemas before execution", async () => {
 		const repository = new ConnectionRepository();
-		const withClientRuntime = vi.fn();
+		const callTool = vi.fn();
 		const module = await Test.createTestingModule({
 			providers: [
 				ConnectionControlService,
@@ -339,7 +327,7 @@ describe("ConnectionControlService", () => {
 					useValue: {
 						ensureOnline: async () => runtimeState("online"),
 						state: () => runtimeState("online"),
-						withClientRuntime,
+						callTool,
 					},
 				},
 			],
@@ -382,7 +370,7 @@ describe("ConnectionControlService", () => {
 			code: "MCP_TOOL_SCHEMA_INVALID",
 			status: 502,
 		});
-		expect(withClientRuntime).not.toHaveBeenCalled();
+		expect(callTool).not.toHaveBeenCalled();
 	});
 });
 

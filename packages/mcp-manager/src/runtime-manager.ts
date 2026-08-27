@@ -36,6 +36,7 @@ import type {
 	McpRuntimeProbeSnapshot,
 	McpRuntimeStateListener,
 	McpRuntimeStateSnapshot,
+	McpRuntimeToolCallOptions,
 } from "./types.ts";
 
 export const MCP_RUNTIME_MANAGER_DEFAULTS = Object.freeze({
@@ -369,15 +370,25 @@ export class McpRuntimeManager<GenerationKey = string>
 		generationKey: GenerationKey,
 		name: string,
 		arguments_: Readonly<Record<string, unknown>>,
-		signal?: AbortSignal,
+		options?: AbortSignal | McpRuntimeToolCallOptions,
 	): Promise<CallToolResult> {
+		let controls: McpRuntimeToolCallOptions;
+		try {
+			controls = normalizeToolCallOptions(options);
+		} catch (error) {
+			return Promise.reject(error);
+		}
+		const { signal, toolDefinition } = controls;
 		return this.#withRuntime(
 			generationKey,
 			({ runtime, serverName }, operationSignal) =>
 				runtime.callTool(
 					serverName,
 					{ name, arguments: { ...arguments_ } },
-					{ signal: operationSignal },
+					{
+						signal: operationSignal,
+						...(toolDefinition === undefined ? {} : { toolDefinition }),
+					},
 				),
 			signal,
 			true,
@@ -629,6 +640,31 @@ export class McpRuntimeManager<GenerationKey = string>
 			throw runtimeNotReadyError();
 		}
 		this.#states.connected(generationKey, snapshot);
+	}
+}
+
+const EMPTY_TOOL_CALL_OPTIONS: McpRuntimeToolCallOptions = Object.freeze({});
+
+/** Accepts the positional cancellation form and the richer per-call options object. */
+function normalizeToolCallOptions(
+	options: AbortSignal | McpRuntimeToolCallOptions | undefined,
+): McpRuntimeToolCallOptions {
+	if (options === undefined) return EMPTY_TOOL_CALL_OPTIONS;
+	if (typeof options !== "object" || options === null) {
+		throw new TypeError("callTool options must be an AbortSignal or a tool call options object.");
+	}
+	return isAbortSignal(options) ? { signal: options } : options;
+}
+
+function isAbortSignal(value: object): value is AbortSignal {
+	if (value instanceof AbortSignal) return true;
+	try {
+		return (
+			typeof Reflect.get(value, "aborted") === "boolean" &&
+			typeof Reflect.get(value, "addEventListener") === "function"
+		);
+	} catch {
+		return false;
 	}
 }
 

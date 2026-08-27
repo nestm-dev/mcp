@@ -10,6 +10,7 @@ for await (const path of glob([
 	"apps/*/.vinext",
 	"apps/*/.wrangler",
 	"apps/*/*.tsbuildinfo",
+	"tests/conformance/dist-tsc",
 	"coverage",
 ])) {
 	await rm(path, { force: true, recursive: true });
@@ -23,6 +24,7 @@ for await (const sourcePath of glob([
 	"packages/*/tests/**/*.ts",
 	"apps/*/src/**/*.ts",
 	"apps/*/tests/**/*.ts",
+	"tests/conformance/src/**/*.ts",
 ])) {
 	if (sourcePath.endsWith(".d.ts")) continue;
 	const stem = sourcePath.slice(0, -extname(sourcePath).length);

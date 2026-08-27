@@ -1,12 +1,10 @@
 import { Injectable, type OnApplicationShutdown } from "@nestjs/common";
-import type {
-	AuthProvider,
-	FetchLike,
-	OAuthClientInformationContext,
-} from "@modelcontextprotocol/client";
+import type { FetchLike, OAuthClientInformationContext } from "@modelcontextprotocol/client";
 import { auth, refreshAuthorization } from "@nestm/mcp-client";
 import {
 	createOAuthStateLookupDigest,
+	McpClientOAuthAuthProvider,
+	McpClientOAuthRefreshCoordinator,
 	parseOAuthCallbackParameters,
 	validateOAuthState,
 	type McpOAuthCallbackParameters,
@@ -16,7 +14,16 @@ import { ControlPlaneError } from "../common/control-plane.error.ts";
 import { ControlPlaneConfigService } from "../config/control-plane-config.service.ts";
 import { OAuthNetworkPolicyService } from "./oauth-network-policy.service.ts";
 import type { OAuthConnectionView, OAuthRuntimeBridgeLease } from "./oauth.types.ts";
+import {
+	VolatileOAuthCredentialStore,
+	type OAuthRuntimeCredential,
+} from "./volatile-oauth-credential.store.ts";
 import { VolatileOAuthProvider } from "./volatile-oauth-provider.ts";
+
+const MAX_PROJECTED_SCOPES = 64;
+const MAX_PROJECTED_SCOPE_LENGTH = 256;
+
+type RuntimeAuthBridge = McpClientOAuthAuthProvider<string, OAuthRuntimeCredential>;
 
 interface PendingAuthorization {
 	readonly connectionId: string;
@@ -52,15 +59,24 @@ export interface TakenOAuthCallback {
 export class VolatileOAuthAuthorityService implements OnApplicationShutdown {
 	readonly #pendingByConnection = new Map<string, PendingAuthorization>();
 	readonly #pendingByStateDigest = new Map<string, PendingAuthorization>();
-	readonly #activeByGeneration = new Map<string, PreparedOAuthAuthorization>();
+	readonly #connectionByGeneration = new Map<string, string>();
 	readonly #bridges = new Map<string, Set<RuntimeAuthBridge>>();
-	readonly #refreshes = new Map<string, Promise<void>>();
 	readonly #states = new Map<string, SafeAuthorizationState>();
+	readonly #credentials = new VolatileOAuthCredentialStore();
+	readonly #refresh: McpClientOAuthRefreshCoordinator<string, OAuthRuntimeCredential>;
 
 	constructor(
 		private readonly config: ControlPlaneConfigService,
 		private readonly network: OAuthNetworkPolicyService,
-	) {}
+	) {
+		this.#refresh = new McpClientOAuthRefreshCoordinator<string, OAuthRuntimeCredential>({
+			store: this.#credentials,
+			maxInFlightKeys: config.maxConnections,
+			refresh: async (generationKey, current) =>
+				this.#refreshCredential(generationKey, current.credential),
+			onInvalidated: (generationKey) => this.#requireReauthorization(generationKey),
+		});
+	}
 
 	registerConnection(connectionId: string): void {
 		if (this.#states.has(connectionId)) return;
@@ -68,21 +84,19 @@ export class VolatileOAuthAuthorityService implements OnApplicationShutdown {
 	}
 
 	isAuthorized(generationKey: string): boolean {
-		const active = this.#activeByGeneration.get(generationKey);
+		const credential = this.#credentials.peek(generationKey);
 		return (
-			active !== undefined &&
-			this.#states.get(active.connectionId)?.status === "authorized" &&
-			active.provider.currentAccessToken() !== undefined
+			credential !== undefined && this.#states.get(credential.connectionId)?.status === "authorized"
 		);
 	}
 
 	view(connectionId: string, generationKey: string): OAuthConnectionView {
 		const state = this.#states.get(connectionId) ?? authorizationRequiredState();
-		const active = this.#activeByGeneration.get(generationKey);
+		const credential = this.#credentials.peek(generationKey);
 		const effective =
-			active === undefined || state.status !== "authorized"
+			credential === undefined || state.status !== "authorized"
 				? state
-				: safeState("authorized", active.provider);
+				: authorizedState(credential);
 		return Object.freeze({
 			kind: "oauth" as const,
 			status: effective.status,
@@ -127,7 +141,7 @@ export class VolatileOAuthAuthorityService implements OnApplicationShutdown {
 			});
 			this.#pendingByConnection.set(input.connectionId, attempt);
 			this.#pendingByStateDigest.set(attempt.stateDigest, attempt);
-			this.#states.set(input.connectionId, safeState("authorizing", provider));
+			this.#states.set(input.connectionId, discoveredState(provider));
 			return authorizationUrl;
 		} catch (error) {
 			provider.invalidateCredentials("all");
@@ -208,11 +222,14 @@ export class VolatileOAuthAuthorityService implements OnApplicationShutdown {
 		}
 	}
 
+	/** Moves the authorization material out of the browser session into the runtime credential. */
 	publishAuthorization(active: PreparedOAuthAuthorization, generationKey: string): void {
+		const credential = captureCredential(active);
 		active.provider.clearAuthorizationTransaction();
-		const published = Object.freeze({ ...active, generationKey });
-		this.#activeByGeneration.set(generationKey, published);
-		this.#states.set(active.connectionId, safeState("authorized", active.provider));
+		active.provider.invalidateCredentials("all");
+		this.#credentials.publish(generationKey, credential);
+		this.#connectionByGeneration.set(generationKey, credential.connectionId);
+		this.#states.set(credential.connectionId, authorizedState(credential));
 	}
 
 	discardPrepared(active: PreparedOAuthAuthorization): void {
@@ -221,22 +238,26 @@ export class VolatileOAuthAuthorityService implements OnApplicationShutdown {
 	}
 
 	acquireRuntimeBridge(generationKey: string): OAuthRuntimeBridgeLease {
-		const active = this.#activeByGeneration.get(generationKey);
-		if (active === undefined || !this.isAuthorized(generationKey)) {
-			throw oauthAuthorizationRequiredError();
-		}
-		const bridge = new RuntimeAuthBridge(
-			() => active.provider.currentAccessToken(),
-			async () => this.#refresh(generationKey),
-			() => this.#bridges.get(generationKey)?.delete(bridge),
-		);
+		if (!this.isAuthorized(generationKey)) throw oauthAuthorizationRequiredError();
+		const bridge: RuntimeAuthBridge = new McpClientOAuthAuthProvider({
+			identity: generationKey,
+			store: this.#credentials,
+			refreshCoordinator: this.#refresh,
+			selectBearerToken: (snapshot) => snapshot.credential.tokens.access_token,
+		});
 		let bridges = this.#bridges.get(generationKey);
 		if (bridges === undefined) {
 			bridges = new Set();
 			this.#bridges.set(generationKey, bridges);
 		}
 		bridges.add(bridge);
-		return Object.freeze({ authProvider: bridge, close: async () => bridge.close() });
+		return Object.freeze({
+			authProvider: bridge,
+			close: async () => {
+				this.#bridges.get(generationKey)?.delete(bridge);
+				await bridge.close();
+			},
+		});
 	}
 
 	cancelPending(connectionId: string, resetState = true): void {
@@ -250,12 +271,10 @@ export class VolatileOAuthAuthorityService implements OnApplicationShutdown {
 	}
 
 	fenceGeneration(generationKey: string): void {
-		for (const bridge of this.#bridges.get(generationKey) ?? []) bridge.fence();
+		for (const bridge of this.#bridges.get(generationKey) ?? []) void bridge.close();
 		this.#bridges.delete(generationKey);
-		this.#refreshes.delete(generationKey);
-		const active = this.#activeByGeneration.get(generationKey);
-		this.#activeByGeneration.delete(generationKey);
-		active?.provider.invalidateCredentials("all");
+		this.#connectionByGeneration.delete(generationKey);
+		this.#credentials.remove(generationKey);
 	}
 
 	resetConnection(connectionId: string, generationKey: string): void {
@@ -274,138 +293,143 @@ export class VolatileOAuthAuthorityService implements OnApplicationShutdown {
 		for (const connectionId of this.#pendingByConnection.keys()) {
 			this.cancelPending(connectionId, false);
 		}
-		for (const generationKey of this.#activeByGeneration.keys()) {
+		for (const generationKey of this.#connectionByGeneration.keys()) {
 			this.fenceGeneration(generationKey);
 		}
+		void this.#refresh.close();
+		this.#credentials.clear();
 		this.#states.clear();
 	}
 
-	#refresh(generationKey: string): Promise<void> {
-		let task = this.#refreshes.get(generationKey);
-		if (task !== undefined) return task;
-		task = this.#performRefresh(generationKey);
-		this.#refreshes.set(generationKey, task);
-		void task.then(
-			() => this.#deleteRefresh(generationKey, task),
-			() => this.#deleteRefresh(generationKey, task),
-		);
-		return task;
+	/**
+	 * One credentialed token exchange per invocation, as the refresh coordinator
+	 * requires: the guarded fetch never retries, and the coordinator settles an
+	 * ambiguous outcome by retiring the generation.
+	 */
+	async #refreshCredential(
+		generationKey: string,
+		current: Readonly<OAuthRuntimeCredential>,
+	): Promise<Readonly<OAuthRuntimeCredential>> {
+		const refreshToken = current.tokens.refresh_token;
+		if (refreshToken === undefined) throw oauthAuthorizationRequiredError();
+		const metadata = current.discovery.authorizationServerMetadata;
+		const tokens = await refreshAuthorization(current.discovery.authorizationServerUrl, {
+			...(metadata === undefined ? {} : { metadata }),
+			clientInformation: current.clientInformation,
+			refreshToken,
+			...(current.resourceUrl === undefined ? {} : { resource: new URL(current.resourceUrl) }),
+			fetchFn: this.network.createFetch(current.endpoint, () => current.discovery),
+		});
+		const updated = Object.freeze({
+			...current,
+			tokens: Object.freeze({
+				...tokens,
+				refresh_token: tokens.refresh_token ?? refreshToken,
+				issuer: current.issuer,
+			}),
+		});
+		// A generation fenced while the exchange was in flight keeps whatever state
+		// the fencing caller published; the commit that follows conflicts anyway.
+		if (this.#connectionByGeneration.get(generationKey) === current.connectionId) {
+			this.#states.set(current.connectionId, authorizedState(updated));
+		}
+		return updated;
 	}
 
-	async #performRefresh(generationKey: string): Promise<void> {
-		const active = this.#activeByGeneration.get(generationKey);
-		if (active === undefined) throw oauthAuthorizationRequiredError();
-		const discovery = active.provider.discoveryState();
-		const issuer = active.provider.issuer();
-		const refreshToken = active.provider.currentRefreshToken();
-		const clientInformation =
-			issuer === undefined
-				? undefined
-				: active.provider.clientInformation({ issuer } satisfies OAuthClientInformationContext);
-		if (
-			discovery === undefined ||
-			issuer === undefined ||
-			refreshToken === undefined ||
-			clientInformation === undefined
-		) {
-			this.#requireReauthorization(generationKey, active);
-			throw oauthAuthorizationRequiredError();
-		}
-		try {
-			const tokens = await refreshAuthorization(discovery.authorizationServerUrl, {
-				...(discovery.authorizationServerMetadata === undefined
-					? {}
-					: { metadata: discovery.authorizationServerMetadata }),
-				clientInformation,
-				refreshToken,
-				...(active.provider.resourceUrl() === undefined
-					? {}
-					: { resource: new URL(active.provider.resourceUrl()!) }),
-				fetchFn: active.fetch,
-			});
-			if (this.#activeByGeneration.get(generationKey) !== active) {
-				throw oauthAuthorizationRequiredError();
-			}
-			active.provider.saveTokens({ ...tokens, issuer }, { issuer });
-			this.#states.set(active.connectionId, safeState("authorized", active.provider));
-		} catch {
-			if (this.#activeByGeneration.get(generationKey) === active) {
-				this.#requireReauthorization(generationKey, active);
-			}
-			throw oauthAuthorizationRequiredError();
-		}
-	}
-
-	#requireReauthorization(generationKey: string, active: PreparedOAuthAuthorization): void {
-		const state = reauthorizationRequiredState(active.provider);
+	#requireReauthorization(generationKey: string): void {
+		const connectionId = this.#connectionByGeneration.get(generationKey);
+		const previous = connectionId === undefined ? undefined : this.#states.get(connectionId);
 		this.fenceGeneration(generationKey);
-		this.#states.set(active.connectionId, state);
-	}
-
-	#deleteRefresh(generationKey: string, task: Promise<void>): void {
-		if (this.#refreshes.get(generationKey) === task) this.#refreshes.delete(generationKey);
+		if (connectionId === undefined) return;
+		this.#states.set(connectionId, reauthorizationRequiredState(previous));
 	}
 }
 
-class RuntimeAuthBridge implements AuthProvider {
-	#closed = false;
-
-	constructor(
-		private readonly readToken: () => string | undefined,
-		private readonly refresh: () => Promise<void>,
-		private readonly onClose: () => void,
-	) {}
-
-	async token(): Promise<string | undefined> {
-		if (this.#closed) throw oauthAuthorizationRequiredError();
-		return this.readToken();
+/**
+ * Lifts the browser session's material into one immutable runtime credential.
+ * The volatile provider is wiped by the caller so the secrets live in exactly
+ * one place afterwards.
+ */
+function captureCredential(active: PreparedOAuthAuthorization): OAuthRuntimeCredential {
+	const issuer = active.provider.issuer();
+	const discovery = active.provider.discoveryState();
+	const context =
+		issuer === undefined ? undefined : ({ issuer } satisfies OAuthClientInformationContext);
+	const clientInformation =
+		context === undefined ? undefined : active.provider.clientInformation(context);
+	const tokens = context === undefined ? undefined : active.provider.tokens(context);
+	const resourceUrl = active.provider.resourceUrl();
+	if (
+		issuer === undefined ||
+		discovery === undefined ||
+		clientInformation === undefined ||
+		tokens === undefined
+	) {
+		throw oauthUpstreamFailedError();
 	}
-
-	async onUnauthorized(): Promise<void> {
-		if (this.#closed) throw oauthAuthorizationRequiredError();
-		await this.refresh();
-	}
-
-	close(): void {
-		if (this.#closed) return;
-		this.#closed = true;
-		this.onClose();
-	}
-
-	fence(): void {
-		this.close();
-	}
+	return Object.freeze({
+		connectionId: active.connectionId,
+		endpoint: active.endpoint,
+		issuer,
+		discovery,
+		clientInformation,
+		tokens,
+		...(resourceUrl === undefined ? {} : { resourceUrl }),
+	});
 }
 
-function safeState(
-	status: OAuthConnectionView["status"],
-	provider: VolatileOAuthProvider,
-): SafeAuthorizationState {
+function authorizedState(credential: Readonly<OAuthRuntimeCredential>): SafeAuthorizationState {
+	const discovery = credential.discovery;
+	const scopeValues =
+		grantedScopes(credential.tokens.scope) ??
+		discovery.resourceMetadata?.scopes_supported ??
+		discovery.authorizationServerMetadata?.scopes_supported ??
+		[];
+	return Object.freeze({
+		status: "authorized" as const,
+		scopes: boundedScopes(scopeValues),
+		...hostBinding(
+			discovery.authorizationServerMetadata?.issuer ?? discovery.authorizationServerUrl,
+		),
+	});
+}
+
+function discoveredState(provider: VolatileOAuthProvider): SafeAuthorizationState {
 	const discovery = provider.discoveryState();
 	const scopeValues =
-		(status === "authorized" ? provider.currentGrantedScopes() : undefined) ??
 		discovery?.resourceMetadata?.scopes_supported ??
 		discovery?.authorizationServerMetadata?.scopes_supported ??
 		[];
-	const scopes = Object.freeze(
-		scopeValues
-			.filter((scope): scope is string => typeof scope === "string")
-			.slice(0, 64)
-			.map((scope) => scope.slice(0, 256)),
-	);
-	const issuer =
-		discovery?.authorizationServerMetadata?.issuer ?? discovery?.authorizationServerUrl;
-	let authorizationServerHost: string | undefined;
-	try {
-		authorizationServerHost = issuer === undefined ? undefined : new URL(issuer).host;
-	} catch {
-		authorizationServerHost = undefined;
-	}
 	return Object.freeze({
-		status,
-		scopes,
-		...(authorizationServerHost === undefined ? {} : { authorizationServerHost }),
+		status: "authorizing" as const,
+		scopes: boundedScopes(scopeValues),
+		...hostBinding(
+			discovery?.authorizationServerMetadata?.issuer ?? discovery?.authorizationServerUrl,
+		),
 	});
+}
+
+function grantedScopes(scope: string | undefined): readonly string[] | undefined {
+	if (scope === undefined) return undefined;
+	return [...new Set(scope.split(/\s+/u).filter((value) => value.length > 0))];
+}
+
+function boundedScopes(values: readonly unknown[]): readonly string[] {
+	return Object.freeze(
+		values
+			.filter((scope): scope is string => typeof scope === "string")
+			.slice(0, MAX_PROJECTED_SCOPES)
+			.map((scope) => scope.slice(0, MAX_PROJECTED_SCOPE_LENGTH)),
+	);
+}
+
+function hostBinding(issuer: string | undefined): { readonly authorizationServerHost?: string } {
+	if (issuer === undefined) return {};
+	try {
+		return { authorizationServerHost: new URL(issuer).host };
+	} catch {
+		return {};
+	}
 }
 
 function authorizationRequiredState(): SafeAuthorizationState {
@@ -416,9 +440,15 @@ function authorizingState(): SafeAuthorizationState {
 	return Object.freeze({ status: "authorizing", scopes: Object.freeze([]) });
 }
 
-function reauthorizationRequiredState(provider: VolatileOAuthProvider): SafeAuthorizationState {
+function reauthorizationRequiredState(
+	previous: SafeAuthorizationState | undefined,
+): SafeAuthorizationState {
 	return Object.freeze({
-		...safeState("reauthorization-required", provider),
+		status: "reauthorization-required" as const,
+		scopes: previous?.scopes ?? Object.freeze([]),
+		...(previous?.authorizationServerHost === undefined
+			? {}
+			: { authorizationServerHost: previous.authorizationServerHost }),
 		errorCode: "MCP_OAUTH_AUTHORIZATION_REQUIRED",
 	});
 }

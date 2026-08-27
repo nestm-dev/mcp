@@ -1,21 +1,37 @@
 import { Inject, Injectable } from "@nestjs/common";
 import type { FetchLike, OAuthDiscoveryState } from "@modelcontextprotocol/client";
+import {
+	McpDocumentFetchError,
+	normalizeGuardedHost,
+	type McpDocumentFetchFailure,
+} from "@nestm/mcp-auth/cimd";
 
 import { ControlPlaneError } from "../common/control-plane.error.ts";
 import { ControlPlaneConfigService } from "../config/control-plane-config.service.ts";
-import { MCP_OAUTH_BASE_FETCH, type McpOAuthBaseFetch } from "./oauth.types.ts";
+import { MCP_OAUTH_GUARDED_FETCH, type McpOAuthGuardedFetch } from "./oauth.types.ts";
 
+/** Guard verdicts this control plane owns as admission, not as an upstream fault. */
+const ADMISSION_FAILURES: ReadonlySet<McpDocumentFetchFailure> = new Set([
+	"blocked-address",
+	"host-not-allowed",
+	"insecure-url",
+]);
+
+/**
+ * OAuth network policy for this host. Scheme, address ranges, DNS pinning, byte
+ * fences, and redirect refusal belong to the injected guarded fetch; what stays
+ * here is the application's own endpoint pinning: which host may answer a GET,
+ * and the exact discovered endpoint a credential-bearing POST may reach.
+ */
 @Injectable()
 export class OAuthNetworkPolicyService {
 	readonly #allowedHosts: ReadonlySet<string>;
 
 	constructor(
-		@Inject(ControlPlaneConfigService) private readonly config: ControlPlaneConfigService,
-		@Inject(MCP_OAUTH_BASE_FETCH) private readonly baseFetch: McpOAuthBaseFetch,
+		@Inject(ControlPlaneConfigService) config: ControlPlaneConfigService,
+		@Inject(MCP_OAUTH_GUARDED_FETCH) private readonly guardedFetch: McpOAuthGuardedFetch,
 	) {
-		this.#allowedHosts = new Set(
-			(config.oauthAllowedHosts ?? config.allowedHosts).map(normalizeHostname),
-		);
+		this.#allowedHosts = new Set(config.oauthAllowedHosts.map(normalizeGuardedHost));
 	}
 
 	createFetch(
@@ -27,16 +43,16 @@ export class OAuthNetworkPolicyService {
 			const requested = requestUrl(input);
 			const method = requestMethod(input, init);
 			this.#assertAllowed(requested, method, resourceOrigin, getDiscovery());
-			const response = await this.baseFetch(input, {
-				...init,
-				redirect: "manual",
-				signal: AbortSignal.any([
-					AbortSignal.timeout(this.config.requestTimeoutMs),
-					...(init?.signal == null ? [] : [init.signal]),
-				]),
-			});
-			if (response.status >= 300 && response.status < 400) throw oauthEndpointRejectedError();
-			return response;
+			try {
+				return await this.guardedFetch(requested, {
+					...(init?.method === undefined ? {} : { method: init.method }),
+					...(init?.headers === undefined ? {} : { headers: init.headers }),
+					...(init?.body == null ? {} : { body: init.body }),
+					...(init?.signal == null ? {} : { signal: init.signal }),
+				});
+			} catch (error) {
+				throw translateGuardFailure(error);
+			}
 		};
 	}
 
@@ -57,7 +73,7 @@ export class OAuthNetworkPolicyService {
 			redirect.username.length > 0 ||
 			redirect.password.length > 0 ||
 			redirect.hash.length > 0 ||
-			!this.#allowedHosts.has(normalizeHostname(redirect.hostname)) ||
+			!this.#allowedHosts.has(normalizeGuardedHost(redirect.hostname)) ||
 			redirect.origin !== exactEndpoint.origin ||
 			redirect.pathname !== exactEndpoint.pathname
 		) {
@@ -72,15 +88,10 @@ export class OAuthNetworkPolicyService {
 		resourceOrigin: string,
 		discovery: OAuthDiscoveryState | undefined,
 	): void {
-		if (
-			endpoint.protocol !== "https:" ||
-			endpoint.username.length > 0 ||
-			endpoint.password.length > 0 ||
-			endpoint.hash.length > 0
-		) {
+		if (endpoint.username.length > 0 || endpoint.password.length > 0 || endpoint.hash.length > 0) {
 			throw oauthEndpointRejectedError();
 		}
-		const hostname = normalizeHostname(endpoint.hostname);
+		const hostname = normalizeGuardedHost(endpoint.hostname);
 		if (method === "GET") {
 			if (endpoint.origin === resourceOrigin || this.#allowedHosts.has(hostname)) return;
 			throw oauthEndpointRejectedError();
@@ -105,9 +116,11 @@ function requestMethod(input: Parameters<FetchLike>[0], init: RequestInit | unde
 	return (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
 }
 
-function normalizeHostname(value: string): string {
-	const lower = value.trim().toLowerCase();
-	return lower.startsWith("[") && lower.endsWith("]") ? lower.slice(1, -1) : lower;
+function translateGuardFailure(error: unknown): unknown {
+	if (error instanceof McpDocumentFetchError && ADMISSION_FAILURES.has(error.reason)) {
+		return oauthEndpointRejectedError();
+	}
+	return error;
 }
 
 function oauthEndpointRejectedError(): ControlPlaneError {

@@ -1,7 +1,7 @@
 {
 	"name": "@nestm/mcp-conformance",
 	"version": "0.1.0-alpha.6",
-	"description": "Framework-neutral conformance runner, immutable reports, and semantic regression comparison for MCP systems.",
+	"description": "Bounded runtime integrity and safety probes for third-party MCP servers, with canonicalization, bounded capture, and catalog fingerprinting for drift detection.",
 	"type": "module",
 	"sideEffects": false,
 	"author": "nestm",
@@ -18,10 +18,11 @@
 	"keywords": [
 		"mcp",
 		"model-context-protocol",
-		"conformance",
-		"regression",
-		"testing",
-		"junit",
+		"security",
+		"integrity",
+		"catalog-drift",
+		"fingerprint",
+		"tool-poisoning",
 		"nestm"
 	],
 	"engines": {

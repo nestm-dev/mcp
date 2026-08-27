@@ -91,6 +91,10 @@ describe("safe discovery conformance", () => {
 			code: "TOOL_SCHEMAS_INVALID",
 			facts: { invalidInputSchemas: 1, invalidOutputSchemas: 1 },
 		});
+		expect(check(report.checks, "catalog.digest")).toMatchObject({
+			status: "error",
+			code: "CATALOG_DIGEST_ERROR",
+		});
 		expect(requests.filter(({ method }) => method === "tools/list")).toEqual([
 			{ method: "tools/list" },
 			{ method: "tools/list", cursor: "tools-2" },
@@ -141,6 +145,11 @@ describe("safe discovery conformance", () => {
 			status: "error",
 			code: "TOOL_SCHEMA_BUDGET_EXCEEDED",
 			facts: { inspectedSchemaCount: 257 },
+		});
+		expect(check(report.checks, "catalog.digest")).toMatchObject({
+			status: "pass",
+			code: "CATALOG_DIGESTED",
+			facts: { catalogDigest: expect.stringMatching(/^sha256:[A-Za-z0-9_-]{43}$/u) },
 		});
 	});
 

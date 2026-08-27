@@ -1,6 +1,9 @@
 packages:
   - "packages/*"
   - "apps/*"
+  # Private harness for the official MCP conformance suite. Kept outside
+  # packages/* so release, publint, and attw sweeps never see it.
+  - "tests/conformance"
 
 overrides:
   "vite": "8.0.16"

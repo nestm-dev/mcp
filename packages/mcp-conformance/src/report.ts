@@ -51,6 +51,7 @@ export const McpConformanceDescriptorSchema = z
 				generation: positiveSafeIntegerSchema.optional(),
 			})
 			.strict(),
+		/** The observing client build that produced this report — never the observed target. */
 		subject: z
 			.object({
 				name: boundedLabelSchema,
