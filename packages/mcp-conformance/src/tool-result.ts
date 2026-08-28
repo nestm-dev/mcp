@@ -62,7 +62,9 @@ interface ProjectionState {
  * numbers, and `__proto__` members are dropped and reported through
  * `truncated`; source getters are never invoked. Symbol and non-enumerable
  * state is outside MCP's enumerable string-key JSON surface and is never
- * enumerated.
+ * enumerated. This bounds emitted data and per-string scans, not the engine's
+ * cost to enumerate a previously parsed object's keys; callers must also cap
+ * the transport response body before parsing.
  */
 export function projectMcpToolResult(
 	result: unknown,

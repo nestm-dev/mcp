@@ -170,7 +170,9 @@ descriptor-only summaries. Their data, URIs, and other fields are never copied. 
 is rebuilt as frozen null-prototype JSON under depth, node, string, and serialized-byte limits.
 Every omitted, malformed, hostile, or truncated value in MCP's enumerable string-key JSON surface
 sets the result's `truncated` flag. Symbol and non-enumerable state is outside that wire surface and
-is ignored without enumeration; this keeps source work bounded even for hostile in-memory values.
+is ignored without explicit enumeration. Emitted data and per-value string scans are bounded, but
+JavaScript object-key enumeration can still cost O(source properties); production callers must cap
+the transport response body before parsing as well as applying this post-parse projection.
 
 ```ts
 import { projectMcpToolResult } from "@nestm/mcp-conformance";
