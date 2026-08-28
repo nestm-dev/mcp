@@ -37,6 +37,110 @@ export const MCP_CONFORMANCE_HARD_CAPTURE_LIMITS = Object.freeze({
 	maxItems: 8_192,
 });
 
+/** Conservative defaults for a lossy, display-safe MCP `tools/call` result. */
+export const MCP_TOOL_RESULT_PROJECTION_DEFAULT_LIMITS = Object.freeze({
+	maxContentBlocks: 20,
+	maxTextBytesPerBlock: 8_192,
+	maxTextBytesTotal: 65_536,
+	maxStructuredDepth: 8,
+	maxStructuredNodes: 1_000,
+	maxStructuredStringBytes: 16_384,
+	maxStructuredSerializedBytes: 65_536,
+	maxSummaryDescriptorLength: 128,
+});
+
+/** Fixed ceilings prevent a caller-supplied projection policy from becoming unbounded. */
+export const MCP_TOOL_RESULT_PROJECTION_HARD_LIMITS = Object.freeze({
+	maxContentBlocks: 8_192,
+	maxTextBytesPerBlock: 1_048_576,
+	maxTextBytesTotal: 4_194_304,
+	maxStructuredDepth: 64,
+	maxStructuredNodes: 65_536,
+	maxStructuredStringBytes: 1_048_576,
+	maxStructuredSerializedBytes: 4_194_304,
+	maxSummaryDescriptorLength: 4_096,
+});
+
+export interface McpToolResultProjectionLimits {
+	/** Maximum content blocks retained in wire order. */
+	readonly maxContentBlocks?: number;
+	/** Maximum UTF-8 bytes retained from one text block. */
+	readonly maxTextBytesPerBlock?: number;
+	/** Maximum UTF-8 bytes retained across every text block. */
+	readonly maxTextBytesTotal?: number;
+	/** Maximum structured-content container depth, counting the root as depth zero. */
+	readonly maxStructuredDepth?: number;
+	/** Maximum structured-content containers and leaves retained in total. */
+	readonly maxStructuredNodes?: number;
+	/** Maximum UTF-8 bytes retained from one structured-content string or key. */
+	readonly maxStructuredStringBytes?: number;
+	/** Maximum serialized UTF-8 bytes admitted for the projected structured content. */
+	readonly maxStructuredSerializedBytes?: number;
+	/** Maximum code units retained from a non-text block descriptor. */
+	readonly maxSummaryDescriptorLength?: number;
+}
+
+export interface ResolvedMcpToolResultProjectionLimits {
+	readonly maxContentBlocks: number;
+	readonly maxTextBytesPerBlock: number;
+	readonly maxTextBytesTotal: number;
+	readonly maxStructuredDepth: number;
+	readonly maxStructuredNodes: number;
+	readonly maxStructuredStringBytes: number;
+	readonly maxStructuredSerializedBytes: number;
+	readonly maxSummaryDescriptorLength: number;
+}
+
+export function resolveMcpToolResultProjectionLimits(
+	input: McpToolResultProjectionLimits | undefined,
+): Readonly<ResolvedMcpToolResultProjectionLimits> {
+	return Object.freeze({
+		maxContentBlocks: boundedPositiveInteger(
+			input?.maxContentBlocks ?? MCP_TOOL_RESULT_PROJECTION_DEFAULT_LIMITS.maxContentBlocks,
+			"maxContentBlocks",
+			MCP_TOOL_RESULT_PROJECTION_HARD_LIMITS.maxContentBlocks,
+		),
+		maxTextBytesPerBlock: boundedPositiveInteger(
+			input?.maxTextBytesPerBlock ?? MCP_TOOL_RESULT_PROJECTION_DEFAULT_LIMITS.maxTextBytesPerBlock,
+			"maxTextBytesPerBlock",
+			MCP_TOOL_RESULT_PROJECTION_HARD_LIMITS.maxTextBytesPerBlock,
+		),
+		maxTextBytesTotal: boundedPositiveInteger(
+			input?.maxTextBytesTotal ?? MCP_TOOL_RESULT_PROJECTION_DEFAULT_LIMITS.maxTextBytesTotal,
+			"maxTextBytesTotal",
+			MCP_TOOL_RESULT_PROJECTION_HARD_LIMITS.maxTextBytesTotal,
+		),
+		maxStructuredDepth: boundedPositiveInteger(
+			input?.maxStructuredDepth ?? MCP_TOOL_RESULT_PROJECTION_DEFAULT_LIMITS.maxStructuredDepth,
+			"maxStructuredDepth",
+			MCP_TOOL_RESULT_PROJECTION_HARD_LIMITS.maxStructuredDepth,
+		),
+		maxStructuredNodes: boundedPositiveInteger(
+			input?.maxStructuredNodes ?? MCP_TOOL_RESULT_PROJECTION_DEFAULT_LIMITS.maxStructuredNodes,
+			"maxStructuredNodes",
+			MCP_TOOL_RESULT_PROJECTION_HARD_LIMITS.maxStructuredNodes,
+		),
+		maxStructuredStringBytes: boundedPositiveInteger(
+			input?.maxStructuredStringBytes ??
+				MCP_TOOL_RESULT_PROJECTION_DEFAULT_LIMITS.maxStructuredStringBytes,
+			"maxStructuredStringBytes",
+			MCP_TOOL_RESULT_PROJECTION_HARD_LIMITS.maxStructuredStringBytes,
+		),
+		maxStructuredSerializedBytes: boundedPositiveInteger(
+			input?.maxStructuredSerializedBytes ??
+				MCP_TOOL_RESULT_PROJECTION_DEFAULT_LIMITS.maxStructuredSerializedBytes,
+			"maxStructuredSerializedBytes",
+			MCP_TOOL_RESULT_PROJECTION_HARD_LIMITS.maxStructuredSerializedBytes,
+		),
+		maxSummaryDescriptorLength: boundedPositiveInteger(
+			input?.maxSummaryDescriptorLength ??
+				MCP_TOOL_RESULT_PROJECTION_DEFAULT_LIMITS.maxSummaryDescriptorLength,
+			"maxSummaryDescriptorLength",
+			MCP_TOOL_RESULT_PROJECTION_HARD_LIMITS.maxSummaryDescriptorLength,
+		),
+	});
+}
+
 export interface McpConformanceCaptureLimits {
 	/** Maximum UTF-8 byte length of the canonical JSON text the capture would produce. */
 	readonly maxBytes: number;

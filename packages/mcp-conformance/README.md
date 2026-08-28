@@ -162,6 +162,37 @@ Fingerprints keep the package's `sha256:<base64url>` form. `toMcpConformanceFing
 one as 64 lowercase hexadecimal characters, so a digest column with a fixed-width hexadecimal
 `CHECK` can store it without hand-rolled transcoding.
 
+## Project an untrusted tool result
+
+`projectMcpToolResult` is the lossy output boundary for a `tools/call` result. Text blocks remain
+bounded text; image, audio, embedded-resource, resource-link, unknown, and future blocks become
+descriptor-only summaries. Their data, URIs, and other fields are never copied. Structured content
+is rebuilt as frozen null-prototype JSON under depth, node, string, and serialized-byte limits.
+Every omitted, malformed, hostile, or truncated value sets the result's `truncated` flag.
+
+```ts
+import { projectMcpToolResult } from "@nestm/mcp-conformance";
+
+declare const untrustedToolResult: unknown;
+
+const projected = projectMcpToolResult(untrustedToolResult, {
+	maxContentBlocks: 20,
+	maxTextBytesPerBlock: 8_192,
+	maxTextBytesTotal: 65_536,
+	maxStructuredDepth: 8,
+	maxStructuredNodes: 1_000,
+	maxStructuredStringBytes: 16_384,
+	maxStructuredSerializedBytes: 65_536,
+	maxSummaryDescriptorLength: 128,
+});
+```
+
+Omit the limits to use the same conservative defaults shown above. Fixed hard ceilings still apply
+to caller overrides. Proxies, accessors, exotic prototypes, cycles, sparse entries, symbol keys,
+non-finite numbers, and `__proto__` members are dropped without invoking source getters.
+`degradedMcpToolResult` supplies an immutable empty fallback when a host deliberately catches a
+projection failure at a wider boundary.
+
 ## Safety boundary
 
 Facts are restricted to bounded scalar values. Sensitive-looking fact keys are omitted, strings
