@@ -9,6 +9,7 @@ import {
 	digestMcpRuntimeCatalog,
 	fingerprintMcpConformanceValue,
 	toMcpConformanceFingerprintHex,
+	type McpConformanceCaptureOptions,
 	type McpConformanceCaptureLimits,
 	type McpConformanceCatalogSnapshot,
 } from "../src/index.ts";
@@ -140,6 +141,39 @@ describe("bounded conformance capture", () => {
 		const nulled = captureMcpConformanceValue([undefined, 1], testLimits());
 		expect(nulled).toEqual([null, 1]);
 		expect(canonicalizeMcpConformanceValue(nulled)).toBe("[null,1]");
+
+		expect(captureFailure(() => captureMcpConformanceValue(undefined, testLimits()))).toBe(
+			MCP_CONFORMANCE_CAPTURE_REJECTED,
+		);
+	});
+
+	it("preserves JSON undefined semantics when that policy is explicit", () => {
+		const options = { undefinedPolicy: "json" } satisfies McpConformanceCaptureOptions;
+
+		expect(
+			captureMcpConformanceValue(
+				{ omitted: undefined, nested: [undefined, { omitted: undefined }] },
+				testLimits(),
+				options,
+			),
+		).toEqual({ nested: [null, {}] });
+		expect(captureFailure(() => captureMcpConformanceValue(undefined, testLimits(), options))).toBe(
+			MCP_CONFORMANCE_CAPTURE_REJECTED,
+		);
+	});
+
+	it.each([
+		["the root", undefined],
+		["an object property", { undefinedValue: undefined }],
+		["a nested object property", { nested: { undefinedValue: undefined } }],
+		["an array entry", [undefined]],
+		["a nested array entry", { nested: [1, undefined] }],
+	] as const)("rejects undefined in %s under the reject policy", (_label, value) => {
+		expect(
+			captureFailure(() =>
+				captureMcpConformanceValue(value, testLimits(), { undefinedPolicy: "reject" }),
+			),
+		).toBe(MCP_CONFORMANCE_CAPTURE_REJECTED);
 	});
 
 	it.each(hostileShapes)("refuses %s instead of walking it", (_label, build) => {
@@ -182,6 +216,19 @@ describe("bounded tool arguments", () => {
 	it("refuses hostile argument shapes", () => {
 		expect(
 			captureFailure(() => captureMcpToolArguments(new Proxy({ a: 1 }, {}), testLimits())),
+		).toBe(MCP_CONFORMANCE_CAPTURE_REJECTED);
+	});
+
+	it("makes undefined rejection available to tool-argument capture", () => {
+		expect(captureMcpToolArguments({ kept: 1, omitted: undefined }, testLimits())).toEqual({
+			kept: 1,
+		});
+		expect(
+			captureFailure(() =>
+				captureMcpToolArguments({ kept: 1, nested: [undefined] }, testLimits(), {
+					undefinedPolicy: "reject",
+				}),
+			),
 		).toBe(MCP_CONFORMANCE_CAPTURE_REJECTED);
 	});
 

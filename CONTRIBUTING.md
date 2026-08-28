@@ -94,7 +94,7 @@ always use the alpha dist-tag:
 
 ```sh
 pnpm run verify
-for PKG in mcp-core mcp-client mcp-manager mcp-conformance mcp-server mcp-apps mcp-observability mcp-auth mcp-gateway mcp; do
+for PKG in mcp-core mcp-client mcp-manager mcp-conformance mcp-ui-core mcp-server mcp-apps mcp-observability mcp-auth mcp-gateway mcp; do
   (cd "packages/$PKG" && pnpm publish --access public --tag alpha --provenance=false)
 done
 ```
@@ -104,7 +104,7 @@ npm's browser or two-factor flow locally; never add an npm token to this reposit
 package to the routine release workflow:
 
 ```sh
-for PKG in @nestm/mcp-core @nestm/mcp-client @nestm/mcp-manager @nestm/mcp-conformance @nestm/mcp-server @nestm/mcp-apps @nestm/mcp-auth @nestm/mcp-observability @nestm/mcp-gateway @nestm/mcp; do
+for PKG in @nestm/mcp-core @nestm/mcp-client @nestm/mcp-manager @nestm/mcp-conformance @nestm/mcp-ui-core @nestm/mcp-server @nestm/mcp-apps @nestm/mcp-auth @nestm/mcp-observability @nestm/mcp-gateway @nestm/mcp; do
   npm trust github "$PKG" \
     --file release.yml \
     --repository nestm-dev/mcp \

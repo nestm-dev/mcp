@@ -1,8 +1,10 @@
 import { Module } from "@nestjs/common";
-import type { McpMetricsSink } from "@nestm/mcp-observability";
-import { createMcpMetricsObserver } from "@nestm/mcp-observability";
+import {
+	McpFixedMemoryMetricsCollector,
+	createMcpMetricsObserver,
+	type McpMetricsSink,
+} from "@nestm/mcp-observability";
 
-import { InMemoryMcpMetricsService } from "./in-memory-mcp-metrics.service.ts";
 import { McpMetricsController, PrometheusMetricsController } from "./metrics.controller.ts";
 import { MCP_CONTROL_PLANE_METRICS_OBSERVER } from "./metrics.tokens.ts";
 
@@ -10,12 +12,12 @@ import { MCP_CONTROL_PLANE_METRICS_OBSERVER } from "./metrics.tokens.ts";
 	controllers: [McpMetricsController, PrometheusMetricsController],
 	providers: [
 		{
-			provide: InMemoryMcpMetricsService,
-			useFactory: () => new InMemoryMcpMetricsService(),
+			provide: McpFixedMemoryMetricsCollector,
+			useFactory: () => new McpFixedMemoryMetricsCollector(),
 		},
 		{
 			provide: MCP_CONTROL_PLANE_METRICS_OBSERVER,
-			inject: [InMemoryMcpMetricsService],
+			inject: [McpFixedMemoryMetricsCollector],
 			useFactory: (sink: McpMetricsSink) =>
 				createMcpMetricsObserver(sink, {
 					projection: {

@@ -8,6 +8,7 @@
 			"@nestm/mcp-client",
 			"@nestm/mcp-manager",
 			"@nestm/mcp-conformance",
+			"@nestm/mcp-ui-core",
 			"@nestm/mcp-server",
 			"@nestm/mcp-apps",
 			"@nestm/mcp-auth",

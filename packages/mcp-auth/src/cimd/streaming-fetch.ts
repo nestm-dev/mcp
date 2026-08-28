@@ -116,7 +116,7 @@ export interface McpAdmittedHttpEndpoint {
 export interface McpEndpointAdmissionPolicy extends McpGuardedHostPolicyOptions {
 	/** Injectable resolver for tests; defaults to `dns.lookup` with `all: true`. */
 	readonly lookup?: McpDocumentLookup;
-	/** Endpoints discovered with an exact query string may opt in; off by default. */
+	/** Permits query strings at admission and throughout the resulting lease; off by default. */
 	readonly allowQuery?: boolean;
 	readonly signal?: AbortSignal;
 }
@@ -135,6 +135,7 @@ export interface McpGuardedFetchLeaseOptions {
 
 interface AdmittedEndpointState {
 	readonly addresses: readonly McpResolvedAddress[];
+	readonly allowQuery: boolean;
 	readonly target: McpGuardedTarget;
 }
 
@@ -152,7 +153,8 @@ export async function admitMcpHttpEndpoint(
 	policy?: McpEndpointAdmissionPolicy,
 ): Promise<McpAdmittedHttpEndpoint> {
 	const endpoint = toRequestUrl(url);
-	assertGuardedUrlShape(endpoint, policy?.allowQuery === true);
+	const allowQuery = policy?.allowQuery === true;
+	assertGuardedUrlShape(endpoint, allowQuery);
 	const hostPolicy = createGuardedHostPolicy(policy);
 	const target = hostPolicy.admit(endpoint);
 	const addresses = await resolveAdmittedAddresses(
@@ -167,7 +169,7 @@ export async function admitMcpHttpEndpoint(
 		hostname: target.host,
 		secure: target.secure,
 	});
-	admittedEndpoints.set(admitted, Object.freeze({ addresses, target }));
+	admittedEndpoints.set(admitted, Object.freeze({ addresses, allowQuery, target }));
 	return admitted;
 }
 
@@ -210,7 +212,7 @@ export function openGuardedFetch(
 				throw new McpDocumentFetchError("network", "The guarded fetch lease is closed.");
 			}
 			const url = toRequestUrl(input);
-			assertGuardedUrlShape(url, true);
+			assertGuardedUrlShape(url, state.allowQuery);
 			if (url.origin !== admitted.origin) {
 				throw new McpDocumentFetchError(
 					"host-not-allowed",

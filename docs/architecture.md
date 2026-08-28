@@ -20,6 +20,7 @@ flowchart TB
     client["@nestm/mcp-client\nmulti-server client"]
     manager["@nestm/mcp-manager\ndynamic generation lifecycle"]
     conformance["@nestm/mcp-conformance\nplans + immutable reports"]
+    uiCore["@nestm/mcp-ui-core\nheadless browser interaction models"]
     server["@nestm/mcp-server\nper-request server"]
     apps["@nestm/mcp-apps\ndirect-server Apps extension"]
     gateway["@nestm/mcp-gateway\ncapability projection + policy"]
@@ -104,6 +105,20 @@ imports no Nest, MCP SDK, client, manager, or product application code.
 Connections, transports, credentials, fixture selection, durable history, baseline approval, and
 dashboard access policy remain host responsibilities. This separation lets the same plan run in
 different builds or containers without swapping library versions inside one process.
+
+### `@nestm/mcp-ui-core`
+
+The UI core is a browser-safe, headless interaction package. It translates a conservative subset
+of an MCP tool's advertised JSON Schema into immutable field nodes, parses matching web-standard
+`FormData`, falls back to field-local or root JSON where a schema cannot be represented faithfully,
+and provides bounded JSON formatting helpers. It has no React, editor, styling, networking,
+persistence, or product API dependency.
+
+This model is intentionally not a complete JSON Schema implementation and is never an
+authorization or validation boundary. Applications own rendering, accessibility, confirmations,
+and mutation state; servers must revalidate the advertised schema and policy immediately before
+dispatch. Renderer-specific code stays in the application, while the headless schema and form
+semantics can be reused without copying the reference console.
 
 ### `@nestm/mcp-server`
 

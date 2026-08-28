@@ -192,6 +192,9 @@ importers:
       '@codemirror/lint':
         specifier: 6.9.7
         version: 6.9.7
+      '@nestm/mcp-ui-core':
+        specifier: workspace:^
+        version: link:../../packages/mcp-ui-core
       '@tanstack/react-query':
         specifier: 5.102.8
         version: 5.102.8(react@19.2.8)
@@ -438,6 +441,8 @@ importers:
       '@nestm/mcp-core':
         specifier: workspace:^
         version: link:../mcp-core
+
+  packages/mcp-ui-core: {}
 
   tests/conformance:
     dependencies:

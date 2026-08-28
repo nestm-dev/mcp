@@ -19,6 +19,7 @@ export {
 	toMcpConformanceFingerprintHex,
 } from "./fingerprint.ts";
 export { captureMcpConformanceValue, captureMcpToolArguments } from "./capture.ts";
+export type { McpConformanceCaptureOptions, McpConformanceUndefinedPolicy } from "./capture.ts";
 export {
 	MCP_CONFORMANCE_CAPTURE_LIMIT_EXCEEDED,
 	MCP_CONFORMANCE_CAPTURE_REJECTED,

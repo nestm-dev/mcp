@@ -2,6 +2,20 @@ import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
+import {
+	MCP_CONFORMANCE_CAPTURE_REJECTED,
+	MCP_CONFORMANCE_DEFAULT_CAPTURE_LIMITS,
+	McpConformanceCaptureError,
+	captureMcpToolArguments,
+	type McpConformanceCaptureOptions,
+	type McpConformanceUndefinedPolicy,
+} from "../src/index.ts";
+
+const REJECT_UNDEFINED: McpConformanceUndefinedPolicy = "reject";
+const REJECT_UNDEFINED_OPTIONS = {
+	undefinedPolicy: REJECT_UNDEFINED,
+} satisfies McpConformanceCaptureOptions;
+
 describe("@nestm/mcp-conformance public boundary", () => {
 	it("keeps the kernel free of Nest, manager, client, SDK, and product imports", async () => {
 		const files = [
@@ -25,5 +39,20 @@ describe("@nestm/mcp-conformance public boundary", () => {
 		expect(joined).not.toMatch(/@nestm\/mcp-(?:client|core|manager|gateway)/u);
 		expect(joined).not.toMatch(/@modelcontextprotocol\//u);
 		expect(joined).not.toMatch(/apps\/control-plane/u);
+	});
+
+	it("exports the capture undefined policy through the package entrypoint", () => {
+		expect(() =>
+			captureMcpToolArguments(
+				{ nested: [undefined] },
+				MCP_CONFORMANCE_DEFAULT_CAPTURE_LIMITS,
+				REJECT_UNDEFINED_OPTIONS,
+			),
+		).toThrowError(
+			expect.objectContaining({
+				code: MCP_CONFORMANCE_CAPTURE_REJECTED,
+				name: McpConformanceCaptureError.name,
+			}),
+		);
 	});
 });

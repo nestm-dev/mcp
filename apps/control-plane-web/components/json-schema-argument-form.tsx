@@ -2,11 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { Braces, ListTree } from "lucide-react";
-
-import { JsonCodeEditor } from "@/components/json-code-editor";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   RAW_ARGUMENTS_ERROR_PATH,
   ROOT_ARGUMENTS_ERROR_PATH,
@@ -22,7 +17,12 @@ import {
   type ArgumentProperty,
   type ArgumentSchemaAnalysis,
   type ArgumentSchemaNode,
-} from "@/lib/json-schema-arguments";
+} from "@nestm/mcp-ui-core";
+
+import { JsonCodeEditor } from "@/components/json-code-editor";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
 export interface JsonSchemaArgumentFormProps {

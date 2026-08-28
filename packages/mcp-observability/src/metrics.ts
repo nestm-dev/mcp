@@ -144,3 +144,27 @@ function eventOutcome(event: McpLifecycleEvent): string | undefined {
 			return undefined;
 	}
 }
+
+export {
+	MCP_METRIC_OPERATION_KINDS,
+	MCP_METRIC_OUTCOMES,
+	MCP_METRIC_ROLES,
+	MCP_METRICS_BUCKET_COUNT,
+	MCP_METRICS_BUCKET_MS,
+	MCP_METRICS_HISTOGRAM_BOUNDS_MS,
+	MCP_METRICS_MAX_OPERATION_GROUPS,
+	McpFixedMemoryMetricsCollector,
+} from "./fixed-memory-metrics.ts";
+export type {
+	McpFixedMemoryMetricsCollectorOptions,
+	McpMetricAggregateSnapshot,
+	McpMetricBucketSnapshot,
+	McpMetricDurationSnapshot,
+	McpMetricOperationKind,
+	McpMetricOperationSnapshot,
+	McpMetricOutcome,
+	McpMetricOutcomesSnapshot,
+	McpMetricRole,
+	McpMetricsSnapshot,
+	McpMetricsWindowSnapshot,
+} from "./fixed-memory-metrics.ts";

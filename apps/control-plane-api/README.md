@@ -193,7 +193,9 @@ Metrics are intentionally process-local and reset whenever the API restarts. The
 snapshot keeps lifetime operation totals plus a fixed 15-minute window of 15-second buckets; the
 Prometheus endpoint exposes the same aggregate counters and fixed latency histogram. Both omit
 runtime targets, generation keys, connection IDs, endpoints, operation payloads, results, and raw
-errors. No browser-side history or database persistence is used.
+errors. Aggregation comes from the framework-neutral `@nestm/mcp-observability` fixed-memory
+collector; this app owns only its Nest module and HTTP exposure. No browser-side history or database
+persistence is used.
 
 The connection repository and discovered catalogs are also in memory for this validation host.
 Restarting the API clears them; durable product authority remains future Artifact Studio work.

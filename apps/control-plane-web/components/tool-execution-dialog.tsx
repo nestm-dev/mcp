@@ -1,6 +1,11 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  parseJsonSchemaArguments,
+  stringifyJsonDocument,
+  type ArgumentFieldErrors,
+} from "@nestm/mcp-ui-core";
 import { Play, ShieldAlert, TriangleAlert, Wrench } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
@@ -20,8 +25,6 @@ import {
 } from "@/components/ui/dialog";
 import { getApiErrorMessage, type Connection, type Tool } from "@/lib/control-plane-api";
 import { controlPlaneKeys, toolCallMutationOptions } from "@/lib/control-plane-queries";
-import { parseJsonSchemaArguments, type ArgumentFieldErrors } from "@/lib/json-schema-arguments";
-import { stringifyJsonDocument } from "@/lib/json-document";
 
 const ARGUMENT_FIELD_PREFIX = "tool-call-arguments";
 

@@ -34,6 +34,35 @@ The logger emits one immutable structured record per lifecycle event. Failures i
 
 Pass the composed observer to the `lifecycleObserver` option of a NestM runtime. Runtime lifecycle middleware treats observers as best-effort, so telemetry outages do not replace MCP results or errors.
 
+## Fixed-memory metrics
+
+For a process-local dashboard or a small deployment without a metrics SDK, the package includes a
+framework-neutral collector for the canonical batches emitted by `createMcpMetricsObserver`:
+
+```ts
+import {
+	McpFixedMemoryMetricsCollector,
+	createMcpMetricsObserver,
+} from "@nestm/mcp-observability/metrics";
+
+const metrics = new McpFixedMemoryMetricsCollector();
+const observer = createMcpMetricsObserver(metrics);
+
+const snapshot = metrics.snapshot();
+const prometheus = metrics.renderPrometheus();
+```
+
+`McpMetricsSnapshot` contains lifetime totals, bounded operation groups, and a fixed 15-minute
+window of 60 15-second buckets. Durations use exported fixed histogram bounds; `p50Ms` and `p95Ms`
+are bin estimates clamped by the observed maximum. Snapshots are deeply frozen and exclude targets,
+identifiers, inputs, outputs, and errors. When the operation-group bound is reached, later dimensions
+are folded into one `other` group per runtime role and operation kind.
+
+The collector accepts only exact, internally consistent default measurement batches. Partial,
+renamed, malformed, out-of-range, or mismatched batches are ignored atomically. Its memory use is
+fixed by `MCP_METRICS_BUCKET_COUNT`, `MCP_METRICS_HISTOGRAM_BOUNDS_MS`, and
+`MCP_METRICS_MAX_OPERATION_GROUPS`.
+
 ## Structural tracing
 
 ```ts

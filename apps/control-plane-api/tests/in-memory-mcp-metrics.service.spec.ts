@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { InMemoryMcpMetricsService } from "../src/metrics/in-memory-mcp-metrics.service.ts";
 import {
 	MCP_METRICS_BUCKET_COUNT,
 	MCP_METRICS_BUCKET_MS,
 	MCP_METRICS_MAX_OPERATION_GROUPS,
-} from "../src/metrics/metrics.types.ts";
+	McpFixedMemoryMetricsCollector,
+} from "@nestm/mcp-observability";
 
-type MeasurementBatch = Parameters<InMemoryMcpMetricsService["record"]>[0];
+type MeasurementBatch = Parameters<McpFixedMemoryMetricsCollector["record"]>[0];
 type Attributes = MeasurementBatch[number]["attributes"];
 
 const countSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -72,16 +72,16 @@ const snapshotSchema = z
 	})
 	.strict();
 
-describe("InMemoryMcpMetricsService", () => {
+describe("McpFixedMemoryMetricsCollector package integration", () => {
 	it("rejects clocks that cannot be represented by the dashboard date-time contract", () => {
-		expect(() => new InMemoryMcpMetricsService({ now: () => 253_402_300_800_000 })).toThrow(
+		expect(() => new McpFixedMemoryMetricsCollector({ now: () => 253_402_300_800_000 })).toThrow(
 			"valid Unix epoch timestamp",
 		);
 	});
 
 	it("returns a strict process snapshot with atomic outcomes and bounded duration summaries", () => {
 		let now = 1_700_000_000_000;
-		const metrics = new InMemoryMcpMetricsService({ now: () => now });
+		const metrics = new McpFixedMemoryMetricsCollector({ now: () => now });
 
 		metrics.record(
 			startedBatch(now + 1, "tools/call", "tools", {
@@ -136,7 +136,7 @@ describe("InMemoryMcpMetricsService", () => {
 
 	it("keeps lifetime totals while rotating a fixed 15-minute window", () => {
 		let now = 1_700_000_000_000;
-		const metrics = new InMemoryMcpMetricsService({ now: () => now });
+		const metrics = new McpFixedMemoryMetricsCollector({ now: () => now });
 		metrics.record(startedBatch(now + 1, "ping"));
 		metrics.record(terminalBatch(now + 2, "ping", "success", 1));
 
@@ -162,7 +162,7 @@ describe("InMemoryMcpMetricsService", () => {
 
 	it("does not let a delayed sample overwrite the current modulo ring slot", () => {
 		let now = 1_700_000_000_000;
-		const metrics = new InMemoryMcpMetricsService({ now: () => now });
+		const metrics = new McpFixedMemoryMetricsCollector({ now: () => now });
 		now += MCP_METRICS_BUCKET_MS * MCP_METRICS_BUCKET_COUNT;
 		metrics.record(startedBatch(now, "current-operation"));
 		expect(metrics.snapshot().window.buckets.reduce((sum, bucket) => sum + bucket.started, 0)).toBe(
@@ -180,7 +180,7 @@ describe("InMemoryMcpMetricsService", () => {
 
 	it("folds excess operation dimensions into a bounded other group", () => {
 		let now = 1_700_000_000_000;
-		const metrics = new InMemoryMcpMetricsService({ now: () => now });
+		const metrics = new McpFixedMemoryMetricsCollector({ now: () => now });
 		for (let index = 0; index < 110; index += 1) {
 			const timestamp = now + index * 2;
 			metrics.record(startedBatch(timestamp, `custom/op-${String(index)}`));
@@ -204,7 +204,7 @@ describe("InMemoryMcpMetricsService", () => {
 
 	it("keeps lossy dimensions separate from a legitimate operation named other", () => {
 		let now = 1_700_000_000_000;
-		const metrics = new InMemoryMcpMetricsService({ now: () => now });
+		const metrics = new McpFixedMemoryMetricsCollector({ now: () => now });
 		metrics.record(startedBatch(now, "other", "tools"));
 		metrics.record(terminalBatch(now + 1, "other", "success", 1, "tools"));
 		metrics.record(startedBatch(now + 2, "bad name", "tools"));
@@ -230,7 +230,7 @@ describe("InMemoryMcpMetricsService", () => {
 
 	it("ignores malformed or unpaired lifecycle batches", () => {
 		const now = 1_700_000_000_000;
-		const metrics = new InMemoryMcpMetricsService({ now: () => now });
+		const metrics = new McpFixedMemoryMetricsCollector({ now: () => now });
 		metrics.record(terminalBatch(now, "tools/call", "error", 10, "tools"));
 		metrics.record([
 			{
@@ -254,7 +254,7 @@ describe("InMemoryMcpMetricsService", () => {
 
 	it("renders aggregate Prometheus metrics with fixed labels only", () => {
 		let now = 1_700_000_000_000;
-		const metrics = new InMemoryMcpMetricsService({ now: () => now });
+		const metrics = new McpFixedMemoryMetricsCollector({ now: () => now });
 		metrics.record(
 			startedBatch(now, "tools/call", "tools", {
 				"mcp.operation.target": "managed-high-cardinality-secret",
@@ -263,7 +263,7 @@ describe("InMemoryMcpMetricsService", () => {
 		metrics.record(terminalBatch(now + 25, "tools/call", "success", 25, "tools"));
 		now += 30;
 
-		const rendered = metrics.prometheus();
+		const rendered = metrics.renderPrometheus();
 		expect(rendered).toContain("# TYPE nestm_mcp_operations_started_total counter");
 		expect(rendered).toContain("nestm_mcp_operations_started_total 1");
 		expect(rendered).toContain('nestm_mcp_operations_completed_total{outcome="success"} 1');
