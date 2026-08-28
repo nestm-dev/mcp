@@ -268,6 +268,47 @@ describe("MCP tool-result projection", () => {
 		expect(projectedObject.structuredContent).toEqual({ kept: true });
 	});
 
+	it("rebuilds fitted and truncated strings without retaining source slices", () => {
+		const hostileParent = `discard-${"p".repeat(limits.maxStructuredStringBytes * 64)}`;
+		const fittedText = hostileParent.slice(8, 8 + 2_048);
+		const fittedStructured = hostileParent.slice(16, 16 + 4_096);
+		const truncatedText = "t".repeat(limits.maxTextBytesPerBlock * 2);
+		const truncatedStructured = "s".repeat(limits.maxStructuredStringBytes * 2);
+		const slice = vi.spyOn(String.prototype, "slice").mockImplementation(() => {
+			throw new Error("a retained substring view is forbidden");
+		});
+		const fromCodePoint = vi.spyOn(String, "fromCodePoint");
+		const projected = projectMcpToolResult({
+			content: [
+				{ type: "text", text: fittedText },
+				{ type: "text", text: truncatedText },
+			],
+			structuredContent: {
+				fitted: fittedStructured,
+				truncated: truncatedStructured,
+			},
+		});
+		const copiedCodePoints = fromCodePoint.mock.calls.length;
+		fromCodePoint.mockRestore();
+		slice.mockRestore();
+
+		expect(copiedCodePoints).toBeGreaterThan(fittedText.length + fittedStructured.length);
+		expect(projected.truncated).toBe(true);
+		expect(projected.content).toHaveLength(2);
+		const first = projected.content[0];
+		const second = projected.content[1];
+		if (first?.kind !== "text" || second?.kind !== "text") {
+			throw new Error("expected projected text blocks");
+		}
+		expect(first).toEqual({ kind: "text", text: fittedText, truncated: false });
+		expect(Buffer.byteLength(second.text, "utf8")).toBe(limits.maxTextBytesPerBlock);
+		expect(second.truncated).toBe(true);
+		expect(projected.structuredContent).toEqual({
+			fitted: fittedStructured,
+			truncated: "s".repeat(limits.maxStructuredStringBytes),
+		});
+	});
+
 	it("bounds sparse arrays by retained nodes instead of walking their declared length", () => {
 		const sparse: unknown[] = [];
 		sparse.length = 1_000_000_000;

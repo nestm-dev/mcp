@@ -8,6 +8,7 @@ import {
 
 const POLLUTING_KEY = "__proto__";
 const CONTROL_CHARACTER = /\p{C}/u;
+const COPIED_STRING_CHUNK_CODE_UNITS = 1_024;
 
 export type McpProjectedToolResultContentBlock =
 	| Readonly<{ kind: "text"; text: string; truncated: boolean }>
@@ -375,7 +376,7 @@ function projectedDescriptor(
 			truncated = true;
 			break;
 		}
-		output += character;
+		output += copiedCodePoint(character);
 		if (output.length === maximum && inspectedCodeUnits < read.value.length) {
 			truncated = true;
 			break;
@@ -455,19 +456,36 @@ interface BoundedText {
 	readonly truncated: boolean;
 }
 
-/** Truncates without splitting a surrogate pair and without scanning the unretained suffix. */
+/**
+ * Copies bounded text without retaining the hostile source string, splitting
+ * a surrogate pair, or scanning the unretained suffix.
+ */
 function boundUtf8(value: string, maximumBytes: number): BoundedText {
 	let bytes = 0;
-	let end = 0;
+	let chunk = "";
+	const chunks: string[] = [];
 	for (const character of value) {
 		const size = utf8CodePointBytes(character);
 		if (bytes + size > maximumBytes) {
-			return Object.freeze({ bytes, truncated: true, value: value.slice(0, end) });
+			return Object.freeze({ bytes, truncated: true, value: finishCopiedString(chunks, chunk) });
 		}
 		bytes += size;
-		end += character.length;
+		chunk += copiedCodePoint(character);
+		if (chunk.length >= COPIED_STRING_CHUNK_CODE_UNITS) {
+			chunks.push(chunk);
+			chunk = "";
+		}
 	}
-	return Object.freeze({ bytes, truncated: false, value });
+	return Object.freeze({ bytes, truncated: false, value: finishCopiedString(chunks, chunk) });
+}
+
+function finishCopiedString(chunks: string[], tail: string): string {
+	if (tail.length > 0) chunks.push(tail);
+	return chunks.join("");
+}
+
+function copiedCodePoint(character: string): string {
+	return String.fromCodePoint(character.codePointAt(0) ?? 0xfffd);
 }
 
 function utf8Bytes(value: string, stopAfter = Number.POSITIVE_INFINITY): number {
