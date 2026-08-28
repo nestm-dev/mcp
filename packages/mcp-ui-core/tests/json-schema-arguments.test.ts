@@ -7,10 +7,12 @@ import {
 	analyzeArgumentSchema,
 	argumentIncludedName,
 	argumentModeName,
+	argumentPath,
 	argumentRawName,
 	argumentValueName,
 	createDefaultArguments,
 	parseJsonSchemaArguments,
+	type ArgumentSchemaNode,
 } from "../src/json-schema-arguments.js";
 
 const schema = {
@@ -100,6 +102,10 @@ function structuredData(): FormData {
 }
 
 describe("analyzeArgumentSchema", () => {
+	it("escapes JSON Pointer tokens used by generated field paths", () => {
+		expect(argumentPath(["options", "a/b", "til~de"])).toBe("/options/a~1b/til~0de");
+	});
+
 	it("models supported nested object, scalar, enum, and array inputs", () => {
 		const analysis = analyzeArgumentSchema(schema);
 
@@ -159,6 +165,45 @@ describe("analyzeArgumentSchema", () => {
 		});
 	});
 
+	it("degrades a child when its schema exceeds the supported nesting depth", () => {
+		let nested: unknown = { type: "string" };
+		for (let level = 0; level < 20; level += 1) {
+			nested = { type: "object", properties: { child: nested } };
+		}
+
+		const analysis = analyzeArgumentSchema(nested);
+		expect(analysis.supported).toBe(true);
+		if (!analysis.supported) return;
+
+		let node: ArgumentSchemaNode = analysis.root;
+		let depth = 0;
+		while (node.kind === "object" && node.properties.length > 0) {
+			node = node.properties[0]!.node;
+			depth += 1;
+		}
+
+		expect(node.kind).toBe("json");
+		if (node.kind !== "json") return;
+		expect(node.fallbackReason).toContain("nesting depth of 16");
+		expect(depth).toBeLessThanOrEqual(17);
+	});
+
+	it("degrades a circular child schema instead of recursing", () => {
+		const circular: {
+			properties: Record<string, unknown>;
+			type: "object";
+		} = { type: "object", properties: {} };
+		circular.properties["self"] = circular;
+
+		const analysis = analyzeArgumentSchema(circular);
+		expect(analysis.supported).toBe(true);
+		if (!analysis.supported) return;
+		expect(analysis.root.properties[0]?.node).toMatchObject({
+			kind: "json",
+			fallbackReason: expect.stringContaining("circular schema reference"),
+		});
+	});
+
 	it("collects nested defaults without inventing required values", () => {
 		expect(createDefaultArguments(schema)).toEqual({ limit: 5, exact: false });
 		expect(
@@ -173,6 +218,7 @@ describe("analyzeArgumentSchema", () => {
 				},
 			}),
 		).toEqual({ configuration: { mode: "safe" } });
+		expect(createDefaultArguments({ type: "string" })).toEqual({});
 	});
 });
 
@@ -371,6 +417,15 @@ describe("parseJsonSchemaArguments", () => {
 			mode: "raw",
 			errors: { [RAW_ARGUMENTS_ERROR_PATH]: "Tool arguments must be a JSON object." },
 		});
+
+		const blank = new FormData();
+		blank.set(argumentModeName(), "raw");
+		blank.set(argumentRawName(), "   ");
+		expect(parseJsonSchemaArguments(schema, blank)).toEqual({
+			success: false,
+			mode: "raw",
+			errors: { [RAW_ARGUMENTS_ERROR_PATH]: "Enter a JSON object." },
+		});
 	});
 
 	it("bounds raw and generated argument payloads", () => {
@@ -430,5 +485,19 @@ describe("parseJsonSchemaArguments", () => {
 		expect(Object.getPrototypeOf(result.data)).toBe(Object.prototype);
 		expect(Object.hasOwn(result.data, "__proto__")).toBe(true);
 		expect(result.data["__proto__"]).toBe("safe");
+	});
+
+	it("preserves a raw '__proto__' argument without polluting global prototypes", () => {
+		const data = new FormData();
+		data.set(argumentModeName(), "raw");
+		data.set(argumentRawName(), '{"__proto__":{"polluted":true}}');
+
+		const result = parseJsonSchemaArguments({ type: "object", properties: {} }, data);
+		expect(result.success).toBe(true);
+		if (!result.success) return;
+		expect(Object.getPrototypeOf(result.data)).toBe(Object.prototype);
+		expect(Object.hasOwn(result.data, "__proto__")).toBe(true);
+		expect(result.data["__proto__"]).toEqual({ polluted: true });
+		expect(Object.prototype).not.toHaveProperty("polluted");
 	});
 });
