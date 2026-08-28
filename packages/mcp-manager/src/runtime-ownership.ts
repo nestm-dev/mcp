@@ -157,9 +157,13 @@ export class McpRuntimeOwnership<GenerationKey> {
 	forceRetire(generationKey: GenerationKey): Promise<void> {
 		let entry = this.#generations.get(generationKey);
 		if (entry !== undefined && entry.phase !== "active") {
-			if (entry.phase === "retiring" && entry.forceFenceThrough === undefined) {
-				entry.forceFenceThrough = this.#nextOwnerSequence;
-			}
+			// Every force call is a new linearization point. An owner created after
+			// an earlier force but before this call must be fenced by this call even
+			// when both callers share the same unsettled retirement barrier.
+			entry.forceFenceThrough = Math.max(
+				entry.forceFenceThrough ?? 0,
+				this.#nextOwnerSequence,
+			);
 			return requireRetirementTask(entry);
 		}
 
@@ -169,7 +173,10 @@ export class McpRuntimeOwnership<GenerationKey> {
 			entry = this.#createGeneration(generationKey);
 		}
 
-		entry.forceFenceThrough = this.#nextOwnerSequence;
+		entry.forceFenceThrough = Math.max(
+			entry.forceFenceThrough ?? 0,
+			this.#nextOwnerSequence,
+		);
 		for (const owner of entry.owners) {
 			owner.dropRetainedGeneration(generationKey);
 			this.#referenceCount -= 1;

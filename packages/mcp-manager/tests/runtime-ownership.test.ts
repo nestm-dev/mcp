@@ -150,6 +150,33 @@ describe("McpRuntimeOwnership", () => {
 		expect(retire).toHaveBeenCalledTimes(2);
 	});
 
+	it("advances the terminal fence on every force call sharing one retirement barrier", async () => {
+		const retirement = deferred<void>();
+		const retire = vi.fn(async () => retirement.promise);
+		const ownership = createOwnership({ retire });
+		const original = ownership.createOwner();
+		await original.retain("generation");
+
+		const firstForce = ownership.forceRetire("generation");
+		const betweenForces = ownership.createOwner();
+		const pendingRetention = betweenForces.retain("generation");
+		await vi.waitFor(() => expect(retire).toHaveBeenCalledOnce());
+
+		const secondForce = ownership.forceRetire("generation");
+		expect(secondForce).toBe(firstForce);
+		retirement.resolve();
+		await Promise.all([firstForce, secondForce]);
+		await expect(pendingRetention).rejects.toMatchObject({
+			code: MCP_RUNTIME_GENERATION_FENCED,
+		});
+
+		const afterForces = ownership.createOwner();
+		await afterForces.retain("generation");
+		await Promise.all([original.release(), betweenForces.release()]);
+		await afterForces.release();
+		expect(retire).toHaveBeenCalledTimes(2);
+	});
+
 	it("does not overlap a forced replacement with its previous manager retirement", async () => {
 		const firstRetirement = deferred<void>();
 		const secondRetirement = deferred<void>();
