@@ -332,6 +332,32 @@ describe("admitMcpHttpEndpoint and openGuardedFetch", () => {
 		).resolves.toMatchObject({ url: `${origin()}/mcp?tenant=one` });
 	});
 
+	it("preserves the admission query policy for every request in the lease", async () => {
+		const queryless = await admitMcpHttpEndpoint(`${origin()}/mcp`, policy);
+		const querylessLease = openGuardedFetch(queryless, LIMITS);
+		try {
+			await expect(querylessLease.fetch(`${origin()}/mcp?tenant=one`)).rejects.toMatchObject({
+				reason: "insecure-url",
+			});
+		} finally {
+			await querylessLease.close();
+		}
+
+		const queryEnabled = await admitMcpHttpEndpoint(`${origin()}/mcp?tenant=one`, {
+			...policy,
+			allowQuery: true,
+		});
+		const queryEnabledLease = openGuardedFetch(queryEnabled, LIMITS);
+		try {
+			// allowQuery is a lease policy, not a pin to the admission URL's exact query.
+			await expect(
+				(await queryEnabledLease.fetch(`${origin()}/mcp?tenant=two`)).text(),
+			).resolves.toBe("pinned");
+		} finally {
+			await queryEnabledLease.close();
+		}
+	});
+
 	it("refuses an unadmitted look-alike record", () => {
 		expect(() =>
 			openGuardedFetch({ url: origin(), origin: origin(), hostname: HOST, secure: false }),

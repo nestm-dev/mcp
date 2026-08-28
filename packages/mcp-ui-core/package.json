@@ -1,0 +1,74 @@
+{
+	"name": "@nestm/mcp-ui-core",
+	"version": "0.1.0-alpha.8",
+	"description": "Browser-safe headless models for bounded MCP tool argument forms and JSON document presentation.",
+	"type": "module",
+	"sideEffects": false,
+	"author": "nestm",
+	"license": "BSD-3-Clause",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nestm-dev/mcp.git",
+		"directory": "packages/mcp-ui-core"
+	},
+	"homepage": "https://github.com/nestm-dev/mcp/tree/main/packages/mcp-ui-core#readme",
+	"bugs": {
+		"url": "https://github.com/nestm-dev/mcp/issues"
+	},
+	"keywords": [
+		"mcp",
+		"model-context-protocol",
+		"ui",
+		"json-schema",
+		"form",
+		"headless",
+		"browser",
+		"nestm"
+	],
+	"engines": {
+		"node": ">=22.13.0"
+	},
+	"types": "./dist/index.d.mts",
+	"files": [
+		"dist",
+		"README.md",
+		"CHANGELOG.md",
+		"LICENSE"
+	],
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs",
+			"default": "./dist/index.mjs"
+		},
+		"./json-document": {
+			"types": "./dist/json-document.d.mts",
+			"import": "./dist/json-document.mjs",
+			"default": "./dist/json-document.mjs"
+		},
+		"./json-schema-arguments": {
+			"types": "./dist/json-schema-arguments.d.mts",
+			"import": "./dist/json-schema-arguments.mjs",
+			"default": "./dist/json-schema-arguments.mjs"
+		},
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"build": "tsdown",
+		"build:watch": "tsdown --watch src",
+		"typecheck": "tsc -b",
+		"lint": "oxlint --type-aware .",
+		"lint:fix": "oxlint --type-aware --fix .",
+		"format": "prettier --write . --ignore-unknown",
+		"format:check": "prettier --check . --ignore-unknown",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage",
+		"verify:pack": "pnpm run build && publint --strict",
+		"prepack": "pnpm run build"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	}
+}

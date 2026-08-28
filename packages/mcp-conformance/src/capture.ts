@@ -19,9 +19,21 @@ export interface McpConformanceCapturedObject {
 	readonly [key: string]: McpConformanceCapturedValue;
 }
 
+export type McpConformanceUndefinedPolicy = "json" | "reject";
+
+export interface McpConformanceCaptureOptions {
+	/**
+	 * How to handle `undefined` below the captured root. `json` omits object
+	 * properties and converts array entries to `null`; `reject` refuses either
+	 * occurrence. Defaults to `json`.
+	 */
+	readonly undefinedPolicy?: McpConformanceUndefinedPolicy;
+}
+
 interface CaptureState {
 	readonly ancestors: Set<object>;
 	readonly limits: ResolvedMcpConformanceCaptureLimits;
+	readonly undefinedPolicy: McpConformanceUndefinedPolicy;
 	bytes: number;
 	properties: number;
 }
@@ -40,17 +52,24 @@ interface CaptureResult {
  * shape instead: proxies, accessor and non-enumerable properties, symbol keys,
  * sparse or subclassed arrays, exotic prototypes, cycles, and non-finite
  * numbers are rejected, and every string, property, array entry, nesting level,
- * and canonical byte is metered before the copy grows. `undefined` follows the
- * canonicalizer's own JSON semantics: object properties holding it are omitted
- * and array entries holding it become `null`, so
+ * and canonical byte is metered before the copy grows. By default, `undefined`
+ * follows the canonicalizer's own JSON semantics: object properties holding it
+ * are omitted and array entries holding it become `null`, so
  * `canonicalizeMcpConformanceValue(captureMcpConformanceValue(value, limits))`
- * always equals `canonicalizeMcpConformanceValue(value)`.
+ * always equals `canonicalizeMcpConformanceValue(value)`. Set
+ * `options.undefinedPolicy` to `reject` when omission or coercion would hide an
+ * invalid payload.
  */
 export function captureMcpConformanceValue(
 	value: unknown,
 	limits: McpConformanceCaptureLimits,
+	options?: McpConformanceCaptureOptions,
 ): unknown {
-	return captureBounded(value, resolveMcpConformanceCaptureLimits(limits)).value;
+	return captureBounded(
+		value,
+		resolveMcpConformanceCaptureLimits(limits),
+		resolveUndefinedPolicy(options),
+	).value;
 }
 
 /**
@@ -67,8 +86,13 @@ export function captureMcpConformanceValue(
 export function captureMcpToolArguments(
 	value: unknown,
 	limits: McpConformanceCaptureLimits,
+	options?: McpConformanceCaptureOptions,
 ): Readonly<Record<string, unknown>> {
-	const captured = captureBounded(value, resolveMcpConformanceCaptureLimits(limits));
+	const captured = captureBounded(
+		value,
+		resolveMcpConformanceCaptureLimits(limits),
+		resolveUndefinedPolicy(options),
+	);
 	if (!isCapturedObject(captured.value)) {
 		throw captureRejectedError("tool arguments must be a plain object");
 	}
@@ -87,10 +111,12 @@ export function captureMcpToolArguments(
 export function captureBounded(
 	value: unknown,
 	limits: ResolvedMcpConformanceCaptureLimits,
+	undefinedPolicy: McpConformanceUndefinedPolicy = "json",
 ): CaptureResult {
 	const state: CaptureState = {
 		ancestors: new Set<object>(),
 		limits,
+		undefinedPolicy,
 		bytes: 0,
 		properties: 0,
 	};
@@ -107,6 +133,9 @@ function captureValue(
 	depth: number,
 ): McpConformanceCapturedValue {
 	if (depth > state.limits.maxDepth) throw captureLimitError("depth");
+	if (value === undefined && state.undefinedPolicy === "reject") {
+		throw captureRejectedError("undefined values are rejected by the capture policy");
+	}
 	if (value === null) {
 		consumeBytes(state, 4);
 		return null;
@@ -160,7 +189,12 @@ function captureObject(
 		if (!descriptor.enumerable) {
 			throw captureRejectedError("non-enumerable properties are not JSON data");
 		}
-		if (descriptor.value === undefined) continue;
+		if (descriptor.value === undefined) {
+			if (state.undefinedPolicy === "reject") {
+				throw captureRejectedError("undefined values are rejected by the capture policy");
+			}
+			continue;
+		}
 		entries.push([key, descriptor.value]);
 	}
 	const output: Record<string, McpConformanceCapturedValue> = Object.create(null);
@@ -198,6 +232,9 @@ function captureArray(
 		}
 		if (!descriptor.enumerable) {
 			throw captureRejectedError("non-enumerable entries are not JSON data");
+		}
+		if (descriptor.value === undefined && state.undefinedPolicy === "reject") {
+			throw captureRejectedError("undefined values are rejected by the capture policy");
 		}
 		output.push(
 			descriptor.value === undefined
@@ -277,4 +314,14 @@ function consumeBytes(state: CaptureState, count: number): void {
 
 function compareCodeUnits(left: string, right: string): number {
 	return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function resolveUndefinedPolicy(
+	options: McpConformanceCaptureOptions | undefined,
+): McpConformanceUndefinedPolicy {
+	const policy = options?.undefinedPolicy ?? "json";
+	if (policy !== "json" && policy !== "reject") {
+		throw new TypeError('options.undefinedPolicy must be either "json" or "reject".');
+	}
+	return policy;
 }

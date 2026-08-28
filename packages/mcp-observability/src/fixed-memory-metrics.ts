@@ -1,29 +1,99 @@
-import type { McpMetricMeasurement, McpMetricsSink } from "@nestm/mcp-observability";
+import type { McpMetricMeasurement, McpMetricsSink } from "./metrics.ts";
 
-import {
-	MCP_METRICS_BUCKET_COUNT,
-	MCP_METRICS_BUCKET_MS,
-	MCP_METRICS_HISTOGRAM_BOUNDS_MS,
-	MCP_METRICS_MAX_OPERATION_GROUPS,
-	type McpMetricAggregateView,
-	type McpMetricBucketView,
-	type McpMetricDurationView,
-	type McpMetricOperationKind,
-	type McpMetricOperationView,
-	type McpMetricOutcome,
-	type McpMetricOutcomesView,
-	type McpMetricRole,
-	type McpMetricsSnapshotView,
-} from "./metrics.types.ts";
+/**
+ * Fixed-memory aggregation vocabulary for a process-local MCP metrics sink.
+ * The bucket geometry is a 15-minute rolling window, and the histogram bounds
+ * are the only duration resolution exposed by the snapshot.
+ */
+export const MCP_METRICS_BUCKET_MS = 15_000;
+export const MCP_METRICS_BUCKET_COUNT = 60;
+export const MCP_METRICS_MAX_OPERATION_GROUPS = 100;
+
+export const MCP_METRICS_HISTOGRAM_BOUNDS_MS = Object.freeze([
+	5,
+	10,
+	25,
+	50,
+	100,
+	250,
+	500,
+	1_000,
+	2_500,
+	5_000,
+	10_000,
+	30_000,
+	60_000,
+	120_000,
+	Number.POSITIVE_INFINITY,
+] as const);
+
+export const MCP_METRIC_ROLES = Object.freeze(["client", "server", "gateway"] as const);
+export const MCP_METRIC_OPERATION_KINDS = Object.freeze(["request", "notification"] as const);
+export const MCP_METRIC_OUTCOMES = Object.freeze(["success", "error", "cancelled"] as const);
+
+export type McpMetricRole = (typeof MCP_METRIC_ROLES)[number];
+export type McpMetricOperationKind = (typeof MCP_METRIC_OPERATION_KINDS)[number];
+export type McpMetricOutcome = (typeof MCP_METRIC_OUTCOMES)[number];
+
+export interface McpMetricOutcomesSnapshot {
+	readonly success: number;
+	readonly error: number;
+	readonly cancelled: number;
+}
+
+/** Percentiles are fixed-histogram estimates clamped by the observed maximum. */
+export interface McpMetricDurationSnapshot {
+	readonly count: number;
+	readonly averageMs: number | null;
+	readonly p50Ms: number | null;
+	readonly p95Ms: number | null;
+	readonly maxMs: number | null;
+}
+
+export interface McpMetricAggregateSnapshot {
+	readonly started: number;
+	readonly active: number;
+	readonly outcomes: McpMetricOutcomesSnapshot;
+	readonly duration: McpMetricDurationSnapshot;
+}
+
+export interface McpMetricBucketSnapshot {
+	readonly startedAt: string;
+	readonly started: number;
+	readonly outcomes: McpMetricOutcomesSnapshot;
+	readonly duration: McpMetricDurationSnapshot;
+}
+
+export interface McpMetricOperationSnapshot extends McpMetricAggregateSnapshot {
+	readonly role: McpMetricRole;
+	readonly name: string;
+	readonly kind: McpMetricOperationKind;
+	readonly capability?: string;
+}
+
+export interface McpMetricsWindowSnapshot {
+	readonly bucketSeconds: number;
+	readonly buckets: readonly McpMetricBucketSnapshot[];
+}
+
+export interface McpMetricsSnapshot {
+	readonly scope: "process";
+	readonly startedAt: string;
+	readonly capturedAt: string;
+	readonly totals: McpMetricAggregateSnapshot;
+	readonly window: McpMetricsWindowSnapshot;
+	readonly operations: readonly McpMetricOperationSnapshot[];
+	readonly operationsTruncated: boolean;
+}
 
 const MAX_SAFE_COUNT = Number.MAX_SAFE_INTEGER;
 const MAX_FOUR_DIGIT_YEAR_TIMESTAMP_MS = 253_402_300_799_999;
-const OVERFLOW_GROUP_RESERVATION = 6;
+const OVERFLOW_GROUP_RESERVATION = MCP_METRIC_ROLES.length * MCP_METRIC_OPERATION_KINDS.length;
 const MAX_CONCRETE_OPERATION_GROUPS = MCP_METRICS_MAX_OPERATION_GROUPS - OVERFLOW_GROUP_RESERVATION;
-const OPERATION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/;
-const CAPABILITY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/;
+const OPERATION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/u;
+const CAPABILITY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/u;
 
-interface InMemoryMcpMetricsOptions {
+export interface McpFixedMemoryMetricsCollectorOptions {
 	/** Unix epoch milliseconds. Injectable for deterministic tests. */
 	readonly now?: () => number;
 }
@@ -76,11 +146,14 @@ interface TerminalBatch extends StartedBatch {
 }
 
 /**
- * Process-local, fixed-memory sink for the measurements emitted by
+ * Process-local, fixed-memory sink for the canonical batches emitted by
  * `createMcpMetricsObserver`. It retains counters and fixed histogram bins,
  * never operation inputs, outputs, targets, request IDs, or raw errors.
+ *
+ * Malformed, partial, renamed, or dimension-inconsistent batches are ignored
+ * atomically. Recording is synchronous and never applies backpressure.
  */
-export class InMemoryMcpMetricsService implements McpMetricsSink {
+export class McpFixedMemoryMetricsCollector implements McpMetricsSink {
 	readonly #now: () => number;
 	readonly #startedAtMs: number;
 	readonly #totals = mutableAggregate();
@@ -94,7 +167,7 @@ export class InMemoryMcpMetricsService implements McpMetricsSink {
 	#concreteOperationGroupCount = 0;
 	#operationsTruncated = false;
 
-	constructor(options: InMemoryMcpMetricsOptions = {}) {
+	constructor(options: McpFixedMemoryMetricsCollectorOptions = {}) {
 		this.#now = options.now ?? Date.now;
 		this.#startedAtMs = readTimestamp(this.#now);
 	}
@@ -110,7 +183,7 @@ export class InMemoryMcpMetricsService implements McpMetricsSink {
 		if (terminal !== undefined) this.#recordTerminal(terminal);
 	}
 
-	snapshot(): McpMetricsSnapshotView {
+	snapshot(): McpMetricsSnapshot {
 		const capturedAtMs = Math.max(this.#startedAtMs, readTimestamp(this.#now));
 		const operations = [...this.#operations.values()]
 			.map(({ dimension, aggregate }) => operationView(dimension, aggregate))
@@ -129,7 +202,7 @@ export class InMemoryMcpMetricsService implements McpMetricsSink {
 		});
 	}
 
-	prometheus(): string {
+	renderPrometheus(): string {
 		const lines = [
 			"# HELP nestm_mcp_process_start_time_seconds Unix time when this in-memory MCP collector started.",
 			"# TYPE nestm_mcp_process_start_time_seconds gauge",
@@ -251,12 +324,12 @@ export class InMemoryMcpMetricsService implements McpMetricsSink {
 		return slot.aggregate;
 	}
 
-	#bucketViews(capturedAtMs: number): readonly McpMetricBucketView[] {
+	#bucketViews(capturedAtMs: number): readonly McpMetricBucketSnapshot[] {
 		const currentStartMs = bucketStart(capturedAtMs);
 		const retainedStartMs = currentStartMs - (MCP_METRICS_BUCKET_COUNT - 1) * MCP_METRICS_BUCKET_MS;
 		const processStartBucketMs = bucketStart(this.#startedAtMs);
 		const firstStartMs = Math.max(retainedStartMs, processStartBucketMs);
-		const buckets: McpMetricBucketView[] = [];
+		const buckets: McpMetricBucketSnapshot[] = [];
 		for (let startMs = firstStartMs; startMs <= currentStartMs; startMs += MCP_METRICS_BUCKET_MS) {
 			const slot = this.#buckets[bucketIndex(startMs)];
 			const aggregate = slot?.startMs === startMs ? slot.aggregate : mutableAggregate();
@@ -470,7 +543,7 @@ function recordDuration(duration: MutableDuration, valueMs: number): void {
 	duration.bins[resolvedIndex] = saturatingAdd(duration.bins[resolvedIndex] ?? 0, 1);
 }
 
-function aggregateView(aggregate: MutableAggregate): McpMetricAggregateView {
+function aggregateView(aggregate: MutableAggregate): McpMetricAggregateSnapshot {
 	return Object.freeze({
 		started: aggregate.started,
 		active: aggregate.active,
@@ -482,15 +555,15 @@ function aggregateView(aggregate: MutableAggregate): McpMetricAggregateView {
 function operationView(
 	dimension: OperationDimension,
 	aggregate: MutableAggregate,
-): McpMetricOperationView {
+): McpMetricOperationSnapshot {
 	return Object.freeze({ ...dimension, ...aggregateView(aggregate) });
 }
 
-function outcomesView(outcomes: MutableOutcomes): McpMetricOutcomesView {
+function outcomesView(outcomes: MutableOutcomes): McpMetricOutcomesSnapshot {
 	return Object.freeze({ ...outcomes });
 }
 
-function durationView(duration: MutableDuration): McpMetricDurationView {
+function durationView(duration: MutableDuration): McpMetricDurationSnapshot {
 	if (duration.count === 0) {
 		return Object.freeze({
 			count: 0,
@@ -521,7 +594,10 @@ function histogramPercentile(duration: MutableDuration, percentile: number): num
 	return duration.maxMs;
 }
 
-function compareOperations(left: McpMetricOperationView, right: McpMetricOperationView): number {
+function compareOperations(
+	left: McpMetricOperationSnapshot,
+	right: McpMetricOperationSnapshot,
+): number {
 	return (
 		left.role.localeCompare(right.role) ||
 		left.name.localeCompare(right.name) ||

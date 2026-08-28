@@ -11,6 +11,7 @@ export type {
 	McpClientIdMetadataResolverOptions,
 } from "./client-id-metadata.ts";
 export {
+	createGuardedHostPolicy,
 	createNodeDocumentFetcher,
 	createSsrfGuardedFetch,
 	isBlockedDocumentAddress,
@@ -25,7 +26,9 @@ export type {
 	McpDocumentLookup,
 	McpFetchedDocument,
 	McpFetchLike,
+	McpGuardedHostPolicy,
 	McpGuardedHostPolicyOptions,
+	McpGuardedTarget,
 	McpHttpDocumentFetcher,
 	McpNodeDocumentFetcherOptions,
 	McpResolvedAddress,

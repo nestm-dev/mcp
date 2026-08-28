@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { McpFixedMemoryMetricsCollector } from "@nestm/mcp-observability";
 
-import { InMemoryMcpMetricsService } from "../src/metrics/in-memory-mcp-metrics.service.ts";
 import {
 	McpMetricsController,
 	PROMETHEUS_CONTENT_TYPE,
@@ -9,7 +9,7 @@ import {
 
 describe("metrics controllers", () => {
 	it("delegate the strict JSON snapshot and plain Prometheus representation", () => {
-		const metrics = new InMemoryMcpMetricsService({ now: () => 1_700_000_000_000 });
+		const metrics = new McpFixedMemoryMetricsCollector({ now: () => 1_700_000_000_000 });
 		const jsonController = new McpMetricsController(metrics);
 		const prometheusController = new PrometheusMetricsController(metrics);
 

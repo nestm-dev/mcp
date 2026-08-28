@@ -2,14 +2,36 @@ import { createServer } from "node:http";
 import type { RequestListener, Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+	createGuardedHostPolicy,
 	createNodeDocumentFetcher,
 	createSsrfGuardedFetch,
 	isBlockedDocumentAddress,
 	isLoopbackAddress,
+	McpDocumentFetchError,
 	normalizeGuardedHost,
 	normalizeGuardedRequest,
 } from "../src/cimd/index.ts";
-import type { McpDocumentLookup } from "../src/cimd/index.ts";
+import type {
+	McpDocumentLookup,
+	McpGuardedHostPolicy,
+	McpGuardedTarget,
+} from "../src/cimd/index.ts";
+
+describe("createGuardedHostPolicy public CIMD export", () => {
+	it("synchronously applies the same host policy used by guarded transports", () => {
+		const policy: McpGuardedHostPolicy = createGuardedHostPolicy({
+			allowedHosts: ["API.EXAMPLE.COM."],
+		});
+		const target: McpGuardedTarget = policy.admit(new URL("https://api.example.com:8443/mcp"));
+
+		expect(target).toEqual({ host: "api.example.com", port: 8443, secure: true });
+		expect(policy.admitsAddress(target)("2606:4700:4700::1111")).toBe(true);
+		expect(policy.admitsAddress(target)("127.0.0.1")).toBe(false);
+		expect(() => policy.admit(new URL("https://other.example.com/mcp"))).toThrowError(
+			McpDocumentFetchError,
+		);
+	});
+});
 
 describe("normalizeGuardedRequest", () => {
 	it("preserves a Headers instance (Content-Type and Basic auth survive)", () => {

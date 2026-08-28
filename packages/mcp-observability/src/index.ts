@@ -19,13 +19,35 @@ export type {
 	McpStructuredLogSink,
 } from "./logging.ts";
 
-export { MCP_METRIC_NAMES, createMcpMetricsObserver } from "./metrics.ts";
+export {
+	MCP_METRIC_NAMES,
+	MCP_METRIC_OPERATION_KINDS,
+	MCP_METRIC_OUTCOMES,
+	MCP_METRIC_ROLES,
+	MCP_METRICS_BUCKET_COUNT,
+	MCP_METRICS_BUCKET_MS,
+	MCP_METRICS_HISTOGRAM_BOUNDS_MS,
+	MCP_METRICS_MAX_OPERATION_GROUPS,
+	McpFixedMemoryMetricsCollector,
+	createMcpMetricsObserver,
+} from "./metrics.ts";
 export type {
+	McpFixedMemoryMetricsCollectorOptions,
+	McpMetricAggregateSnapshot,
+	McpMetricBucketSnapshot,
+	McpMetricDurationSnapshot,
 	McpMetricKind,
 	McpMetricMeasurement,
 	McpMetricNames,
+	McpMetricOperationKind,
+	McpMetricOperationSnapshot,
+	McpMetricOutcome,
+	McpMetricOutcomesSnapshot,
+	McpMetricRole,
 	McpMetricsObserverOptions,
+	McpMetricsSnapshot,
 	McpMetricsSink,
+	McpMetricsWindowSnapshot,
 } from "./metrics.ts";
 
 export { createMcpTracingMiddleware } from "./tracing.ts";

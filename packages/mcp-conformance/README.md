@@ -99,8 +99,9 @@ nodes, 50,000 properties per object) and walks a hostile shape on the way there.
 `captureMcpConformanceValue` refuses the shape instead. It copies an untrusted value into
 deep-frozen, null-prototype JSON data under caller-supplied bounds, rejecting proxies, accessor and
 non-enumerable properties, symbol keys, sparse or subclassed arrays, exotic prototypes, cycles, and
-non-finite numbers. `undefined` follows the canonicalizer's own JSON semantics, so a captured value
-always canonicalizes exactly like its source.
+non-finite numbers. `undefined` follows the canonicalizer's own JSON semantics by default, so a
+captured value always canonicalizes exactly like its source. Pass `{ undefinedPolicy: "reject" }` as
+the third argument when omission from objects or conversion to `null` in arrays must be refused.
 
 ```ts
 import {
@@ -124,6 +125,9 @@ const limits = {
 
 const value = captureMcpConformanceValue(untrusted, limits);
 const arguments_ = captureMcpToolArguments(untrusted, limits);
+const strictArguments = captureMcpToolArguments(untrusted, limits, {
+	undefinedPolicy: "reject",
+});
 
 const digest = digestMcpRuntimeCatalog(catalog, {
 	domain: "acme/mcp/catalog/v1",
@@ -139,7 +143,9 @@ Bounds are resolved against `MCP_CONFORMANCE_DEFAULT_CAPTURE_LIMITS` and
 rejected value, its keys, or the limit that was reached.
 
 `captureMcpToolArguments` layers a `Readonly<Record<string, unknown>>` argument record on the same
-capture. Its byte accounting is predictive — every node spends exactly the canonical JSON bytes it
+capture. Both capture functions accept `McpConformanceCaptureOptions` as their third argument;
+`undefinedPolicy` is `"json"` by default and may be set to `"reject"` to refuse an `undefined` value
+at any depth. Byte accounting is predictive — every node spends exactly the canonical JSON bytes it
 will later serialize to, so an oversized payload is refused before it is materialized — and the
 prediction is then cross-checked against `canonicalizeMcpConformanceValue`'s exact output byte
 length. A fence that failed to hold rejects the arguments instead of passing them on.

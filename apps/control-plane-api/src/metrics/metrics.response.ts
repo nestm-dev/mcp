@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-
-import { MCP_METRICS_BUCKET_COUNT, MCP_METRICS_MAX_OPERATION_GROUPS } from "./metrics.types.ts";
+import {
+	MCP_METRICS_BUCKET_COUNT,
+	MCP_METRICS_MAX_OPERATION_GROUPS,
+} from "@nestm/mcp-observability";
 
 const maximumCount = Number.MAX_SAFE_INTEGER;
 
