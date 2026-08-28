@@ -118,6 +118,156 @@ describe("MCP tool-result projection", () => {
 		expect(Object.prototype).not.toHaveProperty("polluted");
 	});
 
+	it("drops a bounded key that truncates into __proto__", () => {
+		const structured = {
+			__proto__x: { polluted: true },
+		};
+
+		const projected = projectMcpToolResult(
+			{ content: [], structuredContent: structured },
+			{ maxStructuredStringBytes: Buffer.byteLength("__proto__", "utf8") },
+		);
+
+		expect(projected.truncated).toBe(true);
+		expect(projected.structuredContent).toEqual({});
+		expect(Object.getPrototypeOf(projected.structuredContent)).toBeNull();
+		const downstream = Object.assign({}, projected.structuredContent);
+		expect(Object.getPrototypeOf(downstream)).toBe(Object.prototype);
+		expect(Object.prototype).not.toHaveProperty("polluted");
+	});
+
+	it("reports malformed text and isError fields as incomplete", () => {
+		for (const text of [null, undefined, 42]) {
+			const projected = projectMcpToolResult({ content: [{ type: "text", text }] });
+			expect(projected.content).toEqual([{ kind: "text", text: "", truncated: true }]);
+			expect(projected.truncated).toBe(true);
+		}
+
+		for (const isError of [null, undefined, 0, "false"]) {
+			expect(projectMcpToolResult({ content: [], isError }).truncated).toBe(true);
+		}
+		expect(projectMcpToolResult({ content: [], isError: false }).truncated).toBe(false);
+
+		const normalizedType = projectMcpToolResult({
+			content: [{ type: "te\0xt", text: "kept" }],
+		});
+		expect(normalizedType.content).toEqual([{ kind: "text", text: "kept", truncated: false }]);
+		expect(normalizedType.truncated).toBe(true);
+		expect(projectMcpToolResult({ content: [], structuredContent: undefined }).truncated).toBe(
+			true,
+		);
+	});
+
+	it("does not split descriptor surrogate pairs or retain lone surrogates", () => {
+		const splitPair = projectMcpToolResult(
+			{ content: [{ type: "\u{1f600}" }] },
+			{ maxSummaryDescriptorLength: 1 },
+		);
+		const loneSurrogate = projectMcpToolResult({ content: [{ type: "te\ud800xt", text: "x" }] });
+
+		expect(splitPair.content).toEqual([{ kind: "summary", contentType: "unknown" }]);
+		expect(splitPair.truncated).toBe(true);
+		expect(loneSurrogate.content).toEqual([{ kind: "text", text: "x", truncated: false }]);
+		expect(loneSurrogate.truncated).toBe(true);
+		expect(JSON.stringify(loneSurrogate)).not.toContain("\\ud800");
+	});
+
+	it("reports ignored enumerable string properties on content and structured arrays", () => {
+		const extraContent = [{ type: "text", text: "ok" }];
+		Object.assign(extraContent, { extra: "ignored" });
+		const extraStructured: unknown[] & { extra?: string } = [1];
+		extraStructured.extra = "ignored";
+
+		expect(projectMcpToolResult({ content: extraContent }).truncated).toBe(true);
+		expect(
+			projectMcpToolResult({ content: [], structuredContent: extraStructured }).truncated,
+		).toBe(true);
+	});
+
+	it("ignores symbol and non-enumerable state outside the MCP JSON surface", () => {
+		const getter = vi.fn(() => "ignored");
+		const symbolContent = [{ type: "text", text: "ok" }];
+		Object.defineProperty(symbolContent, Symbol("ignored"), {
+			enumerable: true,
+			value: "ignored",
+		});
+		Object.defineProperty(symbolContent, "hidden", {
+			get: getter,
+		});
+		const symbolStructured = [1];
+		Object.defineProperty(symbolStructured, Symbol("ignored"), {
+			enumerable: true,
+			value: "ignored",
+		});
+		Object.defineProperty(symbolStructured, "hidden", {
+			get: getter,
+		});
+		const hiddenObject = {};
+		Object.defineProperty(hiddenObject, "hidden", {
+			get: getter,
+		});
+
+		const getOwnPropertySymbols = vi
+			.spyOn(Object, "getOwnPropertySymbols")
+			.mockImplementation(() => {
+				throw new Error("symbol-key materialization is forbidden");
+			});
+		const projectedContent = projectMcpToolResult({ content: symbolContent });
+		const projectedArray = projectMcpToolResult({
+			content: [],
+			structuredContent: symbolStructured,
+		});
+		const projectedObject = projectMcpToolResult({
+			content: [],
+			structuredContent: hiddenObject,
+		});
+		getOwnPropertySymbols.mockRestore();
+
+		expect(projectedContent.truncated).toBe(false);
+		expect(projectedArray.truncated).toBe(false);
+		expect(projectedObject.truncated).toBe(false);
+		expect(JSON.stringify({ projectedArray, projectedContent, projectedObject })).not.toContain(
+			"ignored",
+		);
+		expect(getter).not.toHaveBeenCalled();
+	});
+
+	it("does not use whole-source UTF-8, descriptor, or own-key materialization", () => {
+		const hugeText = "x".repeat(limits.maxTextBytesPerBlock * 1_024);
+		const encode = vi.spyOn(TextEncoder.prototype, "encode").mockImplementation(() => {
+			throw new Error("whole-source UTF-8 encoding is forbidden");
+		});
+		const projectedText = projectMcpToolResult({
+			content: [{ type: "text", text: hugeText }],
+		});
+		encode.mockRestore();
+
+		const hugeDescriptor = "image".repeat(limits.maxSummaryDescriptorLength * 8_192);
+		const replaceAll = vi.spyOn(String.prototype, "replaceAll").mockImplementation(() => {
+			throw new Error("whole-source descriptor replacement is forbidden");
+		});
+		const projectedDescriptor = projectMcpToolResult({
+			content: [{ type: hugeDescriptor }],
+		});
+		replaceAll.mockRestore();
+
+		const ownKeys = vi.spyOn(Reflect, "ownKeys").mockImplementation(() => {
+			throw new Error("whole-source own-key materialization is forbidden");
+		});
+		const projectedObject = projectMcpToolResult({
+			content: [],
+			structuredContent: { kept: true },
+		});
+		ownKeys.mockRestore();
+
+		const text = projectedText.content[0];
+		if (text?.kind !== "text") throw new Error("expected projected text");
+		expect(Buffer.byteLength(text.text, "utf8")).toBe(limits.maxTextBytesPerBlock);
+		expect(text.truncated).toBe(true);
+		expect(projectedDescriptor.content).toHaveLength(1);
+		expect(projectedObject.structuredContent).toEqual({ kept: true });
+	});
+
 	it("bounds sparse arrays by retained nodes instead of walking their declared length", () => {
 		const sparse: unknown[] = [];
 		sparse.length = 1_000_000_000;

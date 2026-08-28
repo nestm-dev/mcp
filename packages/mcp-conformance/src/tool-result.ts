@@ -7,7 +7,7 @@ import {
 } from "./limits.ts";
 
 const POLLUTING_KEY = "__proto__";
-const textEncoder = new TextEncoder();
+const CONTROL_CHARACTER = /\p{C}/u;
 
 export type McpProjectedToolResultContentBlock =
 	| Readonly<{ kind: "text"; text: string; truncated: boolean }>
@@ -38,6 +38,11 @@ interface StructuredProjection {
 	readonly value: unknown;
 }
 
+interface ProjectedDescriptor {
+	readonly truncated: boolean;
+	readonly value: string | undefined;
+}
+
 interface ProjectionState {
 	readonly ancestors: Set<object>;
 	readonly limits: Readonly<ResolvedMcpToolResultProjectionLimits>;
@@ -53,9 +58,11 @@ interface ProjectionState {
  * content blocks become descriptor-only summaries: data and URIs never cross
  * this boundary. Structured content is copied into frozen null-prototype JSON
  * containers under depth, node, string, and serialized-byte bounds. Proxies,
- * accessors, exotic prototypes, cycles, sparse entries, symbol keys,
- * non-finite numbers, and `__proto__` members are dropped and reported through
- * `truncated`; source getters are never invoked.
+ * enumerable accessors, exotic prototypes, cycles, sparse entries, non-finite
+ * numbers, and `__proto__` members are dropped and reported through
+ * `truncated`; source getters are never invoked. Symbol and non-enumerable
+ * state is outside MCP's enumerable string-key JSON surface and is never
+ * enumerated.
  */
 export function projectMcpToolResult(
 	result: unknown,
@@ -97,19 +104,20 @@ function projectResult(
 			continue;
 		}
 		const contentTypeRead = readOwnDataProperty(block.value, "type");
-		const contentType = projectedDescriptor(contentTypeRead, limits) ?? "unknown";
-		if (contentTypeRead.rejected) truncated = true;
+		const projectedContentType = projectedDescriptor(contentTypeRead, limits);
+		const contentType = projectedContentType.value ?? "unknown";
+		if (projectedContentType.truncated) truncated = true;
 		if (contentType === "text") {
 			const textRead = readOwnDataProperty(block.value, "text");
 			const source = typeof textRead.value === "string" ? textRead.value : "";
 			const textLimit = Math.min(limits.maxTextBytesPerBlock, textBudget);
 			const bounded = boundUtf8(source, textLimit);
-			textBudget -= utf8Bytes(bounded.value);
+			textBudget -= bounded.bytes;
 			const lost =
 				bounded.truncated ||
 				textRead.rejected ||
 				!textRead.present ||
-				(typeof textRead.value !== "string" && textRead.value != null);
+				typeof textRead.value !== "string";
 			if (lost) truncated = true;
 			content.push(
 				Object.freeze({
@@ -122,7 +130,7 @@ function projectResult(
 		}
 
 		const mediaTypeRead = readOwnDataProperty(block.value, "mimeType");
-		const mediaType = projectedDescriptor(mediaTypeRead, limits);
+		const mediaType = projectedDescriptor(mediaTypeRead, limits).value;
 		const bytes = declaredByteLength(block.value);
 		truncated = true;
 		content.push(
@@ -139,7 +147,8 @@ function projectResult(
 	const structured = projectStructuredContent(structuredRead, limits);
 	truncated ||= structured.truncated;
 	const isErrorRead = readOwnDataProperty(result, "isError");
-	truncated ||= isErrorRead.rejected;
+	truncated ||=
+		isErrorRead.rejected || (isErrorRead.present && typeof isErrorRead.value !== "boolean");
 	return Object.freeze({
 		content: Object.freeze(content),
 		isError: isErrorRead.value === true,
@@ -174,6 +183,7 @@ function captureBlockArray(
 		}
 		values.push(Object.freeze({ value: descriptor.value, rejected: false }));
 	}
+	if (!truncated && hasRejectedArrayProperties(read.value, length)) truncated = true;
 	return Object.freeze({ values: Object.freeze(values), truncated });
 }
 
@@ -181,14 +191,14 @@ function projectStructuredContent(
 	read: PropertyRead,
 	limits: Readonly<ResolvedMcpToolResultProjectionLimits>,
 ): StructuredProjection {
-	if (!read.present || read.value === undefined) {
+	if (!read.present) {
 		return Object.freeze({
 			present: false,
 			truncated: read.rejected,
 			value: undefined,
 		});
 	}
-	if (read.rejected) {
+	if (read.rejected || read.value === undefined) {
 		return Object.freeze({ present: false, truncated: true, value: undefined });
 	}
 	const state: ProjectionState = {
@@ -200,7 +210,9 @@ function projectStructuredContent(
 	};
 	const value = projectStructuredValue(read.value, state, 0);
 	const serialized = JSON.stringify(value) ?? "null";
-	if (utf8Bytes(serialized) > limits.maxStructuredSerializedBytes) {
+	if (
+		utf8Bytes(serialized, limits.maxStructuredSerializedBytes) > limits.maxStructuredSerializedBytes
+	) {
 		return Object.freeze({ present: false, truncated: true, value: undefined });
 	}
 	return Object.freeze({ present: true, truncated: state.truncated, value });
@@ -280,6 +292,7 @@ function projectStructuredArray(
 		}
 		output.push(projectStructuredValue(descriptor.value, state, depth + 1));
 	}
+	if (!state.truncated && hasRejectedArrayProperties(value, length)) state.truncated = true;
 	return Object.freeze(output);
 }
 
@@ -289,12 +302,12 @@ function projectStructuredObject(
 	depth: number,
 ): Readonly<Record<string, unknown>> {
 	const output: Record<string, unknown> = Object.create(null);
-	for (const key of Reflect.ownKeys(value)) {
+	for (const key in value) {
 		if (state.nodes >= state.limits.maxStructuredNodes) {
 			state.truncated = true;
 			break;
 		}
-		if (typeof key !== "string" || key === POLLUTING_KEY) {
+		if (!Object.hasOwn(value, key) || key === POLLUTING_KEY) {
 			state.nodes += 1;
 			state.truncated = true;
 			continue;
@@ -312,7 +325,7 @@ function projectStructuredObject(
 		}
 		const boundedKey = boundStructuredString(key, state);
 		if (boundedKey.truncated) state.truncated = true;
-		if (Object.hasOwn(output, boundedKey.value)) {
+		if (boundedKey.value === POLLUTING_KEY || Object.hasOwn(output, boundedKey.value)) {
 			state.nodes += 1;
 			state.truncated = true;
 			continue;
@@ -325,20 +338,49 @@ function projectStructuredObject(
 function boundStructuredString(value: string, state: ProjectionState): BoundedText {
 	const remaining = Math.max(0, state.limits.maxStructuredSerializedBytes - state.rawStringBytes);
 	const bounded = boundUtf8(value, Math.min(state.limits.maxStructuredStringBytes, remaining));
-	state.rawStringBytes += utf8Bytes(bounded.value);
+	state.rawStringBytes += bounded.bytes;
 	return bounded;
 }
 
 function projectedDescriptor(
 	read: PropertyRead,
 	limits: Readonly<ResolvedMcpToolResultProjectionLimits>,
-): string | undefined {
+): ProjectedDescriptor {
 	if (read.rejected || typeof read.value !== "string" || read.value.length === 0) {
-		return undefined;
+		return Object.freeze({
+			truncated: read.rejected || (read.present && typeof read.value !== "string"),
+			value: undefined,
+		});
 	}
-	const sanitized = read.value.replaceAll(/\p{C}/gu, "");
-	if (sanitized.length === 0) return undefined;
-	return sanitized.slice(0, limits.maxSummaryDescriptorLength);
+	const maximum = limits.maxSummaryDescriptorLength;
+	// Filtering hostile control-only prefixes is useful, but it must not turn a
+	// small output ceiling into a full-source scan.
+	const maximumInspectedCodeUnits = maximum * 4;
+	let inspectedCodeUnits = 0;
+	let output = "";
+	let truncated = false;
+	for (const character of read.value) {
+		if (inspectedCodeUnits + character.length > maximumInspectedCodeUnits) {
+			truncated = true;
+			break;
+		}
+		inspectedCodeUnits += character.length;
+		if (CONTROL_CHARACTER.test(character)) {
+			truncated = true;
+			continue;
+		}
+		if (output.length + character.length > maximum) {
+			truncated = true;
+			break;
+		}
+		output += character;
+		if (output.length === maximum && inspectedCodeUnits < read.value.length) {
+			truncated = true;
+			break;
+		}
+	}
+	if (inspectedCodeUnits < read.value.length) truncated = true;
+	return Object.freeze({ truncated, value: output.length === 0 ? undefined : output });
 }
 
 /** Derives the declared decoded size without materializing binary data. */
@@ -392,27 +434,53 @@ function arrayLength(value: readonly unknown[]): number | undefined {
 		: undefined;
 }
 
+function hasRejectedArrayProperties(value: object, length: number): boolean {
+	for (const key in value) {
+		if (!Object.hasOwn(value, key) || !isCanonicalArrayIndex(key, length)) return true;
+	}
+	return false;
+}
+
+function isCanonicalArrayIndex(key: string, length: number): boolean {
+	if (key.length === 0 || key.length > 10) return false;
+	const index = Number(key);
+	return Number.isInteger(index) && index >= 0 && index < length && String(index) === key;
+}
+
 interface BoundedText {
+	readonly bytes: number;
 	readonly value: string;
 	readonly truncated: boolean;
 }
 
-/** Truncates on a code-point boundary, so no lone surrogate is emitted. */
+/** Truncates without splitting a surrogate pair and without scanning the unretained suffix. */
 function boundUtf8(value: string, maximumBytes: number): BoundedText {
-	if (utf8Bytes(value) <= maximumBytes) {
-		return Object.freeze({ truncated: false, value });
-	}
 	let bytes = 0;
 	let end = 0;
 	for (const character of value) {
-		const size = utf8Bytes(character);
-		if (bytes + size > maximumBytes) break;
+		const size = utf8CodePointBytes(character);
+		if (bytes + size > maximumBytes) {
+			return Object.freeze({ bytes, truncated: true, value: value.slice(0, end) });
+		}
 		bytes += size;
 		end += character.length;
 	}
-	return Object.freeze({ truncated: true, value: value.slice(0, end) });
+	return Object.freeze({ bytes, truncated: false, value });
 }
 
-function utf8Bytes(value: string): number {
-	return textEncoder.encode(value).byteLength;
+function utf8Bytes(value: string, stopAfter = Number.POSITIVE_INFINITY): number {
+	let bytes = 0;
+	for (const character of value) {
+		bytes += utf8CodePointBytes(character);
+		if (bytes > stopAfter) break;
+	}
+	return bytes;
+}
+
+function utf8CodePointBytes(character: string): number {
+	const codePoint = character.codePointAt(0);
+	if (codePoint === undefined || codePoint <= 0x7f) return 1;
+	if (codePoint <= 0x7ff) return 2;
+	if (codePoint <= 0xffff) return 3;
+	return 4;
 }
