@@ -3,14 +3,19 @@ export {
 	MCP_CONFORMANCE_DEFAULT_LIMITS,
 	MCP_CONFORMANCE_HARD_CAPTURE_LIMITS,
 	MCP_CONFORMANCE_HARD_LIMITS,
+	MCP_TOOL_RESULT_PROJECTION_DEFAULT_LIMITS,
+	MCP_TOOL_RESULT_PROJECTION_HARD_LIMITS,
 	resolveMcpConformanceCaptureLimits,
 	resolveMcpConformanceLimits,
+	resolveMcpToolResultProjectionLimits,
 } from "./limits.ts";
 export type {
 	McpConformanceCaptureLimits,
 	McpConformanceLimits,
+	McpToolResultProjectionLimits,
 	ResolvedMcpConformanceCaptureLimits,
 	ResolvedMcpConformanceLimits,
+	ResolvedMcpToolResultProjectionLimits,
 } from "./limits.ts";
 
 export {
@@ -38,6 +43,8 @@ export type {
 	McpConformanceCatalogTool,
 	McpConformanceToolDigest,
 } from "./catalog.ts";
+export { degradedMcpToolResult, projectMcpToolResult } from "./tool-result.ts";
+export type { McpProjectedToolResult, McpProjectedToolResultContentBlock } from "./tool-result.ts";
 export {
 	McpConformanceDescriptorSchema,
 	McpConformanceReportSchema,

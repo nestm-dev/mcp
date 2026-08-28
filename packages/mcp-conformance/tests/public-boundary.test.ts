@@ -7,6 +7,7 @@ import {
 	MCP_CONFORMANCE_DEFAULT_CAPTURE_LIMITS,
 	McpConformanceCaptureError,
 	captureMcpToolArguments,
+	projectMcpToolResult,
 	type McpConformanceCaptureOptions,
 	type McpConformanceUndefinedPolicy,
 } from "../src/index.ts";
@@ -29,6 +30,7 @@ describe("@nestm/mcp-conformance public boundary", () => {
 			"plan.ts",
 			"report.ts",
 			"runner.ts",
+			"tool-result.ts",
 			"types.ts",
 		];
 		const sources = await Promise.all(
@@ -54,5 +56,13 @@ describe("@nestm/mcp-conformance public boundary", () => {
 				name: McpConformanceCaptureError.name,
 			}),
 		);
+	});
+
+	it("exports the bounded tool-result projection through the package entrypoint", () => {
+		expect(projectMcpToolResult({ content: [{ type: "text", text: "ok" }] })).toEqual({
+			content: [{ kind: "text", text: "ok", truncated: false }],
+			isError: false,
+			truncated: false,
+		});
 	});
 });

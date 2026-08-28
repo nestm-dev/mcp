@@ -15,6 +15,24 @@ export type { McpRuntimeManagerErrorCode, McpRuntimeStateErrorCode } from "./err
 export { MCP_RUNTIME_MANAGER_DEFAULTS, McpRuntimeManager } from "./runtime-manager.ts";
 
 export {
+	MCP_RUNTIME_GENERATION_FENCED,
+	MCP_RUNTIME_OWNER_RELEASED,
+	MCP_RUNTIME_OWNERSHIP_CAPACITY_EXCEEDED,
+	MCP_RUNTIME_OWNERSHIP_DEFAULTS,
+	MCP_RUNTIME_OWNERSHIP_INVALID_OPTIONS,
+	MCP_RUNTIME_RETIREMENT_FAILED,
+	McpRuntimeOwnership,
+	McpRuntimeOwnershipError,
+} from "./runtime-ownership.ts";
+export type {
+	McpRuntimeOwner,
+	McpRuntimeOwnershipErrorCode,
+	McpRuntimeOwnershipOptions,
+	McpRuntimeOwnershipSnapshot,
+	McpRuntimeRetirementPort,
+} from "./runtime-ownership.ts";
+
+export {
 	MCP_RUNTIME_PHASES,
 	MCP_RUNTIME_PROTOCOL_ERAS,
 	mcpRuntimeCapabilitiesSnapshotSchema,

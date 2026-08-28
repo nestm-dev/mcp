@@ -29,5 +29,6 @@ describe("stringifyJsonDocument", () => {
 
 		expect(stringifyJsonDocument(circular, "unavailable")).toBe("unavailable");
 		expect(stringifyJsonDocument(undefined, "unavailable")).toBe("unavailable");
+		expect(stringifyJsonDocument(1n, "unavailable")).toBe("unavailable");
 	});
 });
