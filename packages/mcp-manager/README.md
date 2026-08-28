@@ -37,6 +37,51 @@ const catalog = await manager.refreshCatalog("opaque-generation-capability");
 await manager.close();
 ```
 
+## Shared runtime ownership
+
+Use `McpRuntimeOwnership` when several host projections can retain the same opaque manager
+generation. It composes the manager's existing `retire()` port without taking over product records,
+key construction, admission, tenancy, or persistence:
+
+```ts
+import { McpRuntimeManager, McpRuntimeOwnership } from "@nestm/mcp-manager";
+
+const manager = new McpRuntimeManager({
+	generationResolver,
+	maxConnections: 16,
+});
+const ownership = new McpRuntimeOwnership({
+	manager,
+	maxOwners: 1_000,
+	maxGenerations: 1_000,
+	maxReferences: 10_000,
+});
+
+const workspaceProjection = ownership.createOwner();
+await workspaceProjection.retain("opaque-generation-capability");
+
+// The final cooperative owner release retires the manager generation.
+await workspaceProjection.release();
+```
+
+An owner-to-generation retention is idempotent. Concurrent calls for the same owner and key share
+one task. If an older retirement is unsettled, `retain()` waits for that barrier and rechecks the
+owner and generation before it acquires, so consumers do not implement a retry race. Releasing an
+owner is terminal and repeated calls share one settlement. If several final retirements fail,
+`release()` rejects with an `AggregateError` containing only fixed, generation-key-free ownership
+errors; failed cleanup remains fenced and charged against `maxGenerations`.
+
+`forceRetire(key)` immediately revokes every current reference and fences every owner that existed
+when the force began. An owner created after that boundary may reuse an equal `Map` key only after
+the manager retirement fully settles; old retirement work can therefore never overlap its
+replacement. A manager-closed result counts as settled because manager shutdown already owns every
+runtime generation.
+
+Reversible desired-state transitions stay separate: call `manager.setOffline(key)` without
+releasing the owner, then call `manager.ensureOnline(key)` when the host wants that retained
+generation online again. Ownership finalization and `forceRetire()` call only `manager.retire()`.
+`snapshot()` reports bounded aggregate counts and never emits generation keys or manager failures.
+
 `subscribe(listener)` emits key-free, bounded state transitions. Pass an optional
 `McpLifecycleObserver` as `observer` to observe operations performed by each managed
 `McpClientRuntime`. Runtime server names are random and never derived from the generation key;

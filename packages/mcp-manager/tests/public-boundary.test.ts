@@ -15,6 +15,7 @@ const SOURCE_FILES = [
 	"index.ts",
 	"runtime-factory.ts",
 	"runtime-manager.ts",
+	"runtime-ownership.ts",
 	"runtime-snapshots.ts",
 	"runtime-state.ts",
 	"types.ts",
@@ -29,6 +30,15 @@ describe("@nestm/mcp-manager public boundary", () => {
 		expect(joined).not.toMatch(/@nestjs\//);
 		expect(joined).not.toMatch(/apps\/control-plane-api/);
 		expect(joined).not.toMatch(/ConnectionRepository|EndpointAdmission|ControlPlaneError/);
+	});
+
+	it("keeps reversible offline intent outside cooperative ownership", async () => {
+		const ownership = await readFile(
+			new URL("../src/runtime-ownership.ts", import.meta.url),
+			"utf8",
+		);
+
+		expect(ownership).not.toMatch(/\.setOffline\s*\(/);
 	});
 
 	it("publishes frozen runtime tuples that mirror every declared union member", async () => {
