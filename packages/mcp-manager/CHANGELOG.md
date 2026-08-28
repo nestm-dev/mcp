@@ -1,5 +1,20 @@
 # @nestm/mcp-manager
 
+## 0.1.0-alpha.10
+
+### Minor Changes
+
+- cb14f77: Add `McpRuntimeOwnership`, a framework-neutral bounded coordinator for shared opaque runtime
+  generations. Cooperative final release, force-retirement fencing, manager-retirement barriers,
+  idempotent owner settlement, manager-close handling, aggregate cleanup failures, and key-free
+  snapshots and errors let hosts delete projection-ownership bookkeeping without moving durable state
+  or product policy into the SDK.
+
+### Patch Changes
+
+- @nestm/mcp-client@0.1.0-alpha.10
+  - @nestm/mcp-core@0.1.0-alpha.10
+
 ## 0.1.0-alpha.9
 
 ### Patch Changes

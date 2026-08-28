@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/mcp-gateway",
-	"version": "0.1.0-alpha.9",
+	"version": "0.1.0-alpha.10",
 	"description": "Policy-enforced MCP v2 gateway composition for aggregating upstream MCP clients.",
 	"type": "module",
 	"sideEffects": false,
