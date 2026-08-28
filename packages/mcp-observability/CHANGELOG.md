@@ -1,5 +1,18 @@
 # @nestm/mcp-observability
 
+## 0.1.0-alpha.9
+
+### Minor Changes
+
+- 3be9f50: Add `McpFixedMemoryMetricsCollector`, a framework-neutral synchronous sink for the canonical batches
+  emitted by `createMcpMetricsObserver`. It exposes immutable process snapshots, a fixed rolling
+  window and duration histogram, bounded operation grouping, strict atomic batch parsing, and a
+  fixed-label Prometheus representation without retaining identifiers, payloads, targets, or errors.
+
+### Patch Changes
+
+- @nestm/mcp-core@0.1.0-alpha.9
+
 ## 0.1.0-alpha.8
 
 ### Patch Changes

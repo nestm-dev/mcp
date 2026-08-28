@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/mcp-ui-core",
-	"version": "0.1.0-alpha.8",
+	"version": "0.1.0-alpha.9",
 	"description": "Browser-safe headless models for bounded MCP tool argument forms and JSON document presentation.",
 	"type": "module",
 	"sideEffects": false,

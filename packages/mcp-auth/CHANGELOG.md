@@ -1,5 +1,19 @@
 # @nestm/mcp-auth
 
+## 0.1.0-alpha.9
+
+### Minor Changes
+
+- 3be9f50: Expose the synchronous guarded host policy from `@nestm/mcp-auth/cimd` so hosts can apply the SDK's
+  canonical scheme, host-allowlist, and address rules before performing durable work. Guarded fetch
+  leases now preserve the admission-time `allowQuery` policy instead of permitting query strings for
+  every admitted endpoint.
+
+### Patch Changes
+
+- @nestm/mcp-core@0.1.0-alpha.9
+  - @nestm/mcp-server@0.1.0-alpha.9
+
 ## 0.1.0-alpha.8
 
 ### Patch Changes
