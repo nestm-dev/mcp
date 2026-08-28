@@ -30,7 +30,6 @@
 			"@nestm/mcp-client/oauth": ["./packages/mcp-client/src/oauth/index.ts"],
 			"@nestm/mcp-manager": ["./packages/mcp-manager/src/index.ts"],
 			"@nestm/mcp-conformance": ["./packages/mcp-conformance/src/index.ts"],
-			"@nestm/mcp-ui-core": ["./packages/mcp-ui-core/src/index.ts"],
 			"@nestm/mcp-server": ["./packages/mcp-server/src/index.ts"],
 			"@nestm/mcp-server/auth": ["./packages/mcp-server/src/auth/index.ts"],
 			"@nestm/mcp-server/security": ["./packages/mcp-server/src/security/index.ts"],

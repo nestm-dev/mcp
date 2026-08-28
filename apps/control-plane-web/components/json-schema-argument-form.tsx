@@ -17,7 +17,7 @@ import {
   type ArgumentProperty,
   type ArgumentSchemaAnalysis,
   type ArgumentSchemaNode,
-} from "@nestm/mcp-ui-core";
+} from "@/lib/json-schema-arguments";
 
 import { JsonCodeEditor } from "@/components/json-code-editor";
 import { Button } from "@/components/ui/button";

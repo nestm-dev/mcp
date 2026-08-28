@@ -1,11 +1,11 @@
 "use client";
 
 import { Braces, WandSparkles } from "lucide-react";
-import { formatJsonDocument } from "@nestm/mcp-ui-core";
 import { lazy, Suspense, useCallback, useId, useState, useSyncExternalStore } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { formatJsonDocument } from "@/lib/json-document";
 import { cn } from "@/lib/utils";
 
 const LazyCodeMirrorJsonSurface = lazy(async () => {
