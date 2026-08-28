@@ -1,7 +1,6 @@
 "use client";
 
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { stringifyJsonDocument } from "@nestm/mcp-ui-core";
 import {
   Braces,
   Clock3,
@@ -39,6 +38,7 @@ import {
   type Tool,
 } from "@/lib/control-plane-api";
 import { controlPlaneKeys } from "@/lib/control-plane-queries";
+import { stringifyJsonDocument } from "@/lib/json-document";
 
 const utcDateTime = new Intl.DateTimeFormat("en", {
   dateStyle: "medium",

@@ -15,7 +15,6 @@
     "jsx": "react-jsx",
     "incremental": true,
     "paths": {
-      "@nestm/mcp-ui-core": ["../../packages/mcp-ui-core/src/index.ts"],
       "@/*": ["./*"]
     }
   },

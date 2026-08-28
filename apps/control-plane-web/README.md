@@ -51,18 +51,16 @@ JSON Schema; MCP discovery projects that contract into a portable `inputSchema`,
 browser receives. Standard Schema itself is a validation interface and does not expose enough
 portable shape information to generate form controls safely.
 
-The app consumes the browser-safe headless model from `@nestm/mcp-ui-core`. That package compiles a
-conservative subset of each advertised schema into immutable field nodes and parses the matching
-`FormData`; ambiguous constructs fall back to field-local or root JSON. It intentionally contains
-no React, editor, styling, API, or mutation code.
+The private web app compiles a conservative subset of each advertised schema into an app-local
+field model. It renders nested objects, strings and enums, numbers, integers, booleans, and typed
+arrays, while ambiguous constructs fall back to raw JSON. CodeMirror is loaded only when a JSON
+editor or an opened JSON details panel needs it, and provides syntax diagnostics and formatting.
+Submission is still revalidated by the API against the discovered tool definition before dispatch;
+the browser form is an interaction aid, not the trust boundary.
 
-This private app owns the React renderer, accessibility, confirmation flows, and CodeMirror
-integration. CodeMirror is loaded only when a JSON editor or an opened JSON details panel needs it,
-and provides syntax diagnostics and formatting. Submission is still revalidated by the API against
-the discovered tool definition before dispatch; the browser form is an interaction aid, not the
-trust boundary. Package-level model tests live with `@nestm/mcp-ui-core`, while renderer and dialog
-tests remain in this app. The published package's explicit file allowlist cannot include the app or
-its CodeMirror dependency graph.
+All renderer code, editor dependencies, and tests live under this `private: true` app. Release
+scripts enumerate only `packages/*`, and published packages use explicit file allowlists, so none
+of this UI surface or its CodeMirror dependency graph is included in npm tarballs.
 
 ## Production routing
 

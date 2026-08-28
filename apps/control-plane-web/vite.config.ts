@@ -1,5 +1,3 @@
-import { fileURLToPath } from "node:url";
-
 import vinext from "vinext";
 import { defineConfig, loadEnv } from "vite";
 
@@ -9,13 +7,6 @@ export default defineConfig(({ mode }) => {
   const { CONTROL_PLANE_API_URL = "http://127.0.0.1:3400" } = loadEnv(mode, ".", "CONTROL_PLANE_");
 
   return {
-    resolve: {
-      alias: {
-        "@nestm/mcp-ui-core": fileURLToPath(
-          new URL("../../packages/mcp-ui-core/src/index.ts", import.meta.url),
-        ),
-      },
-    },
     server: {
       host: "127.0.0.1",
       port: 5173,
