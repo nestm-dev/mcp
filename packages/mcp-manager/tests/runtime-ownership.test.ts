@@ -363,6 +363,26 @@ describe("McpRuntimeOwnership", () => {
 		await owner.release();
 	});
 
+	it("reports force-retirement capacity through its promised lifecycle boundary", async () => {
+		const retirement = deferred<void>();
+		const ownership = createOwnership(
+			{ retire: vi.fn(async () => retirement.promise) },
+			{ maxGenerations: 1 },
+		);
+		const first = ownership.forceRetire("first-generation");
+
+		let second: Promise<void> | undefined;
+		expect(() => {
+			second = ownership.forceRetire("second-generation");
+		}).not.toThrow();
+		await expect(second).rejects.toMatchObject({
+			code: MCP_RUNTIME_OWNERSHIP_CAPACITY_EXCEEDED,
+		});
+
+		retirement.resolve();
+		await first;
+	});
+
 	it.each([
 		undefined,
 		null,

@@ -169,7 +169,9 @@ export class McpRuntimeOwnership<GenerationKey> {
 
 		if (entry === undefined) {
 			this.#pruneReusableFences();
-			if (this.#generations.size >= this.#maxGenerations) throw capacityExceededError();
+			if (this.#generations.size >= this.#maxGenerations) {
+				return Promise.reject(capacityExceededError());
+			}
 			entry = this.#createGeneration(generationKey);
 		}
 
