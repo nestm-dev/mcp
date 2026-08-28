@@ -1,5 +1,13 @@
 # @nestm/mcp-conformance
 
+## 0.1.0-alpha.9
+
+### Minor Changes
+
+- 3be9f50: Add a behavioral options argument to `captureMcpConformanceValue` and `captureMcpToolArguments`.
+  `undefinedPolicy: "reject"` now refuses undefined values at any depth, while the default `"json"`
+  policy preserves the existing object-omission and array-to-null behavior.
+
 ## 0.1.0-alpha.8
 
 ## 0.1.0-alpha.7
