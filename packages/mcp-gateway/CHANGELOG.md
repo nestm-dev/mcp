@@ -1,5 +1,13 @@
 # @nestm/mcp-gateway
 
+## 0.1.0-alpha.11
+
+### Patch Changes
+
+- @nestm/mcp-client@0.1.0-alpha.11
+  - @nestm/mcp-core@0.1.0-alpha.11
+  - @nestm/mcp-server@0.1.0-alpha.11
+
 ## 0.1.0-alpha.10
 
 ### Patch Changes
