@@ -33,6 +33,12 @@ export interface McpRuntimeCapabilitiesSnapshot {
 	readonly subscriptions: boolean;
 }
 
+/**
+ * Normalized immutable projection of one managed runtime's lifecycle state.
+ *
+ * Optional properties are absent rather than present with an `undefined` value.
+ * The snapshot and its nested capability projection are frozen.
+ */
 export interface McpRuntimeStateSnapshot {
 	readonly phase: McpRuntimePhase;
 	readonly lastTransitionAt: string;
