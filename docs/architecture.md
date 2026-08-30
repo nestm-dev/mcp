@@ -91,6 +91,13 @@ credentials, tenancy, and persistence stay behind that resolver. Generation leas
 replacement and retirement while discovery or execution is in flight, and cleanup failures enter a
 capacity-charging quarantine instead of being silently forgotten.
 
+Ordinary operations reuse a generation-keyed runtime, including the keeper installed by
+`ensureOnline()`. The explicit exclusive lease mode instead creates one non-pooled runtime for one
+operation, rejects overlapping same-generation work, and closes the runtime and admitted material
+before settlement. This is the generic close-on-release boundary for collaborators such as OAuth
+bridges that cannot correlate a failed request to its credential revision; product credential
+records and the decision to select that mode remain outside the manager.
+
 ### `@nestm/mcp-conformance`
 
 The conformance package is an independent orchestration and evidence boundary. It runs bounded,
@@ -334,6 +341,14 @@ With automatic negotiation, the client probes `server/discover` and can persist 
 - a verdict obtained under one authorization context must not be reused for another without policy approval.
 
 The gateway's discovery cache is separate from protocol-era negotiation. It stores raw tool, prompt, concrete-resource, and resource-template discovery by named upstream and opaque authorization context, with explicit TTL, pagination, item, and in-flight bounds. Authorized projections are recomputed on every list or execution request so a policy change is not hidden behind a cached allow decision. The first-party client still owns protocol-era `PriorDiscovery` and its freshness policy.
+
+Managed runtime catalog freshness is likewise explicit. `McpRuntimeManager.refreshCatalog()` probes
+liveness, bypasses its client list caches, bounds pagination and total items, waits for the complete
+list wave, and timestamps the resulting frozen snapshot. Shared mode runs that wave in parallel and
+waits for all settlements; exclusive mode serializes it so a minimal OAuth provider has no
+concurrent requests. The manager does not persist a baseline or interpret list-change notifications.
+Hosts use `digestMcpRuntimeCatalog()` from the independent conformance package to compare snapshots
+under their own scheduling, approval, and persistence policy.
 
 ## Extension points
 

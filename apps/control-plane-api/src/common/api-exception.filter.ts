@@ -77,6 +77,7 @@ function runtimeErrorStatus(code: McpRuntimeManagerError["code"]): number {
 		case "MCP_DISCOVERY_LIMIT_EXCEEDED":
 			return 422;
 		case "MCP_GENERATION_RETIRED":
+		case "MCP_LEASE_MODE_CONFLICT":
 		case "MCP_NOT_READY":
 			return 409;
 		case "MCP_CAPACITY_EXCEEDED":

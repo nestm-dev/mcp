@@ -7,6 +7,7 @@ import {
 export const MCP_RUNTIME_CAPACITY_EXCEEDED = "MCP_CAPACITY_EXCEEDED" as const;
 export const MCP_RUNTIME_DISCOVERY_LIMIT_EXCEEDED = "MCP_DISCOVERY_LIMIT_EXCEEDED" as const;
 export const MCP_RUNTIME_GENERATION_RETIRED = "MCP_GENERATION_RETIRED" as const;
+export const MCP_RUNTIME_LEASE_MODE_CONFLICT = "MCP_LEASE_MODE_CONFLICT" as const;
 export const MCP_RUNTIME_NOT_READY = "MCP_NOT_READY" as const;
 export const MCP_RUNTIME_QUARANTINED = "MCP_QUARANTINED" as const;
 export const MCP_RUNTIME_MANAGER_CLOSED = "MCP_RUNTIME_CLOSED" as const;
@@ -19,6 +20,7 @@ export type McpRuntimeManagerErrorCode =
 	| typeof MCP_RUNTIME_CAPACITY_EXCEEDED
 	| typeof MCP_RUNTIME_DISCOVERY_LIMIT_EXCEEDED
 	| typeof MCP_RUNTIME_GENERATION_RETIRED
+	| typeof MCP_RUNTIME_LEASE_MODE_CONFLICT
 	| typeof MCP_RUNTIME_NOT_READY
 	| typeof MCP_RUNTIME_QUARANTINED
 	| typeof MCP_RUNTIME_MANAGER_CLOSED
@@ -99,6 +101,13 @@ export function runtimeNotReadyError(): McpRuntimeManagerError {
 	);
 }
 
+export function runtimeLeaseModeConflictError(): McpRuntimeManagerError {
+	return new McpRuntimeManagerError(
+		MCP_RUNTIME_LEASE_MODE_CONFLICT,
+		"The MCP runtime generation already has work using a conflicting lease mode.",
+	);
+}
+
 export class McpRuntimeGenerationResolutionError extends Error {
 	override readonly cause: unknown;
 
@@ -139,6 +148,7 @@ const RUNTIME_STATE_ERROR_CODES: ReadonlySet<string> = new Set([
 	MCP_RUNTIME_CONNECTION_LOST,
 	MCP_RUNTIME_DISCOVERY_LIMIT_EXCEEDED,
 	MCP_RUNTIME_GENERATION_RETIRED,
+	MCP_RUNTIME_LEASE_MODE_CONFLICT,
 	MCP_RUNTIME_MANAGER_CLOSED,
 	MCP_RUNTIME_NOT_READY,
 	MCP_RUNTIME_QUARANTINED,

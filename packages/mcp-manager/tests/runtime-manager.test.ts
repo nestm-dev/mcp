@@ -21,6 +21,8 @@ const runtimeHarness = vi.hoisted(() => ({
 	instances: [] as ControlledRuntimeInstance[],
 	constructorFailure: undefined as unknown,
 	callToolHook: undefined as ((signal: AbortSignal | undefined) => Promise<unknown>) | undefined,
+	listToolsHook: undefined as (() => Promise<{ readonly tools: readonly [] }>) | undefined,
+	listResourcesHook: undefined as (() => Promise<{ readonly resources: readonly [] }>) | undefined,
 }));
 
 vi.mock("@nestm/mcp-client", async (importOriginal) => {
@@ -29,8 +31,14 @@ vi.mock("@nestm/mcp-client", async (importOriginal) => {
 		readonly options: McpClientRuntimeOptions;
 		readonly ping = vi.fn(async () => ({}));
 		readonly discover = vi.fn(async () => ({}));
-		readonly listTools = vi.fn(async () => ({ tools: [] }));
-		readonly listResources = vi.fn(async () => ({ resources: [] }));
+		readonly listTools = vi.fn(async () =>
+			runtimeHarness.listToolsHook === undefined ? { tools: [] } : runtimeHarness.listToolsHook(),
+		);
+		readonly listResources = vi.fn(async () =>
+			runtimeHarness.listResourcesHook === undefined
+				? { resources: [] }
+				: runtimeHarness.listResourcesHook(),
+		);
 		readonly listResourceTemplates = vi.fn(async () => ({ resourceTemplates: [] }));
 		readonly listPrompts = vi.fn(async () => ({ prompts: [] }));
 		readonly callTool = vi.fn(
@@ -85,6 +93,7 @@ vi.mock("@nestm/mcp-client", async (importOriginal) => {
 });
 
 import {
+	MCP_RUNTIME_LEASE_MODE_CONFLICT,
 	McpRuntimeManager,
 	mcpRuntimeCapabilitiesSnapshotSchema,
 	mcpRuntimeProbeSnapshotSchema,
@@ -99,6 +108,8 @@ describe("McpRuntimeManager", () => {
 		runtimeHarness.instances.length = 0;
 		runtimeHarness.constructorFailure = undefined;
 		runtimeHarness.callToolHook = undefined;
+		runtimeHarness.listToolsHook = undefined;
+		runtimeHarness.listResourcesHook = undefined;
 		vi.restoreAllMocks();
 	});
 
@@ -343,6 +354,98 @@ describe("McpRuntimeManager", () => {
 		await manager.close();
 	});
 
+	it("closes an exclusive operation runtime before settlement and never pools its generation", async () => {
+		const operationStarted = deferred();
+		const allowOperation = deferred();
+		const allowClose = deferred();
+		const close = vi.fn(async () => allowClose.promise);
+		runtimeHarness.callToolHook = async () => {
+			operationStarted.resolve();
+			await allowOperation.promise;
+			return { content: [] };
+		};
+		const resolver = resolverFrom(async () => admitted(close));
+		const manager = new McpRuntimeManager({ generationResolver: resolver, maxConnections: 2 });
+
+		let settled = false;
+		const operation = manager
+			.callTool("credential-binding", "controlled", {}, { leaseMode: "exclusive" })
+			.finally(() => {
+				settled = true;
+			});
+		await operationStarted.promise;
+		expect(manager.snapshot()).toMatchObject({
+			connectionCount: 1,
+			onlineKeeperCount: 0,
+		});
+
+		await expect(
+			manager.callTool("credential-binding", "second", {}, { leaseMode: "exclusive" }),
+		).rejects.toMatchObject({ code: MCP_RUNTIME_LEASE_MODE_CONFLICT });
+		expect(resolver.resolve).toHaveBeenCalledOnce();
+
+		allowOperation.resolve();
+		await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+		expect(settled).toBe(false);
+		allowClose.resolve();
+		await expect(operation).resolves.toMatchObject({ content: [] });
+		expect(manager.snapshot()).toMatchObject({
+			connectionCount: 0,
+			onlineKeeperCount: 0,
+		});
+		expect(manager.state("credential-binding").phase).toBe("offline");
+
+		runtimeHarness.callToolHook = undefined;
+		await expect(
+			manager.callTool("credential-binding", "fresh", {}, { leaseMode: "exclusive" }),
+		).resolves.toMatchObject({ content: [] });
+		expect(resolver.resolve).toHaveBeenCalledTimes(2);
+		expect(runtimeHarness.instances).toHaveLength(2);
+		await manager.close();
+	});
+
+	it("rejects exclusive work while the generation has a retained online keeper", async () => {
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted()),
+		});
+		await manager.ensureOnline("retained-generation");
+
+		await expect(
+			manager.callTool("retained-generation", "controlled", {}, { leaseMode: "exclusive" }),
+		).rejects.toMatchObject({ code: MCP_RUNTIME_LEASE_MODE_CONFLICT });
+		expect(runtimeHarness.instances).toHaveLength(1);
+		await manager.close();
+	});
+
+	it("fences an exclusive operation when its generation is retired", async () => {
+		const operationStarted = deferred();
+		const close = vi.fn(async () => undefined);
+		runtimeHarness.callToolHook = async (signal) => {
+			if (signal === undefined) throw new Error("The operation signal is required.");
+			operationStarted.resolve();
+			await rejectWhenAborted(signal);
+		};
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted(close)),
+		});
+		const operation = manager.callTool(
+			"credential-binding",
+			"controlled",
+			{},
+			{
+				leaseMode: "exclusive",
+			},
+		);
+		await operationStarted.promise;
+
+		const offline = manager.setOffline("credential-binding");
+		await expect(operation).rejects.toMatchObject({ code: "MCP_GENERATION_RETIRED" });
+		await expect(offline).resolves.toMatchObject({ phase: "offline" });
+		expect(close).toHaveBeenCalledOnce();
+		expect(manager.snapshot().connectionCount).toBe(0);
+		await manager.close();
+	});
+
 	it("keeps a positional abort signal as the cancellation-only tool call option", async () => {
 		const operationStarted = deferred();
 		runtimeHarness.callToolHook = async (signal) => {
@@ -434,6 +537,24 @@ describe("McpRuntimeManager", () => {
 			message: "callTool options must be an AbortSignal or a tool call options object.",
 		});
 		expect(ownedRuntime.callTool).not.toHaveBeenCalled();
+		await manager.close();
+	});
+
+	it("rejects an unknown operation lease mode before resolving a generation", async () => {
+		const resolver = resolverFrom(async () => admitted());
+		const manager = new McpRuntimeManager({ generationResolver: resolver });
+
+		await expect(
+			manager.refreshCatalog("generation-one", {
+				// Intentionally models malformed JavaScript at the public runtime boundary.
+				// oxlint-disable-next-line typescript/no-unsafe-type-assertion
+				leaseMode: "idle" as unknown as "shared",
+			}),
+		).rejects.toMatchObject({
+			name: "TypeError",
+			message: 'refreshCatalog options.leaseMode must be "shared" or "exclusive".',
+		});
+		expect(resolver.resolve).not.toHaveBeenCalled();
 		await manager.close();
 	});
 
@@ -730,6 +851,85 @@ describe("McpRuntimeManager", () => {
 			code: "MCP_UPSTREAM_FAILED",
 			cause: invalidParams,
 		});
+		await manager.close();
+	});
+
+	it("keeps a shared catalog lease until every parallel discovery request settles", async () => {
+		const resourcesStarted = deferred();
+		const allowResources = deferred();
+		const catalogFailure = new Error("controlled tools discovery failure");
+		const close = vi.fn(async () => undefined);
+		runtimeHarness.listToolsHook = async () => Promise.reject(catalogFailure);
+		runtimeHarness.listResourcesHook = async () => {
+			resourcesStarted.resolve();
+			await allowResources.promise;
+			return { resources: [] };
+		};
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted(close)),
+			now: () => 1_700_000_000_000,
+		});
+
+		let settled = false;
+		const refresh = manager.refreshCatalog("catalog-generation").finally(() => {
+			settled = true;
+		});
+		await resourcesStarted.promise;
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		expect(close).not.toHaveBeenCalled();
+
+		allowResources.resolve();
+		await expect(refresh).rejects.toMatchObject({
+			code: "MCP_UPSTREAM_FAILED",
+			cause: catalogFailure,
+		});
+		expect(close).toHaveBeenCalledOnce();
+		expect(manager.snapshot()).toMatchObject({
+			connectionCount: 0,
+			onlineKeeperCount: 0,
+		});
+		expect(manager.state("catalog-generation").phase).toBe("offline");
+		await manager.close();
+	});
+
+	it("returns a timestamped forced-refresh catalog through an exclusive lease", async () => {
+		const toolsStarted = deferred();
+		const allowTools = deferred();
+		const close = vi.fn(async () => undefined);
+		runtimeHarness.listToolsHook = async () => {
+			toolsStarted.resolve();
+			await allowTools.promise;
+			return { tools: [] };
+		};
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted(close)),
+			now: () => 1_700_000_000_000,
+		});
+
+		const refresh = manager.refreshCatalog("catalog-generation", { leaseMode: "exclusive" });
+		await toolsStarted.promise;
+		const runtime = runtimeHarness.instances[0]!;
+		expect(runtime.listResources).not.toHaveBeenCalled();
+		allowTools.resolve();
+
+		await expect(refresh).resolves.toEqual({
+			discoveredAt: "2023-11-14T22:13:20.000Z",
+			tools: [],
+			resources: [],
+			resourceTemplates: [],
+			prompts: [],
+		});
+		expect(runtime.listTools).toHaveBeenCalledWith(
+			expect.any(String),
+			undefined,
+			expect.objectContaining({ cacheMode: "refresh" }),
+		);
+		expect(runtime.listTools.mock.invocationCallOrder[0]).toBeLessThan(
+			runtime.listResources.mock.invocationCallOrder[0]!,
+		);
+		expect(close).toHaveBeenCalledOnce();
+		expect(manager.snapshot().connectionCount).toBe(0);
 		await manager.close();
 	});
 

@@ -76,6 +76,18 @@ The SDK callback does not identify the credential revision attached to the faile
 concurrent delayed `401` responses cannot be attributed exactly. Credentialed transports should be
 close-on-release unless the host supplies request-correlated refresh and revision fencing.
 
+`McpRuntimeManager`'s ordinary online generation is pooled: its keeper means an operation lease
+release does not close the credential bridge. That shared mode therefore does not satisfy the
+close-on-release alternative by itself. When a host cannot provide request-correlated refresh
+fencing, invoke `probe`, `refreshCatalog`, `withClientRuntime`, `callTool`, `readResource`, or
+`getPrompt` with `{ leaseMode: "exclusive" }` and do not call `ensureOnline()` for that generation.
+The manager gives the operation a unique non-pooled runtime, rejects overlapping same-generation
+work, and completes runtime plus admitted-material cleanup before the operation settles. Retirement
+still aborts and drains the exclusive lease. Its convenience delegates issue one protocol request;
+exclusive catalog refresh serializes its list requests. A `withClientRuntime` callback relying on
+this alternative must likewise avoid parallel credentialed requests. Hosts with a request-correlated
+fetch boundary and exact revision fence may retain the ordinary shared generation.
+
 The transport may retry once after a `401` when the provider refreshes or completes authorization. Runtime middleware observes one logical call; fetch middleware observes each wire attempt.
 
 Authentication failures are not protocol-era evidence. A `401` or `403` response to `server/discover` must remain an auth error and must not trigger a guess that the server is legacy.
