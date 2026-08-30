@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 import {
+	MCP_RUNTIME_LEASE_MODE_CONFLICT,
 	MCP_RUNTIME_PHASES,
 	MCP_RUNTIME_PROTOCOL_ERAS,
 	mcpRuntimeCapabilitiesSnapshotSchema,
@@ -22,6 +23,10 @@ const SOURCE_FILES = [
 ];
 
 describe("@nestm/mcp-manager public boundary", () => {
+	it("pins the public exclusive-lease conflict code", () => {
+		expect(MCP_RUNTIME_LEASE_MODE_CONFLICT).toBe("MCP_LEASE_MODE_CONFLICT");
+	});
+
 	it("keeps the neutral package free of Nest and product-application imports", async () => {
 		const sources = await Promise.all(
 			SOURCE_FILES.map((file) => readFile(new URL(`../src/${file}`, import.meta.url), "utf8")),

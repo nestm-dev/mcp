@@ -205,6 +205,15 @@ after another request has published a newer generation. Use close-on-release/no 
 pooling for this bridge, or perform request-correlated refresh at a host fetch boundary; do not
 claim exact 401-to-revision attribution from the minimal provider alone.
 
+When the bridge is admitted through `McpRuntimeManager`, the ordinary `ensureOnline()` keeper is a
+pool and does not meet that close-on-release condition. Use the manager operation option
+`{ leaseMode: "exclusive" }` without retaining the generation: it rejects overlapping work for the
+same key and closes the dedicated runtime plus admitted material before settlement. Shared manager
+generations remain appropriate only when the host provides the request-correlated refresh boundary
+and exact revision fence described above. Manager-owned exclusive catalog refreshes serialize their
+protocol requests; a custom exclusive `withClientRuntime` callback must also avoid parallel
+credentialed requests when it relies on this no-concurrency guarantee.
+
 Encryption, AAD construction, owner/scope authorization, RLS, callback-session checks, and the
 atomic pending-transaction store remain application responsibilities. OAuth fetches should use a
 separate guarded path from arbitrary MCP middleware: request logging or middleware that can inspect

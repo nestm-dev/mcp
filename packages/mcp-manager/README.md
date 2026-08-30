@@ -37,6 +37,70 @@ const catalog = await manager.refreshCatalog("opaque-generation-capability");
 await manager.close();
 ```
 
+## Shared and exclusive operation leases
+
+The ordinary manager path is generation-shared. `ensureOnline(key)` retains a keeper, and calls for
+that key reuse its connected runtime until `setOffline()` or `retire()` drains it. This is suitable
+only when the admitted transport and every attached collaborator are safe to pool.
+
+Use `leaseMode: "exclusive"` when one operation must own a fresh runtime and close it before the
+operation promise settles:
+
+```ts
+const result = await manager.callTool(
+	"opaque-generation-capability",
+	"search",
+	{ query: "lease fencing" },
+	{
+		leaseMode: "exclusive",
+		toolDefinition: approvedDefinition,
+	},
+);
+```
+
+An exclusive operation does not require `ensureOnline()`. It receives a unique internal lease
+identity, never joins another acquisition, and holds its global `maxConnections` slot through
+runtime and admitted-material cleanup. Shared or second exclusive work for the same generation
+fails with `MCP_LEASE_MODE_CONFLICT`; the manager does not hide contention behind an unbounded
+queue. Retirement and shutdown still abort the operation and wait for its lease cleanup. A cleanup
+failure remains quarantined and capacity-charging.
+
+This is the manager-side close-on-release primitive for a credential-bound transport that cannot
+provide request-correlated OAuth refresh fencing. Do not also retain that generation with
+`ensureOnline()`. A host that supplies request-correlated refresh and exact revision fencing may
+use the ordinary shared mode instead. Generation keys stay opaque and non-secret in either mode.
+
+`probe`, `refreshCatalog`, `withClientRuntime`, `callTool`, `readResource`, and `getPrompt` accept the
+same operation options (or the existing positional `AbortSignal`). `withClientRuntime` remains the
+generic route to other protocol methods under an exclusive lease; its callback must not start
+parallel credentialed requests when it relies on the minimal OAuth provider's no-concurrency
+alternative. The manager-owned exclusive catalog refresh runs its list requests sequentially for
+that reason.
+
+## Catalog freshness and change detection
+
+`refreshCatalog(key, options)` is the reusable freshness seam. It performs protocol liveness first,
+forces every supported list delegate through `cacheMode: "refresh"`, applies the configured page and
+item bounds, and only then releases the generation lease. Shared mode runs the list wave in parallel
+but waits for every request to settle before release; exclusive mode runs it sequentially so one
+minimal OAuth bridge never has concurrent credentialed requests. The frozen `discoveredAt` timestamp
+is recorded after the complete successful wave.
+
+The manager deliberately does not persist a baseline or turn list-change notifications into product
+state. Compare snapshots with `digestMcpRuntimeCatalog` from `@nestm/mcp-conformance`; that canonical,
+domain-separated digest is the change seam for approval, persistence, or scheduling owned by the
+host. Credential-bound refreshes can combine both guarantees:
+
+```ts
+const catalog = await manager.refreshCatalog("opaque-generation-capability", {
+	leaseMode: "exclusive",
+});
+const digest = digestMcpRuntimeCatalog(catalog, {
+	domain: "example/mcp/catalog/v1",
+	toolSchemaDomain: "example/mcp/tool-schema/v1",
+});
+```
+
 ## Shared runtime ownership
 
 Use `McpRuntimeOwnership` when several host projections can retain the same opaque manager

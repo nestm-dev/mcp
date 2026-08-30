@@ -16,6 +16,7 @@ import {
 	MCP_RUNTIME_GENERATION_RETIRED,
 	McpRuntimeManagerError,
 	mapMcpRuntimeManagerError,
+	runtimeLeaseModeConflictError,
 	runtimeManagerClosedError,
 	runtimeManagerErrorCode,
 	runtimeNotReadyError,
@@ -33,11 +34,25 @@ import type {
 	McpRuntimeManagerOptions,
 	McpRuntimeManagerPort,
 	McpRuntimeManagerSnapshot,
+	McpRuntimeOperationLeaseMode,
+	McpRuntimeOperationOptions,
 	McpRuntimeProbeSnapshot,
 	McpRuntimeStateListener,
 	McpRuntimeStateSnapshot,
 	McpRuntimeToolCallOptions,
 } from "./types.ts";
+
+class ExclusiveRuntimeLeaseIdentity<GenerationKey> {
+	constructor(readonly generationKey: GenerationKey) {}
+}
+
+type RuntimeLeaseIdentity<GenerationKey> =
+	GenerationKey | ExclusiveRuntimeLeaseIdentity<GenerationKey>;
+
+interface ActiveOperationLeaseMode {
+	readonly mode: McpRuntimeOperationLeaseMode;
+	count: number;
+}
 
 export const MCP_RUNTIME_MANAGER_DEFAULTS = Object.freeze({
 	maxConnections: 100,
@@ -51,8 +66,16 @@ export const MCP_RUNTIME_MANAGER_DEFAULTS = Object.freeze({
 export class McpRuntimeManager<GenerationKey = string>
 	implements McpRuntimeManagerPort<GenerationKey>, AsyncDisposable
 {
-	readonly #leases: McpClientLeaseManager<GenerationKey, OwnedMcpRuntime<GenerationKey>>;
+	readonly #leases: McpClientLeaseManager<
+		RuntimeLeaseIdentity<GenerationKey>,
+		OwnedMcpRuntime<GenerationKey>
+	>;
 	readonly #keepers = new Map<GenerationKey, McpClientLease<OwnedMcpRuntime<GenerationKey>>>();
+	readonly #exclusiveIdentities = new Map<
+		GenerationKey,
+		Set<ExclusiveRuntimeLeaseIdentity<GenerationKey>>
+	>();
+	readonly #operationLeaseModes = new Map<GenerationKey, ActiveOperationLeaseMode>();
 	readonly #onlineTasks = new Map<GenerationKey, Promise<McpRuntimeStateSnapshot>>();
 	readonly #offlineTasks = new Map<GenerationKey, Promise<McpRuntimeStateSnapshot>>();
 	readonly #postOfflineOnlineTasks = new Map<GenerationKey, Promise<McpRuntimeStateSnapshot>>();
@@ -122,7 +145,7 @@ export class McpRuntimeManager<GenerationKey = string>
 		});
 		this.#leases = new McpClientLeaseManager({
 			maxResources: maxConnections,
-			create: (generationKey, context) => factory.create(generationKey, context),
+			create: (identity, context) => factory.create(generationKeyOf(identity), context),
 			close: (owned) => factory.close(owned),
 		});
 	}
@@ -146,6 +169,7 @@ export class McpRuntimeManager<GenerationKey = string>
 			}
 			return waitForCaller(queued, signal);
 		}
+		this.#assertSharedLeaseAvailable(generationKey);
 		this.#assertNotQuarantined(generationKey);
 		return waitForCaller(this.#getOrCreateOnlineTask(generationKey), signal);
 	}
@@ -159,6 +183,7 @@ export class McpRuntimeManager<GenerationKey = string>
 			await barrier;
 		}
 		this.#assertOpen();
+		this.#assertSharedLeaseAvailable(generationKey);
 		this.#assertNotQuarantined(generationKey);
 		return this.#getOrCreateOnlineTask(generationKey);
 	}
@@ -202,11 +227,15 @@ export class McpRuntimeManager<GenerationKey = string>
 			throw runtimeQuarantinedError();
 		}
 		this.#states.transition(generationKey, "draining");
-		const drain = this.#leases.invalidate(generationKey);
+		const exclusiveIdentities = [...(this.#exclusiveIdentities.get(generationKey) ?? [])];
+		const drains = [
+			this.#leases.invalidate(generationKey),
+			...exclusiveIdentities.map((identity) => this.#leases.invalidate(identity)),
+		];
 		const keeper = this.#keepers.get(generationKey);
 		this.#keepers.delete(generationKey);
 		const onlineTask = this.#onlineTasks.get(generationKey);
-		const cleanupTasks = [drain, ...(keeper === undefined ? [] : [keeper.release()])];
+		const cleanupTasks = [...drains, ...(keeper === undefined ? [] : [keeper.release()])];
 		const [cleanupSettled] = await Promise.all([
 			Promise.allSettled(cleanupTasks),
 			Promise.allSettled(onlineTask === undefined ? [] : [onlineTask]),
@@ -248,8 +277,9 @@ export class McpRuntimeManager<GenerationKey = string>
 
 	async probe(
 		generationKey: GenerationKey,
-		signal?: AbortSignal,
+		options?: AbortSignal | McpRuntimeOperationOptions,
 	): Promise<McpRuntimeProbeSnapshot> {
+		const controls = normalizeOperationOptions(options, "probe");
 		const observation = await this.#withRuntime(
 			generationKey,
 			async (owned, operationSignal) => {
@@ -266,7 +296,7 @@ export class McpRuntimeManager<GenerationKey = string>
 					...(connected.capabilities === undefined ? {} : { capabilities: connected.capabilities }),
 				});
 			},
-			signal,
+			controls,
 		);
 		return Object.freeze({
 			...observation,
@@ -276,15 +306,21 @@ export class McpRuntimeManager<GenerationKey = string>
 
 	refreshCatalog(
 		generationKey: GenerationKey,
-		signal?: AbortSignal,
+		options?: AbortSignal | McpRuntimeOperationOptions,
 	): Promise<McpRuntimeCatalogSnapshot> {
+		let controls: McpRuntimeOperationOptions;
+		try {
+			controls = normalizeOperationOptions(options, "refreshCatalog");
+		} catch (error) {
+			return Promise.reject(error);
+		}
 		return this.#withRuntime(
 			generationKey,
 			async (owned, operationSignal) => {
 				await this.#probeProtocolLiveness(owned, operationSignal);
 				const { runtime, serverName } = owned;
 				const capabilities = runtime.snapshot(serverName).serverCapabilities;
-				const [tools, resources, resourceTemplates, prompts] = await Promise.all([
+				const discoverTools = () =>
 					capabilities?.tools === undefined
 						? Promise.resolve([])
 						: runtime
@@ -292,7 +328,8 @@ export class McpRuntimeManager<GenerationKey = string>
 									cacheMode: "refresh",
 									signal: operationSignal,
 								})
-								.then((result) => result.tools),
+								.then((result) => result.tools);
+				const discoverResources = () =>
 					capabilities?.resources === undefined
 						? Promise.resolve([])
 						: runtime
@@ -300,7 +337,8 @@ export class McpRuntimeManager<GenerationKey = string>
 									cacheMode: "refresh",
 									signal: operationSignal,
 								})
-								.then((result) => result.resources),
+								.then((result) => result.resources);
+				const discoverResourceTemplates = () =>
 					capabilities?.resources === undefined
 						? Promise.resolve([])
 						: runtime
@@ -312,7 +350,8 @@ export class McpRuntimeManager<GenerationKey = string>
 								.catch((error: unknown) => {
 									if (isMethodNotFoundProtocolError(error)) return [];
 									throw error;
-								}),
+								});
+				const discoverPrompts = () =>
 					capabilities?.prompts === undefined
 						? Promise.resolve([])
 						: runtime
@@ -320,36 +359,68 @@ export class McpRuntimeManager<GenerationKey = string>
 									cacheMode: "refresh",
 									signal: operationSignal,
 								})
-								.then((result) => result.prompts),
-				]);
-				const itemCount =
-					tools.length + resources.length + resourceTemplates.length + prompts.length;
-				if (itemCount > this.#maxDiscoveryItems) {
-					throw new McpRuntimeManagerError(
-						MCP_RUNTIME_DISCOVERY_LIMIT_EXCEEDED,
-						"The upstream MCP catalog exceeds the configured discovery limit.",
-					);
+								.then((result) => result.prompts);
+				const finalize = (
+					tools: McpRuntimeCatalogSnapshot["tools"],
+					resources: McpRuntimeCatalogSnapshot["resources"],
+					resourceTemplates: McpRuntimeCatalogSnapshot["resourceTemplates"],
+					prompts: McpRuntimeCatalogSnapshot["prompts"],
+				): McpRuntimeCatalogSnapshot => {
+					const itemCount =
+						tools.length + resources.length + resourceTemplates.length + prompts.length;
+					if (itemCount > this.#maxDiscoveryItems) {
+						throw new McpRuntimeManagerError(
+							MCP_RUNTIME_DISCOVERY_LIMIT_EXCEEDED,
+							"The upstream MCP catalog exceeds the configured discovery limit.",
+						);
+					}
+					this.#states.connected(generationKey, runtime.snapshot(serverName));
+					return Object.freeze({
+						discoveredAt: isoTimestamp(this.#now),
+						tools: Object.freeze([...tools]),
+						resources: Object.freeze([...resources]),
+						resourceTemplates: Object.freeze([...resourceTemplates]),
+						prompts: Object.freeze([...prompts]),
+					});
+				};
+
+				if (controls.leaseMode === "exclusive") {
+					const tools = await discoverTools();
+					const resources = await discoverResources();
+					const resourceTemplates = await discoverResourceTemplates();
+					const prompts = await discoverPrompts();
+					return finalize(tools, resources, resourceTemplates, prompts);
 				}
-				this.#states.connected(generationKey, runtime.snapshot(serverName));
-				return Object.freeze({
-					discoveredAt: isoTimestamp(this.#now),
-					tools: Object.freeze([...tools]),
-					resources: Object.freeze([...resources]),
-					resourceTemplates: Object.freeze([...resourceTemplates]),
-					prompts: Object.freeze([...prompts]),
-				});
+				const [toolsResult, resourcesResult, resourceTemplatesResult, promptsResult] =
+					await Promise.allSettled([
+						discoverTools(),
+						discoverResources(),
+						discoverResourceTemplates(),
+						discoverPrompts(),
+					]);
+				const tools = requireDiscoveryResult(toolsResult);
+				const resources = requireDiscoveryResult(resourcesResult);
+				const resourceTemplates = requireDiscoveryResult(resourceTemplatesResult);
+				const prompts = requireDiscoveryResult(promptsResult);
+				return finalize(tools, resources, resourceTemplates, prompts);
 			},
-			signal,
+			controls,
 		);
 	}
 
 	withClientRuntime<Result>(
 		generationKey: GenerationKey,
 		operation: McpManagedClientRuntimeOperation<Result>,
-		signal?: AbortSignal,
+		options?: AbortSignal | McpRuntimeOperationOptions,
 	): Promise<Result> {
 		if (typeof operation !== "function") {
 			return Promise.reject(new TypeError("operation must be a function."));
+		}
+		let controls: McpRuntimeOperationOptions;
+		try {
+			controls = normalizeOperationOptions(options, "withClientRuntime");
+		} catch (error) {
+			return Promise.reject(error);
 		}
 		return this.#withRuntime(
 			generationKey,
@@ -361,7 +432,7 @@ export class McpRuntimeManager<GenerationKey = string>
 						signal: operationSignal,
 					}),
 				),
-			signal,
+			controls,
 			true,
 		);
 	}
@@ -378,7 +449,7 @@ export class McpRuntimeManager<GenerationKey = string>
 		} catch (error) {
 			return Promise.reject(error);
 		}
-		const { signal, toolDefinition } = controls;
+		const { toolDefinition } = controls;
 		return this.#withRuntime(
 			generationKey,
 			({ runtime, serverName }, operationSignal) =>
@@ -390,7 +461,7 @@ export class McpRuntimeManager<GenerationKey = string>
 						...(toolDefinition === undefined ? {} : { toolDefinition }),
 					},
 				),
-			signal,
+			controls,
 			true,
 		);
 	}
@@ -398,13 +469,19 @@ export class McpRuntimeManager<GenerationKey = string>
 	readResource(
 		generationKey: GenerationKey,
 		uri: string,
-		signal?: AbortSignal,
+		options?: AbortSignal | McpRuntimeOperationOptions,
 	): Promise<ReadResourceResult> {
+		let controls: McpRuntimeOperationOptions;
+		try {
+			controls = normalizeOperationOptions(options, "readResource");
+		} catch (error) {
+			return Promise.reject(error);
+		}
 		return this.#withRuntime(
 			generationKey,
 			({ runtime, serverName }, operationSignal) =>
 				runtime.readResource(serverName, { uri }, { signal: operationSignal }),
-			signal,
+			controls,
 			true,
 		);
 	}
@@ -413,8 +490,14 @@ export class McpRuntimeManager<GenerationKey = string>
 		generationKey: GenerationKey,
 		name: string,
 		arguments_: Readonly<Record<string, string>> | undefined,
-		signal?: AbortSignal,
+		options?: AbortSignal | McpRuntimeOperationOptions,
 	): Promise<GetPromptResult> {
+		let controls: McpRuntimeOperationOptions;
+		try {
+			controls = normalizeOperationOptions(options, "getPrompt");
+		} catch (error) {
+			return Promise.reject(error);
+		}
 		return this.#withRuntime(
 			generationKey,
 			({ runtime, serverName }, operationSignal) =>
@@ -426,7 +509,7 @@ export class McpRuntimeManager<GenerationKey = string>
 					},
 					{ signal: operationSignal },
 				),
-			signal,
+			controls,
 			true,
 		);
 	}
@@ -485,6 +568,8 @@ export class McpRuntimeManager<GenerationKey = string>
 		const keepers = [...this.#keepers.values()];
 		this.#keepers.clear();
 		const settled = await Promise.allSettled([close, ...keepers.map((keeper) => keeper.release())]);
+		this.#exclusiveIdentities.clear();
+		this.#operationLeaseModes.clear();
 		const failures = settled.flatMap((result) =>
 			result.status === "rejected" ? [result.reason as unknown] : [],
 		);
@@ -553,29 +638,38 @@ export class McpRuntimeManager<GenerationKey = string>
 	async #withRuntime<Result>(
 		generationKey: GenerationKey,
 		operation: (owned: ActiveMcpRuntime<GenerationKey>, signal: AbortSignal) => Promise<Result>,
-		callerSignal?: AbortSignal,
+		options: McpRuntimeOperationOptions,
 		requireOnline = false,
 	): Promise<Result> {
 		this.#assertOpen();
 		if (this.#offlineTasks.has(generationKey)) throw runtimeNotReadyError();
-		if (requireOnline) this.#assertOnlineKeeper(generationKey);
+		this.#assertNotQuarantined(generationKey);
+		const leaseMode = options.leaseMode ?? "shared";
+		if (leaseMode === "shared" && requireOnline) this.#assertOnlineKeeper(generationKey);
+		this.#enterOperationLeaseMode(generationKey, leaseMode);
+		const identity =
+			leaseMode === "exclusive" ? this.#createExclusiveIdentity(generationKey) : generationKey;
+		const callerSignal = options.signal;
 		const acquisitionSignal = AbortSignal.any([
 			AbortSignal.timeout(this.#requestTimeoutMs),
 			...(callerSignal === undefined ? [] : [callerSignal]),
 		]);
 		let lease: McpClientLease<OwnedMcpRuntime<GenerationKey>>;
 		try {
-			lease = await this.#leases.acquire(generationKey, {
+			lease = await this.#leases.acquire(identity, {
 				releaseMode: "close",
 				signal: acquisitionSignal,
 			});
 		} catch (error) {
+			this.#forgetExclusiveIdentity(identity);
+			this.#leaveOperationLeaseMode(generationKey, leaseMode);
 			throwIfCallerAborted(callerSignal);
 			throw mapMcpRuntimeManagerError(error);
 		}
 		const owned = lease.resource;
 		if (owned.quarantined) {
 			await releaseIgnoringFailure(lease);
+			this.#leaveOperationLeaseMode(generationKey, leaseMode);
 			throw runtimeQuarantinedError();
 		}
 		const operationSignal = AbortSignal.any([acquisitionSignal, owned.generationSignal]);
@@ -590,9 +684,12 @@ export class McpRuntimeManager<GenerationKey = string>
 		try {
 			await lease.release();
 		} catch (error) {
+			this.#leaveOperationLeaseMode(generationKey, leaseMode);
 			this.#states.transition(generationKey, "quarantined", MCP_RUNTIME_CLEANUP_FAILED);
 			throw runtimeQuarantinedError(error);
 		}
+		this.#forgetExclusiveIdentity(identity);
+		this.#leaveOperationLeaseMode(generationKey, leaseMode);
 		if (!outcome.success) {
 			throwIfCallerAborted(callerSignal);
 			throw mapMcpRuntimeManagerError(outcome.error);
@@ -624,6 +721,56 @@ export class McpRuntimeManager<GenerationKey = string>
 		if (this.#closed) throw runtimeManagerClosedError();
 	}
 
+	#assertSharedLeaseAvailable(generationKey: GenerationKey): void {
+		if (this.#operationLeaseModes.get(generationKey)?.mode === "exclusive") {
+			throw runtimeLeaseModeConflictError();
+		}
+	}
+
+	#enterOperationLeaseMode(generationKey: GenerationKey, mode: McpRuntimeOperationLeaseMode): void {
+		const active = this.#operationLeaseModes.get(generationKey);
+		if (
+			active !== undefined ||
+			(mode === "exclusive" &&
+				(this.#keepers.has(generationKey) || this.#onlineTasks.has(generationKey)))
+		) {
+			if (active?.mode !== "shared" || mode !== "shared") {
+				throw runtimeLeaseModeConflictError();
+			}
+			active.count += 1;
+			return;
+		}
+		this.#operationLeaseModes.set(generationKey, { mode, count: 1 });
+	}
+
+	#leaveOperationLeaseMode(generationKey: GenerationKey, mode: McpRuntimeOperationLeaseMode): void {
+		const active = this.#operationLeaseModes.get(generationKey);
+		if (active === undefined || active.mode !== mode) return;
+		active.count -= 1;
+		if (active.count === 0) this.#operationLeaseModes.delete(generationKey);
+	}
+
+	#createExclusiveIdentity(
+		generationKey: GenerationKey,
+	): ExclusiveRuntimeLeaseIdentity<GenerationKey> {
+		const identity = new ExclusiveRuntimeLeaseIdentity(generationKey);
+		let identities = this.#exclusiveIdentities.get(generationKey);
+		if (identities === undefined) {
+			identities = new Set();
+			this.#exclusiveIdentities.set(generationKey, identities);
+		}
+		identities.add(identity);
+		return identity;
+	}
+
+	#forgetExclusiveIdentity(identity: RuntimeLeaseIdentity<GenerationKey>): void {
+		if (!(identity instanceof ExclusiveRuntimeLeaseIdentity)) return;
+		const identities = this.#exclusiveIdentities.get(identity.generationKey);
+		if (identities === undefined) return;
+		identities.delete(identity);
+		if (identities.size === 0) this.#exclusiveIdentities.delete(identity.generationKey);
+	}
+
 	#assertNotQuarantined(generationKey: GenerationKey): void {
 		if (this.#states.read(generationKey).phase === "quarantined") {
 			throw runtimeQuarantinedError();
@@ -643,7 +790,39 @@ export class McpRuntimeManager<GenerationKey = string>
 	}
 }
 
-const EMPTY_TOOL_CALL_OPTIONS: McpRuntimeToolCallOptions = Object.freeze({});
+const EMPTY_OPERATION_OPTIONS: McpRuntimeOperationOptions = Object.freeze({});
+const EMPTY_TOOL_CALL_OPTIONS: McpRuntimeToolCallOptions = EMPTY_OPERATION_OPTIONS;
+
+function normalizeOperationOptions(
+	options: AbortSignal | McpRuntimeOperationOptions | undefined,
+	operationName: string,
+): McpRuntimeOperationOptions {
+	if (options === undefined) return EMPTY_OPERATION_OPTIONS;
+	if (typeof options !== "object" || options === null) {
+		throw new TypeError(
+			`${operationName} options must be an AbortSignal or an operation options object.`,
+		);
+	}
+	if (isAbortSignal(options)) return { signal: options };
+	let signal: unknown;
+	let leaseMode: unknown;
+	try {
+		signal = Reflect.get(options, "signal");
+		leaseMode = Reflect.get(options, "leaseMode");
+	} catch {
+		throw new TypeError(`${operationName} options could not be read.`);
+	}
+	if (
+		signal !== undefined &&
+		(typeof signal !== "object" || signal === null || !isAbortSignal(signal))
+	) {
+		throw new TypeError(`${operationName} options.signal must be an AbortSignal.`);
+	}
+	if (leaseMode !== undefined && leaseMode !== "shared" && leaseMode !== "exclusive") {
+		throw new TypeError(`${operationName} options.leaseMode must be "shared" or "exclusive".`);
+	}
+	return options;
+}
 
 /** Accepts the positional cancellation form and the richer per-call options object. */
 function normalizeToolCallOptions(
@@ -653,7 +832,9 @@ function normalizeToolCallOptions(
 	if (typeof options !== "object" || options === null) {
 		throw new TypeError("callTool options must be an AbortSignal or a tool call options object.");
 	}
-	return isAbortSignal(options) ? { signal: options } : options;
+	if (isAbortSignal(options)) return { signal: options };
+	normalizeOperationOptions(options, "callTool");
+	return options;
 }
 
 function isAbortSignal(value: object): value is AbortSignal {
@@ -670,6 +851,17 @@ function isAbortSignal(value: object): value is AbortSignal {
 
 function isMethodNotFoundProtocolError(error: unknown): error is ProtocolError {
 	return ProtocolError.isInstance(error) && error.code === METHOD_NOT_FOUND;
+}
+
+function requireDiscoveryResult<Result>(result: PromiseSettledResult<Result>): Result {
+	if (result.status === "fulfilled") return result.value;
+	throw result.reason;
+}
+
+function generationKeyOf<GenerationKey>(
+	identity: RuntimeLeaseIdentity<GenerationKey>,
+): GenerationKey {
+	return identity instanceof ExclusiveRuntimeLeaseIdentity ? identity.generationKey : identity;
 }
 
 function requireActiveRuntime<GenerationKey>(

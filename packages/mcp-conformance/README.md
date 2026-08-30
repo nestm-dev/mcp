@@ -158,6 +158,14 @@ Both domains are caller-supplied and validated with the fingerprint domain rule.
 never reaches a digest: each collection is sorted on its identity (`name`, `uri`, or `uriTemplate`)
 with a canonical-form tiebreak, and a repeated identity is refused rather than silently collapsed.
 
+For a live managed generation, `McpRuntimeManager.refreshCatalog()` is the freshness owner: it forces
+the client list caches to refresh, bounds discovery, waits for the complete list wave, and returns a
+timestamped frozen snapshot. Pass that snapshot directly here. When the transport is
+credential-bound and has no request-correlated refresh fence, select the manager's
+`{ leaseMode: "exclusive" }` so the freshness wave is sequential and also owns a non-pooled
+close-on-release runtime. This package still owns only the canonical comparison; refresh scheduling,
+baseline persistence, and reactions to change remain host policy.
+
 Fingerprints keep the package's `sha256:<base64url>` form. `toMcpConformanceFingerprintHex` renders
 one as 64 lowercase hexadecimal characters, so a digest column with a fixed-width hexadecimal
 `CHECK` can store it without hand-rolled transcoding.

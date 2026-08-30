@@ -80,6 +80,22 @@ export interface McpRuntimeProbeSnapshot {
 }
 
 /**
+ * Selects whether an operation may reuse the generation-keyed runtime.
+ *
+ * `"shared"` preserves the manager's ordinary retained-generation behavior. `"exclusive"`
+ * creates one unshared runtime for the operation and closes it before settlement. Exclusive
+ * work is fail-fast when the same generation already has shared or exclusive work. A custom
+ * `withClientRuntime` callback remains responsible for not starting parallel protocol requests.
+ */
+export type McpRuntimeOperationLeaseMode = "shared" | "exclusive";
+
+export interface McpRuntimeOperationOptions {
+	readonly signal?: AbortSignal;
+	/** Defaults to `"shared"`; use `"exclusive"` for a non-pooled close-before-settlement runtime. */
+	readonly leaseMode?: McpRuntimeOperationLeaseMode;
+}
+
+/**
  * Narrow client-runtime surface available while the manager owns a generation lease.
  * Registry mutation, transport admission, shutdown, and credential material stay private.
  */
@@ -177,6 +193,8 @@ export interface McpRuntimeManagerOptions<GenerationKey = string> {
  */
 export interface McpRuntimeToolCallOptions {
 	readonly signal?: AbortSignal;
+	/** Defaults to `"shared"`; exclusive calls do not require an online keeper. */
+	readonly leaseMode?: McpRuntimeOperationLeaseMode;
 	readonly toolDefinition?: Tool;
 }
 
@@ -187,16 +205,19 @@ export interface McpRuntimeManagerPort<GenerationKey = string> {
 	): Promise<McpRuntimeStateSnapshot>;
 	setOffline(generationKey: GenerationKey): Promise<McpRuntimeStateSnapshot>;
 	retire(generationKey: GenerationKey): Promise<void>;
-	probe(generationKey: GenerationKey, signal?: AbortSignal): Promise<McpRuntimeProbeSnapshot>;
+	probe(
+		generationKey: GenerationKey,
+		options?: AbortSignal | McpRuntimeOperationOptions,
+	): Promise<McpRuntimeProbeSnapshot>;
 	refreshCatalog(
 		generationKey: GenerationKey,
-		signal?: AbortSignal,
+		options?: AbortSignal | McpRuntimeOperationOptions,
 	): Promise<McpRuntimeCatalogSnapshot>;
 	/** Execute a protocol-aware integration operation under the generation's managed lease. */
 	withClientRuntime<Result>(
 		generationKey: GenerationKey,
 		operation: McpManagedClientRuntimeOperation<Result>,
-		signal?: AbortSignal,
+		options?: AbortSignal | McpRuntimeOperationOptions,
 	): Promise<Result>;
 	/** A positional `AbortSignal` stays accepted as the cancellation-only form of the options. */
 	callTool(
@@ -208,13 +229,13 @@ export interface McpRuntimeManagerPort<GenerationKey = string> {
 	readResource(
 		generationKey: GenerationKey,
 		uri: string,
-		signal?: AbortSignal,
+		options?: AbortSignal | McpRuntimeOperationOptions,
 	): Promise<ReadResourceResult>;
 	getPrompt(
 		generationKey: GenerationKey,
 		name: string,
 		arguments_: Readonly<Record<string, string>> | undefined,
-		signal?: AbortSignal,
+		options?: AbortSignal | McpRuntimeOperationOptions,
 	): Promise<GetPromptResult>;
 	state(generationKey: GenerationKey): McpRuntimeStateSnapshot;
 	snapshot(): McpRuntimeManagerSnapshot;

@@ -149,6 +149,12 @@ Automatic version negotiation can add a `server/discover` probe. Reused prior di
 
 Likewise, a logical request can contain token lookup, refresh, interactive authorization, step-up, and one retry. Instrument the fetch/auth layer to see those attempts, while reporting the final logical outcome once at the runtime layer.
 
+An exclusive managed-runtime lease creates and closes one client runtime for one operation, while a
+shared online generation amortizes that lifecycle across calls. Dashboards should interpret
+connection churn using the host's configured lease strategy rather than treating exclusive cleanup
+as instability. Manager state events and built-in lifecycle attributes remain key-free and do not
+expose credential bindings or revisions.
+
 ## Implemented backend-neutral adapters
 
 `@nestm/mcp-observability` translates core lifecycle operations into logs and metrics and supplies tracing middleware without depending on OpenTelemetry, Pino, Prometheus, or another vendor SDK.
