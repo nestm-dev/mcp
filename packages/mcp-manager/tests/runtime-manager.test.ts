@@ -466,6 +466,12 @@ describe("McpRuntimeManager", () => {
 		expect(mcpRuntimeStateSnapshotSchema["~standard"].validate(offline)).toEqual({
 			value: offline,
 		});
+
+		for (const state of [online, untracked, degraded, offline]) {
+			expect(Object.isFrozen(state)).toBe(true);
+			expect(Object.values(state)).not.toContain(undefined);
+		}
+		expect(Object.isFrozen(online.capabilities)).toBe(true);
 		await manager.close();
 	});
 
