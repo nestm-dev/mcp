@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, renameSync } from "node:fs";
-import { createRequire } from "node:module";
-import { join, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
 import { assertFixedGroup, assertFixedVersions } from "./publish-state.mjs";
 
@@ -55,60 +54,140 @@ const workspacePackages = readdirSync(packagesRoot, { withFileTypes: true })
 	.filter((entry) => entry.isDirectory())
 	.map((entry) => join(packagesRoot, entry.name, "package.json"))
 	.filter((manifestPath) => existsSync(manifestPath))
-	.map((manifestPath) => JSON.parse(readFileSync(manifestPath, "utf8")))
-	.filter((manifest) => manifest.private !== true)
-	.map((manifest) => ({ name: manifest.name, version: manifest.version }));
+	.map((manifestPath) => ({
+		directory: dirname(manifestPath),
+		manifest: JSON.parse(readFileSync(manifestPath, "utf8")),
+	}))
+	.filter(({ manifest }) => manifest.private !== true);
 
 const changesetConfig = JSON.parse(
 	readFileSync(join(repositoryRoot, ".changeset", "config.json"), "utf8"),
 );
 
 assertFixedGroup(
-	workspacePackages.map((entry) => entry.name),
+	workspacePackages.map(({ manifest }) => manifest.name),
 	changesetConfig.fixed,
 );
 
 const preStateUrl = new URL("../.changeset/pre.json", import.meta.url);
-const hiddenPreStateUrl = new URL("../.changeset/pre.json.publish", import.meta.url);
 const preState = existsSync(preStateUrl)
 	? JSON.parse(readFileSync(preStateUrl, "utf8"))
 	: undefined;
-const { tag: prereleaseTag } = assertFixedVersions(workspacePackages, preState);
-const require = createRequire(import.meta.url);
-const changesetsBin = require.resolve("@changesets/cli/bin.js");
-const publishArguments = [changesetsBin, "publish"];
+const publishState = workspacePackages.map(({ manifest }) => ({
+	name: manifest.name,
+	version: manifest.version,
+}));
+const { tag: prereleaseTag } = assertFixedVersions(publishState, preState);
+const publishTag = prereleaseTag ?? "latest";
 
-if (prereleaseTag !== undefined) {
-	if (existsSync(hiddenPreStateUrl)) {
-		throw new Error("Refusing to overwrite a hidden Changesets pre-state file");
+// Native npm trusted publishing exchanges a short-lived OIDC credential for
+// each publish. Changesets publishes up to ten packages concurrently, which
+// can invalidate a sibling exchange and leave only part of a fixed release
+// available. Keep the release deterministic and verify each tarball before
+// moving to the next package.
+for (const entry of sortForPublishing(workspacePackages)) {
+	const { name, version, publishConfig } = entry.manifest;
+	const state = await registryVersionState(name, version);
+	if (state === "available") {
+		console.log(`Already published: ${name}@${version}`);
+		continue;
+	}
+	if (state === "incomplete") {
+		throw new Error(`${name}@${version} exists in npm metadata but its tarball is unavailable`);
 	}
 
-	publishArguments.push("--tag", prereleaseTag);
-	renameSync(preStateUrl, hiddenPreStateUrl);
+	console.log(`Publishing: ${name}@${version}`);
+	const publishResult = spawnSync(
+		"pnpm",
+		[
+			"publish",
+			"--access",
+			publishConfig?.access ?? changesetConfig.access,
+			"--tag",
+			publishTag,
+			"--no-git-checks",
+			"--json",
+		],
+		{
+			cwd: entry.directory,
+			env: withoutOtp(process.env),
+			stdio: "inherit",
+		},
+	);
+
+	if (publishResult.error) {
+		throw new Error(`Could not publish ${name}@${version}`, {
+			cause: publishResult.error,
+		});
+	}
+	if (publishResult.signal !== null) {
+		throw new Error(`Publishing ${name}@${version} terminated with ${publishResult.signal}`);
+	}
+	if (publishResult.status !== 0) {
+		throw new Error(
+			`Publishing ${name}@${version} exited with status ${publishResult.status ?? "unknown"}`,
+		);
+	}
+
+	await waitForAvailableVersion(name, version);
 }
 
-let publishResult;
+function sortForPublishing(entries) {
+	const remaining = new Map(entries.map((entry) => [entry.manifest.name, entry]));
+	const ordered = [];
 
-try {
-	// Changesets forces `latest` while a package has only prerelease history and
-	// rejects an explicit tag in pre mode. Hide the validated state only while
-	// publishing so all prereleases land on their configured dist-tag.
-	publishResult = spawnSync(process.execPath, publishArguments, {
-		cwd: repositoryRoot,
-		stdio: "inherit",
+	while (remaining.size > 0) {
+		const ready = [...remaining.values()]
+			.filter(({ manifest }) =>
+				Object.keys(manifest.dependencies ?? {}).every((dependency) => !remaining.has(dependency)),
+			)
+			.toSorted((left, right) => left.manifest.name.localeCompare(right.manifest.name));
+		if (ready.length === 0) {
+			throw new Error("Could not determine a dependency-safe package publish order");
+		}
+		for (const entry of ready) {
+			remaining.delete(entry.manifest.name);
+			ordered.push(entry);
+		}
+	}
+
+	return ordered;
+}
+
+async function registryVersionState(name, version) {
+	const metadataUrl = `https://registry.npmjs.org/${encodeURIComponent(name)}/${encodeURIComponent(version)}`;
+	const metadataResponse = await fetch(metadataUrl, { cache: "no-store" });
+	if (metadataResponse.status === 404) return "missing";
+	if (!metadataResponse.ok) {
+		throw new Error(
+			`Could not inspect ${name}@${version}: npm returned ${metadataResponse.status}`,
+		);
+	}
+
+	const metadata = await metadataResponse.json();
+	const tarballUrl = metadata?.dist?.tarball;
+	if (typeof tarballUrl !== "string") return "incomplete";
+	const tarballResponse = await fetch(tarballUrl, {
+		cache: "no-store",
+		method: "HEAD",
 	});
-} finally {
-	if (prereleaseTag !== undefined && existsSync(hiddenPreStateUrl)) {
-		renameSync(hiddenPreStateUrl, preStateUrl);
+	return tarballResponse.ok ? "available" : "incomplete";
+}
+
+async function waitForAvailableVersion(name, version) {
+	for (let attempt = 0; attempt < 12; attempt += 1) {
+		if ((await registryVersionState(name, version)) === "available") return;
+		await new Promise((resolveDelay) => setTimeout(resolveDelay, 5_000));
 	}
+	throw new Error(`${name}@${version} did not become installable within 60 seconds`);
 }
 
-if (publishResult.error) {
-	throw new Error("Could not start Changesets publish", { cause: publishResult.error });
+function withoutOtp(environment) {
+	return {
+		...environment,
+		NPM_CONFIG_OTP: undefined,
+		PNPM_CONFIG_OTP: undefined,
+		npm_config_otp: undefined,
+		pnpm_config_otp: undefined,
+	};
 }
-
-if (publishResult.signal !== null) {
-	throw new Error(`Changesets publish terminated with ${publishResult.signal}`);
-}
-
-process.exitCode = publishResult.status ?? 1;
