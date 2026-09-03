@@ -361,7 +361,7 @@ export class McpClientOAuthProtocol {
 		if (typeof input !== "object" || input === null) throw invalidOptionsError();
 		const authority = normalizeAuthority(input.authority);
 		const client = normalizeClient(input.client, authority);
-		const redirectUri = requireSecureUrl(input.redirectUri, { query: true }).href;
+		const redirectUri = requireRedirectUri(input.redirectUri).href;
 		const scope = normalizeScopes(input.scopes, authority);
 		throwIfAborted(input.signal);
 		await this.#authorizeEndpoint(authority.authorizationEndpoint, {
@@ -778,7 +778,7 @@ function normalizeTransaction(
 	if (transaction.authorityDigest !== createAuthorityDigest(authority)) {
 		throw transactionInvalidError();
 	}
-	const redirectUri = requireSecureUrl(transaction.redirectUri, { query: true }).href;
+	const redirectUri = requireRedirectUri(transaction.redirectUri).href;
 	assertBoundedOpaqueValue(transaction.clientId, MAX_CLIENT_ID_LENGTH);
 	if (!isClientAuthenticationMethod(transaction.clientAuthenticationMethod)) {
 		throw transactionInvalidError();
@@ -1182,6 +1182,41 @@ function requireSecureUrl(value: string, options: { readonly query: boolean }): 
 		throw authorityInvalidError();
 	}
 	return url;
+}
+
+function requireRedirectUri(value: string): URL {
+	if (typeof value !== "string" || value.length === 0 || value.length > MAX_URL_LENGTH) {
+		throw authorityInvalidError();
+	}
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		throw authorityInvalidError();
+	}
+	if (
+		url.username.length > 0 ||
+		url.password.length > 0 ||
+		url.hash.length > 0 ||
+		(url.protocol !== "https:" && !isLoopbackHttpRedirect(url))
+	) {
+		throw authorityInvalidError();
+	}
+	return url;
+}
+
+function isLoopbackHttpRedirect(url: URL): boolean {
+	if (url.protocol !== "http:") return false;
+	const host = url.hostname.toLowerCase();
+	if (host === "localhost" || host === "[::1]") return true;
+	const octets = host.split(".");
+	return octets.length === 4 && octets[0] === "127" && octets.every(isDecimalOctet);
+}
+
+function isDecimalOctet(value: string): boolean {
+	if (!/^\d{1,3}$/u.test(value)) return false;
+	const parsed = Number(value);
+	return parsed >= 0 && parsed <= 255 && String(parsed) === value;
 }
 
 function requireCanonicalResource(value: string): string {
