@@ -1,5 +1,14 @@
 # @nestm/mcp-client
 
+## 0.1.0-alpha.14
+
+### Patch Changes
+
+- 9c05d22: Accept OAuth authorization servers that do not advertise RFC 9207 response issuer support. The
+  callback still requires an exact `iss` when support is advertised and rejects every mismatched
+  `iss` value when one is returned.
+- @nestm/mcp-core@0.1.0-alpha.14
+
 ## 0.1.0-alpha.13
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @nestm/mcp-apps
 
+## 0.1.0-alpha.14
+
+### Patch Changes
+
+- @nestm/mcp-server@0.1.0-alpha.14
+
 ## 0.1.0-alpha.13
 
 ### Patch Changes
