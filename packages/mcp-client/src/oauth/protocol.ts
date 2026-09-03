@@ -28,6 +28,7 @@ import {
 	isInternalMcpClientOAuthProtocolError,
 	markInternalMcpClientOAuthProtocolError,
 } from "./protocol-error-brand.ts";
+import { isMcpClientOAuthScopeToken } from "./scope.ts";
 
 const DEFAULT_AUTHORIZATION_TRANSACTION_TTL_MS = 10 * 60 * 1_000;
 const MAX_AUTHORIZATION_TRANSACTION_TTL_MS = 60 * 60 * 1_000;
@@ -36,7 +37,6 @@ const MAX_CLIENT_ID_LENGTH = 2_048;
 const MAX_CLIENT_SECRET_LENGTH = 8_192;
 const MAX_TOKEN_LENGTH = 65_536;
 const MAX_SCOPE_COUNT = 128;
-const MAX_SCOPE_LENGTH = 256;
 const MAX_SCOPE_STRING_LENGTH = 4_096;
 const MAX_METADATA_LIST_LENGTH = 256;
 const MAX_METADATA_VALUE_LENGTH = 2_048;
@@ -212,6 +212,8 @@ export interface McpClientOAuthExchangeAuthorizationInput {
 export interface McpClientOAuthRefreshInput {
 	readonly authority: McpClientOAuthAuthority;
 	readonly client: McpClientOAuthClient;
+	/** Current effective grant, retained when a conforming refresh response omits `scope`. */
+	readonly currentScope?: string;
 	readonly refreshToken: string;
 	readonly signal?: AbortSignal;
 }
@@ -460,7 +462,7 @@ export class McpClientOAuthProtocol {
 				...(callback.issuer === undefined ? {} : { iss: callback.issuer }),
 			});
 			throwIfAborted(input.signal);
-			return validateTokens(tokens, "exchange");
+			return validateTokens(tokens, "exchange", transaction.scope);
 		} catch (error) {
 			throwIfAborted(input.signal);
 			throw translateTokenError(error, "exchange");
@@ -472,6 +474,8 @@ export class McpClientOAuthProtocol {
 		if (typeof input !== "object" || input === null) throw invalidOptionsError();
 		const authority = normalizeAuthority(input.authority);
 		const client = normalizeClient(input.client, authority);
+		const currentScope = input.currentScope;
+		if (currentScope !== undefined) assertScopeString(currentScope);
 		assertSecretValue(input.refreshToken, MAX_TOKEN_LENGTH);
 		if (
 			authority.grantTypesSupported === undefined ||
@@ -510,7 +514,7 @@ export class McpClientOAuthProtocol {
 				}),
 			});
 			throwIfAborted(input.signal);
-			return validateTokens(tokens, "refresh");
+			return validateTokens(tokens, "refresh", currentScope);
 		} catch (error) {
 			if (!fetchAttempt.invoked) throwIfAborted(input.signal);
 			throw translateTokenError(error, "refresh", fetchAttempt);
@@ -660,10 +664,12 @@ function createAuthority(input: {
 			: { grantTypesSupported: normalizeMetadataList(input.metadata.grant_types_supported) }),
 		...(input.resourceScopesSupported === undefined
 			? {}
-			: { resourceScopesSupported: normalizeMetadataList(input.resourceScopesSupported) }),
+			: { resourceScopesSupported: normalizeScopeMetadataList(input.resourceScopesSupported) }),
 		...(input.metadata.scopes_supported === undefined
 			? {}
-			: { authorizationScopesSupported: normalizeMetadataList(input.metadata.scopes_supported) }),
+			: {
+					authorizationScopesSupported: normalizeScopeMetadataList(input.metadata.scopes_supported),
+				}),
 		authorizationResponseIssuerParameterSupported:
 			input.metadata.authorization_response_iss_parameter_supported,
 	});
@@ -689,11 +695,13 @@ function normalizeAuthority(authority: McpClientOAuthAuthority): McpClientOAuthA
 			: { grantTypesSupported: normalizeMetadataList(authority.grantTypesSupported) }),
 		...(authority.resourceScopesSupported === undefined
 			? {}
-			: { resourceScopesSupported: normalizeMetadataList(authority.resourceScopesSupported) }),
+			: {
+					resourceScopesSupported: normalizeScopeMetadataList(authority.resourceScopesSupported),
+				}),
 		...(authority.authorizationScopesSupported === undefined
 			? {}
 			: {
-					authorizationScopesSupported: normalizeMetadataList(
+					authorizationScopesSupported: normalizeScopeMetadataList(
 						authority.authorizationScopesSupported,
 					),
 				}),
@@ -999,20 +1007,26 @@ function normalizeMetadataList(values: readonly string[] | undefined): readonly 
 }
 
 function assertScopeToken(value: string): void {
-	if (
-		typeof value !== "string" ||
-		value.length === 0 ||
-		value.length > MAX_SCOPE_LENGTH ||
-		/\s/u.test(value) ||
-		containsControlCharacter(value)
-	) {
-		throw invalidOptionsError();
-	}
+	if (!isMcpClientOAuthScopeToken(value)) throw invalidOptionsError();
 }
 
-function assertScopeString(value: string): void {
-	if (value.length === 0 || value.length > MAX_SCOPE_STRING_LENGTH) throw invalidOptionsError();
+function assertScopeString(value: unknown): asserts value is string {
+	if (typeof value !== "string" || value.length === 0 || value.length > MAX_SCOPE_STRING_LENGTH) {
+		throw invalidOptionsError();
+	}
 	for (const scope of value.split(" ")) assertScopeToken(scope);
+}
+
+function normalizeScopeMetadataList(values: readonly string[]): readonly string[] {
+	if (!Array.isArray(values) || values.length > MAX_SCOPE_COUNT) throw authorityInvalidError();
+	const normalized = [...new Set(values)];
+	if (
+		!normalized.every(isMcpClientOAuthScopeToken) ||
+		normalized.join(" ").length > MAX_SCOPE_STRING_LENGTH
+	) {
+		throw authorityInvalidError();
+	}
+	return Object.freeze(normalized);
 }
 
 function assertTransactionClient(
@@ -1069,7 +1083,11 @@ function assertAuthorizationUrl(
 	}
 }
 
-function validateTokens(tokens: OAuthTokens, operation: "exchange" | "refresh"): OAuthTokens {
+function validateTokens(
+	tokens: OAuthTokens,
+	operation: "exchange" | "refresh",
+	fallbackScope?: string,
+): OAuthTokens {
 	assertTokenValue(tokens.access_token, operation);
 	if (
 		tokens.token_type.length === 0 ||
@@ -1091,11 +1109,26 @@ function validateTokens(tokens: OAuthTokens, operation: "exchange" | "refresh"):
 		tokens.scope !== undefined &&
 		(tokens.scope.length === 0 ||
 			tokens.scope.length > MAX_SCOPE_STRING_LENGTH ||
-			containsControlCharacter(tokens.scope))
+			tokens.scope.split(" ").length > MAX_SCOPE_COUNT ||
+			!tokens.scope.split(" ").every(isMcpClientOAuthScopeToken))
 	) {
 		throw tokenResponseInvalidError(operation);
 	}
-	return tokens;
+	if (
+		tokens.scope !== undefined &&
+		fallbackScope !== undefined &&
+		!isScopeSubset(tokens.scope, fallbackScope)
+	) {
+		throw tokenResponseInvalidError(operation);
+	}
+	return tokens.scope === undefined && fallbackScope !== undefined
+		? { ...tokens, scope: fallbackScope }
+		: tokens;
+}
+
+function isScopeSubset(candidate: string, available: string): boolean {
+	const availableTokens = new Set(available.split(" "));
+	return candidate.split(" ").every((scope) => availableTokens.has(scope));
 }
 
 function assertTokenValue(value: string, operation: "exchange" | "refresh"): void {

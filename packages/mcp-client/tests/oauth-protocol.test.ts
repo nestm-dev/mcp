@@ -601,6 +601,76 @@ describe("McpClientOAuthProtocol authorization transactions", () => {
 		]);
 	});
 
+	it("retains the pinned requested scope when an exchange response omits scope", async () => {
+		const protocol = new McpClientOAuthProtocol({
+			fetch: async () => jsonResponse({ access_token: "access-token", token_type: "Bearer" }),
+			endpointPolicy: allowEndpoint,
+			now: () => 100,
+		});
+		const started = await protocol.startAuthorization({
+			authority: defaultAuthority(),
+			client: noneClient(),
+			redirectUri: REDIRECT_URI,
+			scopes: ["tools:read"],
+		});
+		const state = requireParameter(new URL(started.authorizationUrl), "state");
+
+		await expect(
+			protocol.exchangeAuthorization({
+				transaction: started.transaction,
+				client: noneClient(),
+				callback: successfulCallback(state),
+			}),
+		).resolves.toMatchObject({ scope: "tools:read" });
+	});
+
+	it("accepts an explicit server-default scope when authorization requested no scope", async () => {
+		const protocol = new McpClientOAuthProtocol({
+			fetch: async () =>
+				jsonResponse({ access_token: "access-token", token_type: "Bearer", scope: "tools:read" }),
+			endpointPolicy: allowEndpoint,
+			now: () => 100,
+		});
+		const started = await protocol.startAuthorization({
+			authority: defaultAuthority(),
+			client: noneClient(),
+			redirectUri: REDIRECT_URI,
+		});
+		const state = requireParameter(new URL(started.authorizationUrl), "state");
+
+		await expect(
+			protocol.exchangeAuthorization({
+				transaction: started.transaction,
+				client: noneClient(),
+				callback: successfulCallback(state),
+			}),
+		).resolves.toMatchObject({ scope: "tools:read" });
+	});
+
+	it("rejects an exchange response that widens the pinned requested scope", async () => {
+		const protocol = new McpClientOAuthProtocol({
+			fetch: async () =>
+				jsonResponse({ access_token: "access-token", token_type: "Bearer", scope: "tools:write" }),
+			endpointPolicy: allowEndpoint,
+			now: () => 100,
+		});
+		const started = await protocol.startAuthorization({
+			authority: defaultAuthority(),
+			client: noneClient(),
+			redirectUri: REDIRECT_URI,
+			scopes: ["tools:read"],
+		});
+		const state = requireParameter(new URL(started.authorizationUrl), "state");
+
+		await expect(
+			protocol.exchangeAuthorization({
+				transaction: started.transaction,
+				client: noneClient(),
+				callback: successfulCallback(state),
+			}),
+		).rejects.toMatchObject({ code: McpClientOAuthProtocolErrorCode.TokenExchangeFailed });
+	});
+
 	it("never reveals the authorization grant, PKCE verifier, redirect, or resource to a private_key_jwt signer", async () => {
 		const authorizationCode = "authorization-code-secret-marker";
 		let codeVerifier = "not-created";
@@ -1276,6 +1346,51 @@ describe("McpClientOAuthProtocol token requests", () => {
 		).resolves.toMatchObject({ access_token: "access-two", refresh_token: "rotated-refresh" });
 	});
 
+	it("retains an effective scope omitted by refresh and rejects scope widening", async () => {
+		const tokenBodies = [
+			{ access_token: "access-one", token_type: "Bearer" },
+			{ access_token: "access-two", token_type: "Bearer", scope: "tools:write" },
+		];
+		let responseIndex = 0;
+		const protocol = new McpClientOAuthProtocol({
+			fetch: async () => jsonResponse(tokenBodies[responseIndex++] ?? tokenBodies[1]),
+			endpointPolicy: allowEndpoint,
+		});
+
+		await expect(
+			protocol.refreshAuthorization({
+				authority: defaultAuthority(),
+				client: noneClient(),
+				currentScope: "tools:read",
+				refreshToken: "original-refresh",
+			}),
+		).resolves.toMatchObject({ scope: "tools:read" });
+		await expect(
+			protocol.refreshAuthorization({
+				authority: defaultAuthority(),
+				client: noneClient(),
+				currentScope: "tools:read",
+				refreshToken: "original-refresh",
+			}),
+		).rejects.toMatchObject({ code: McpClientOAuthProtocolErrorCode.RefreshOutcomeUnknown });
+	});
+
+	it("rejects an untyped current refresh scope before network dispatch", async () => {
+		const fetch = vi.fn<FetchLike>();
+		const protocol = new McpClientOAuthProtocol({ fetch, endpointPolicy: allowEndpoint });
+		const input = {
+			authority: defaultAuthority(),
+			client: noneClient(),
+			refreshToken: "refresh-token",
+		};
+		Reflect.set(input, "currentScope", 42);
+
+		await expect(protocol.refreshAuthorization(input)).rejects.toMatchObject({
+			code: McpClientOAuthProtocolErrorCode.InvalidOptions,
+		});
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
 	it.each([
 		{
 			name: "empty access token",
@@ -1300,6 +1415,18 @@ describe("McpClientOAuthProtocol token requests", () => {
 				token_type: "Bearer",
 				expires_in: Number.POSITIVE_INFINITY,
 			},
+		},
+		{
+			name: "a quoted scope token",
+			body: { access_token: "access-token", token_type: "Bearer", scope: 'tools"read' },
+		},
+		{
+			name: "a backslash scope token",
+			body: { access_token: "access-token", token_type: "Bearer", scope: "tools\\read" },
+		},
+		{
+			name: "a non-ASCII scope token",
+			body: { access_token: "access-token", token_type: "Bearer", scope: "café" },
 		},
 	])("marks refresh outcome unknown after a 2xx response with $name", async ({ body }) => {
 		const protocol = new McpClientOAuthProtocol({

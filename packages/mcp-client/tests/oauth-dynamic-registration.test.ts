@@ -310,6 +310,10 @@ describe("McpClientOAuthDynamicRegistration", () => {
 			name: "application type substitution",
 			response: () => jsonResponse(registrationResponse({ application_type: "native" }), 201),
 		},
+		{
+			name: "non-NQCHAR registered scope",
+			response: () => jsonResponse(registrationResponse({ scope: 'tools"read' }), 201),
+		},
 	])("rejects an $name response without making retry safe", async ({ response }) => {
 		const fetch = vi.fn<FetchLike>(async () => response());
 		const registration = new McpClientOAuthDynamicRegistration({

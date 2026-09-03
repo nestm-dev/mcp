@@ -2,6 +2,7 @@ import type { FetchLike } from "@modelcontextprotocol/client";
 
 import type { McpClientOAuthBootstrapCandidate } from "./bootstrap.ts";
 import type { McpClientOAuthClient } from "./protocol.ts";
+import { isMcpClientOAuthScopeToken } from "./scope.ts";
 
 const MAX_URL_LENGTH = 4_096;
 const MAX_CLIENT_NAME_LENGTH = 256;
@@ -11,7 +12,6 @@ const MAX_REDIRECT_URI_COUNT = 16;
 const MAX_CONTACT_COUNT = 16;
 const MAX_METADATA_VALUE_LENGTH = 512;
 const MAX_SCOPE_COUNT = 128;
-const MAX_SCOPE_LENGTH = 256;
 const MAX_SCOPE_STRING_LENGTH = 4_096;
 const MAX_RESPONSE_BODY_BYTES = 64 * 1_024;
 
@@ -581,13 +581,7 @@ function requireRemoteBoundedText(value: unknown, maximumLength: number): string
 }
 
 function requireScopeToken(value: string): void {
-	if (
-		typeof value !== "string" ||
-		value.length === 0 ||
-		value.length > MAX_SCOPE_LENGTH ||
-		/\s/u.test(value) ||
-		containsControlCharacter(value)
-	) {
+	if (!isMcpClientOAuthScopeToken(value)) {
 		throw registrationError(McpClientOAuthDynamicRegistrationErrorCode.InvalidOptions);
 	}
 }

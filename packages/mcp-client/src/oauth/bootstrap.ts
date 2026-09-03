@@ -11,6 +11,7 @@ import type {
 } from "@modelcontextprotocol/client";
 
 import type { McpClientOAuthAuthority } from "./protocol.ts";
+import { isMcpClientOAuthScopeToken } from "./scope.ts";
 
 const MAX_URL_LENGTH = 4_096;
 const MAX_PROTOCOL_VERSION_LENGTH = 64;
@@ -18,7 +19,6 @@ const MAX_AUTHORIZATION_SERVER_COUNT = 16;
 const MAX_METADATA_LIST_LENGTH = 256;
 const MAX_METADATA_VALUE_LENGTH = 2_048;
 const MAX_SCOPE_COUNT = 128;
-const MAX_SCOPE_LENGTH = 256;
 const MAX_SCOPE_STRING_LENGTH = 4_096;
 const MAX_WWW_AUTHENTICATE_LENGTH = 8_192;
 const STRICT_TOKEN_ENDPOINT_AUTHENTICATION_METHODS: ReadonlySet<string> = new Set([
@@ -648,13 +648,7 @@ function normalizeScopeList(
 	}
 	const normalized = [...new Set(values)];
 	for (const value of normalized) {
-		if (
-			typeof value !== "string" ||
-			value.length === 0 ||
-			value.length > MAX_SCOPE_LENGTH ||
-			/\s/u.test(value) ||
-			containsControlCharacter(value)
-		) {
+		if (!isMcpClientOAuthScopeToken(value)) {
 			throw bootstrapError(errorCode);
 		}
 	}
