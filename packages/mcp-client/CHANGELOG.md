@@ -1,5 +1,12 @@
 # @nestm/mcp-client
 
+## 0.1.0-alpha.15
+
+### Patch Changes
+
+- 7346f94: Accept successful legacy dynamic-registration responses that follow the MCP SDK schema while still rejecting conflicting security-sensitive metadata.
+- @nestm/mcp-core@0.1.0-alpha.15
+
 ## 0.1.0-alpha.14
 
 ### Patch Changes
