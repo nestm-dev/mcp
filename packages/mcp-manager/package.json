@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/mcp-manager",
-	"version": "0.1.0-alpha.12",
+	"version": "0.1.0-alpha.13",
 	"description": "Framework-neutral bounded lifecycle manager for dynamic MCP client runtime generations.",
 	"type": "module",
 	"sideEffects": false,
