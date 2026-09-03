@@ -173,10 +173,6 @@ export class McpClientOAuthDynamicRegistration {
 				true,
 			);
 		}
-		if (response.status !== 201) {
-			await discardResponse(response);
-			throw registrationError(McpClientOAuthDynamicRegistrationErrorCode.ResponseInvalid, true);
-		}
 
 		try {
 			const body = await readBoundedJson(response);
@@ -329,22 +325,25 @@ function normalizeRegistrationResult(
 	if (!sameStrings(redirectUris, input.redirectUris)) {
 		throw registrationError(McpClientOAuthDynamicRegistrationErrorCode.ResponseInvalid);
 	}
-	if (value.application_type !== input.applicationType) {
+	if (value.application_type !== undefined && value.application_type !== input.applicationType) {
 		throw registrationError(McpClientOAuthDynamicRegistrationErrorCode.ResponseInvalid);
 	}
-	if (value.token_endpoint_auth_method !== "none") {
+	if (
+		value.token_endpoint_auth_method !== undefined &&
+		value.token_endpoint_auth_method !== "none"
+	) {
 		throw registrationError(McpClientOAuthDynamicRegistrationErrorCode.ResponseInvalid);
 	}
-	const responseTypes = normalizeRemoteStringList(value.response_types, 16);
-	const grantTypes = normalizeRemoteStringList(value.grant_types, 16);
-	if (!responseTypes.includes("code") || !grantTypes.includes("authorization_code")) {
+	const responseTypes = normalizeRemoteOptionalStringList(value.response_types, 16);
+	const grantTypes = normalizeRemoteOptionalStringList(value.grant_types, 16);
+	if (
+		(responseTypes !== undefined && !responseTypes.includes("code")) ||
+		(grantTypes !== undefined && !grantTypes.includes("authorization_code"))
+	) {
 		throw registrationError(McpClientOAuthDynamicRegistrationErrorCode.ResponseInvalid);
 	}
 	const clientIdIssuedAt = normalizeRemoteOptionalTimestamp(value.client_id_issued_at);
 	const clientSecretExpiresAt = normalizeRemoteOptionalTimestamp(value.client_secret_expires_at);
-	if ((clientSecret === undefined) !== (clientSecretExpiresAt === undefined)) {
-		throw registrationError(McpClientOAuthDynamicRegistrationErrorCode.ResponseInvalid);
-	}
 	const registeredScopes = normalizeRemoteOptionalScope(value.scope);
 	return Object.freeze({
 		issuer: input.issuer,
@@ -511,6 +510,13 @@ function normalizeRemoteStringList(value: unknown, maximumCount: number): readon
 		result.push(requireRemoteBoundedText(item, MAX_URL_LENGTH));
 	}
 	return Object.freeze(result);
+}
+
+function normalizeRemoteOptionalStringList(
+	value: unknown,
+	maximumCount: number,
+): readonly string[] | undefined {
+	return value === undefined ? undefined : normalizeRemoteStringList(value, maximumCount);
 }
 
 function normalizeRemoteOptionalSecret(value: unknown): string | undefined {

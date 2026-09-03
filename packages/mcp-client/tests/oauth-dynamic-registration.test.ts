@@ -87,6 +87,30 @@ describe("McpClientOAuthDynamicRegistration", () => {
 		expect(Object.isFrozen(result.client.authentication)).toBe(true);
 	});
 
+	it("accepts an SDK-compatible 2xx response with only required echoed metadata", async () => {
+		const registration = new McpClientOAuthDynamicRegistration({
+			fetch: async () =>
+				jsonResponse(
+					{
+						client_id: "minimally-registered-public-client",
+						client_secret: "optional-non-confidential-secret",
+						redirect_uris: [REDIRECT_URI],
+					},
+					200,
+				),
+			endpointPolicy: allowEndpoint,
+		});
+
+		await expect(registerDefault(registration)).resolves.toEqual({
+			issuer: ISSUER_URL,
+			client: {
+				clientId: "minimally-registered-public-client",
+				authentication: { method: "none" },
+			},
+			clientSecret: "optional-non-confidential-secret",
+		});
+	});
+
 	it.each([
 		{ name: "claimed HTTPS", redirectUri: "https://native.example.test/oauth/callback" },
 		{ name: "loopback HTTP", redirectUri: "http://127.0.0.1:9876/oauth/callback" },
@@ -253,10 +277,6 @@ describe("McpClientOAuthDynamicRegistration", () => {
 
 	it.each([
 		{
-			name: "non-201 successful status",
-			response: () => jsonResponse(registrationResponse(), 200),
-		},
-		{
 			name: "declared oversized body",
 			response: () =>
 				jsonResponse(registrationResponse(), 201, { "content-length": String(64 * 1_024 + 1) }),
@@ -290,13 +310,12 @@ describe("McpClientOAuthDynamicRegistration", () => {
 			response: () => jsonResponse(registrationResponse({ client_secret: "x".repeat(8_193) }), 201),
 		},
 		{
-			name: "client secret without an expiry",
+			name: "redirect URI substitution",
 			response: () =>
-				jsonResponse(registrationResponse({ client_secret_expires_at: undefined }), 201),
-		},
-		{
-			name: "client secret expiry without a secret",
-			response: () => jsonResponse(registrationResponse({ client_secret: undefined }), 201),
+				jsonResponse(
+					registrationResponse({ redirect_uris: ["https://evil.example.test/callback"] }),
+					201,
+				),
 		},
 		{
 			name: "confidential authentication substitution",
@@ -309,6 +328,14 @@ describe("McpClientOAuthDynamicRegistration", () => {
 		{
 			name: "application type substitution",
 			response: () => jsonResponse(registrationResponse({ application_type: "native" }), 201),
+		},
+		{
+			name: "authorization-code response type removal",
+			response: () => jsonResponse(registrationResponse({ response_types: ["token"] }), 201),
+		},
+		{
+			name: "authorization-code grant removal",
+			response: () => jsonResponse(registrationResponse({ grant_types: ["refresh_token"] }), 201),
 		},
 		{
 			name: "non-NQCHAR registered scope",
