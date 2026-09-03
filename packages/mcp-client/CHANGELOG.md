@@ -1,5 +1,20 @@
 # @nestm/mcp-client
 
+## 0.1.0-alpha.12
+
+### Minor Changes
+
+- 007763e: Add a host-managed OAuth bootstrap that parses bounded Bearer challenges, discovers
+  protected-resource and authorization-server metadata, returns explicit issuer-selection and
+  strict-compatibility results, honors challenged scope priority, and exposes CIMD and legacy DCR
+  capabilities without performing registration. Add an explicit dynamic-registration compatibility
+  subpath that performs one policy-approved public-client registration POST without retries or host
+  state.
+
+### Patch Changes
+
+- @nestm/mcp-core@0.1.0-alpha.12
+
 ## 0.1.0-alpha.11
 
 ### Patch Changes
