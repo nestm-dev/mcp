@@ -1,5 +1,15 @@
 # @nestm/mcp-client
 
+## 0.1.0-alpha.13
+
+### Patch Changes
+
+- f546bf3: Enforce the RFC 6749 ASCII NQCHAR grammar for configured, discovered, registered, and returned
+  OAuth scope tokens, while preserving valid punctuation such as commas. Token exchange now retains
+  the pinned requested scope when the response omits it; refresh can retain a caller-supplied current
+  scope, and both flows reject an explicit scope that widens the bound grant.
+- @nestm/mcp-core@0.1.0-alpha.13
+
 ## 0.1.0-alpha.12
 
 ### Minor Changes
