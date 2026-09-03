@@ -150,6 +150,7 @@ export interface McpClientOAuthAuthority {
 	readonly grantTypesSupported?: readonly string[];
 	readonly resourceScopesSupported?: readonly string[];
 	readonly authorizationScopesSupported?: readonly string[];
+	/** Whether RFC 9207 requires an `iss` parameter in the authorization response. */
 	readonly authorizationResponseIssuerParameterSupported: boolean;
 }
 
@@ -640,7 +641,6 @@ function createAuthority(input: {
 		!responseTypesSupported.includes("code") ||
 		!codeChallengeMethodsSupported.includes("S256") ||
 		tokenEndpointAuthMethodsSupported.length === 0 ||
-		!isLiteralTrue(input.metadata.authorization_response_iss_parameter_supported) ||
 		(input.metadata.grant_types_supported !== undefined &&
 			!input.metadata.grant_types_supported.includes("authorization_code")) ||
 		(input.metadata.response_modes_supported !== undefined &&
@@ -671,7 +671,7 @@ function createAuthority(input: {
 					authorizationScopesSupported: normalizeScopeMetadataList(input.metadata.scopes_supported),
 				}),
 		authorizationResponseIssuerParameterSupported:
-			input.metadata.authorization_response_iss_parameter_supported,
+			input.metadata.authorization_response_iss_parameter_supported === true,
 	});
 }
 
@@ -709,7 +709,7 @@ function normalizeAuthority(authority: McpClientOAuthAuthority): McpClientOAuthA
 			authority.authorizationResponseIssuerParameterSupported,
 	});
 	if (
-		!isLiteralTrue(normalized.authorizationResponseIssuerParameterSupported) ||
+		typeof normalized.authorizationResponseIssuerParameterSupported !== "boolean" ||
 		!normalized.responseTypesSupported.includes("code") ||
 		!normalized.codeChallengeMethodsSupported.includes("S256") ||
 		normalized.tokenEndpointAuthMethodsSupported.length === 0 ||
@@ -1045,10 +1045,13 @@ function assertCallbackIssuer(
 	callbackIssuer: string | undefined,
 	authority: McpClientOAuthAuthority,
 ): void {
-	if (
-		!isLiteralTrue(authority.authorizationResponseIssuerParameterSupported) ||
-		callbackIssuer !== authority.issuer
-	) {
+	if (callbackIssuer === undefined) {
+		if (authority.authorizationResponseIssuerParameterSupported) {
+			throw transactionInvalidError();
+		}
+		return;
+	}
+	if (callbackIssuer !== authority.issuer) {
 		throw transactionInvalidError();
 	}
 }
@@ -1250,10 +1253,6 @@ function containsControlCharacter(value: string): boolean {
 		}
 	}
 	return false;
-}
-
-function isLiteralTrue(value: unknown): value is true {
-	return value === true;
 }
 
 function isClientAuthenticationMethod(

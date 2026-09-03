@@ -181,7 +181,7 @@ describe("McpClientOAuthProtocol discovery", () => {
 		{ name: "omitted", supported: undefined },
 		{ name: "false", supported: false },
 	] as const)(
-		"rejects $name RFC 9207 authorization-response issuer capability",
+		"accepts $name RFC 9207 authorization-response issuer capability",
 		async ({ supported }) => {
 			const requests: RecordedRequest[] = [];
 			const protocol = discoveryProtocol(requests, {
@@ -196,7 +196,9 @@ describe("McpClientOAuthProtocol discovery", () => {
 					resource: RESOURCE_URL,
 					issuer: ISSUER_URL,
 				}),
-			).rejects.toMatchObject({ code: McpClientOAuthProtocolErrorCode.AuthorityInvalid });
+			).resolves.toMatchObject({
+				authorizationResponseIssuerParameterSupported: false,
+			});
 			expect(requests).toHaveLength(2);
 		},
 	);
@@ -497,10 +499,9 @@ describe("McpClientOAuthProtocol authorization transactions", () => {
 
 	it.each([
 		{ name: "omitted", supported: undefined },
-		{ name: "false", supported: false },
 		{ name: "a truthy non-boolean", supported: "true" },
 	] as const)(
-		"rejects a manually supplied authority with RFC 9207 capability $name",
+		"rejects a manually supplied authority with invalid RFC 9207 capability $name",
 		async ({ supported }) => {
 			const authority = defaultAuthority();
 			Object.defineProperty(authority, "authorizationResponseIssuerParameterSupported", {
@@ -519,6 +520,22 @@ describe("McpClientOAuthProtocol authorization transactions", () => {
 			expect(endpointPolicy).not.toHaveBeenCalled();
 		},
 	);
+
+	it("accepts a manually supplied authority without RFC 9207 response-issuer support", async () => {
+		const endpointPolicy = vi.fn<McpClientOAuthEndpointPolicy>(allowEndpoint);
+		const protocol = new McpClientOAuthProtocol({ fetch: unexpectedFetch, endpointPolicy });
+
+		await expect(
+			protocol.startAuthorization({
+				authority: defaultAuthority({
+					authorizationResponseIssuerParameterSupported: false,
+				}),
+				client: noneClient(),
+				redirectUri: REDIRECT_URI,
+			}),
+		).resolves.toMatchObject({ transaction: { authority: { issuer: ISSUER_URL } } });
+		expect(endpointPolicy).toHaveBeenCalledOnce();
+	});
 
 	it("rejects a manual authority that omits authorization_code from advertised grants", async () => {
 		const endpointPolicy = vi.fn<McpClientOAuthEndpointPolicy>(allowEndpoint);
@@ -845,6 +862,66 @@ describe("McpClientOAuthProtocol authorization transactions", () => {
 			}),
 		).rejects.toMatchObject({ code: McpOAuthStateErrorCode.StateExpired });
 		expect(policyCalls).toHaveLength(0);
+		expect(requests).toHaveLength(0);
+	});
+
+	it.each([
+		{ name: "an omitted issuer", callbackIssuer: undefined },
+		{ name: "the exact issuer", callbackIssuer: ISSUER_URL },
+	] as const)(
+		"accepts $name when RFC 9207 response-issuer support was not advertised",
+		async ({ callbackIssuer }) => {
+			const requests: RecordedRequest[] = [];
+			const protocol = new McpClientOAuthProtocol({
+				fetch: recordingFetch(requests, async () => tokenResponse()),
+				endpointPolicy: allowEndpoint,
+				now: () => 100,
+			});
+			const started = await protocol.startAuthorization({
+				authority: defaultAuthority({
+					authorizationResponseIssuerParameterSupported: false,
+				}),
+				client: noneClient(),
+				redirectUri: REDIRECT_URI,
+			});
+			const state = requireParameter(new URL(started.authorizationUrl), "state");
+			const callback = new URLSearchParams({ code: "authorization-code", state });
+			if (callbackIssuer !== undefined) callback.set("iss", callbackIssuer);
+
+			await expect(
+				protocol.exchangeAuthorization({
+					transaction: started.transaction,
+					client: noneClient(),
+					callback,
+				}),
+			).resolves.toMatchObject({ access_token: "access-token" });
+			expect(requests).toHaveLength(1);
+		},
+	);
+
+	it("rejects a mismatched issuer even when RFC 9207 response-issuer support was not advertised", async () => {
+		const requests: RecordedRequest[] = [];
+		const protocol = new McpClientOAuthProtocol({
+			fetch: recordingFetch(requests, async () => tokenResponse()),
+			endpointPolicy: allowEndpoint,
+			now: () => 100,
+		});
+		const started = await protocol.startAuthorization({
+			authority: defaultAuthority({
+				authorizationResponseIssuerParameterSupported: false,
+			}),
+			client: noneClient(),
+			redirectUri: REDIRECT_URI,
+		});
+		const state = requireParameter(new URL(started.authorizationUrl), "state");
+
+		await expect(
+			protocol.exchangeAuthorization({
+				transaction: started.transaction,
+				client: noneClient(),
+				callback: successfulCallback(state, "https://attacker.example.test"),
+			}),
+		).rejects.toMatchObject({ code: McpClientOAuthProtocolErrorCode.TransactionInvalid });
 		expect(requests).toHaveLength(0);
 	});
 

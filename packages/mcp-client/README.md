@@ -132,8 +132,9 @@ token storage remain host-application responsibilities.
 Multi-tenant hosts should use the dedicated `@nestm/mcp-client/oauth` surface instead of allowing
 the transport to start an interactive SDK flow. The strict facade only accepts clients that were
 provisioned out of band. It has no Dynamic Client Registration operation, requires exact resource
-and issuer bindings, requires PKCE S256 plus the RFC 9207 authorization-response issuer parameter,
-and re-checks every discovered or credentialed endpoint through host policy.
+and issuer bindings plus PKCE S256, validates the RFC 9207 authorization-response issuer parameter
+when advertised or returned, and re-checks every discovered or credentialed endpoint through host
+policy.
 
 ```ts
 import { McpClientOAuthProtocol } from "@nestm/mcp-client/oauth";
@@ -170,9 +171,10 @@ redirectUser(started.authorizationUrl);
 On callback, parse the parameters, derive the state lookup digest, and atomically take the pending
 transaction before calling `exchangeAuthorization`. A consumed transaction stays consumed even
 when token exchange has an ambiguous network result. The facade validates state lifetime, callback
-issuer, client identity, and the authority/endpoints pinned before redirect; callbacks without the
-exact RFC 9207 `iss` value fail closed, and the facade never rediscovers an endpoint while redeeming
-a code.
+issuer, client identity, and the authority/endpoints pinned before redirect. When the authority
+advertises RFC 9207, callbacks without the exact `iss` value fail closed. An unadvertised but
+present `iss` is still compared exactly; omission is accepted only when the authority did not
+advertise it. The facade never rediscovers an endpoint while redeeming a code.
 
 The subpath also provides a revisioned credential-store port and
 `McpClientOAuthRefreshCoordinator`. Refreshes for one opaque identity and exact revision share one

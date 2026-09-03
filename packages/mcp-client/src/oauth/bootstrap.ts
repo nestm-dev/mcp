@@ -132,6 +132,7 @@ export const McpClientOAuthStrictCompatibilityIssue = {
 	TokenEndpointAuthenticationUnsupported: "token_endpoint_authentication_unsupported",
 	AuthorizationCodeGrantUnsupported: "authorization_code_grant_unsupported",
 	QueryResponseModeUnsupported: "query_response_mode_unsupported",
+	/** @deprecated RFC 9207 support is optional and this issue is no longer emitted. */
 	AuthorizationResponseIssuerUnsupported: "authorization_response_issuer_unsupported",
 } as const;
 
@@ -573,9 +574,6 @@ function strictCompatibilityIssues(
 	) {
 		issues.push(McpClientOAuthStrictCompatibilityIssue.QueryResponseModeUnsupported);
 	}
-	if (metadata.authorization_response_iss_parameter_supported !== true) {
-		issues.push(McpClientOAuthStrictCompatibilityIssue.AuthorizationResponseIssuerUnsupported);
-	}
 	return Object.freeze(issues);
 }
 
@@ -615,7 +613,8 @@ function createStrictAuthority(input: {
 						McpClientOAuthBootstrapErrorCode.AuthorityInvalid,
 					),
 				}),
-		authorizationResponseIssuerParameterSupported: true,
+		authorizationResponseIssuerParameterSupported:
+			input.metadata.authorization_response_iss_parameter_supported === true,
 	});
 }
 

@@ -224,7 +224,6 @@ describe("McpClientOAuthBootstrap", () => {
 			authorizationServerMetadata({
 				code_challenge_methods_supported: undefined,
 				token_endpoint_auth_methods_supported: undefined,
-				authorization_response_iss_parameter_supported: false,
 			}),
 		);
 
@@ -241,12 +240,31 @@ describe("McpClientOAuthBootstrap", () => {
 			issues: [
 				McpClientOAuthStrictCompatibilityIssue.PkceS256Unsupported,
 				McpClientOAuthStrictCompatibilityIssue.TokenEndpointAuthenticationUnsupported,
-				McpClientOAuthStrictCompatibilityIssue.AuthorizationResponseIssuerUnsupported,
 			],
 		});
 		expect(JSON.stringify(result)).not.toContain(AUTHORIZATION_ENDPOINT);
 		expect(JSON.stringify(result)).not.toContain(TOKEN_ENDPOINT);
 	});
+
+	it.each([
+		{ name: "omitted", supported: undefined },
+		{ name: "false", supported: false },
+	] as const)(
+		"accepts an authorization server with $name RFC 9207 response-issuer support",
+		async ({ supported }) => {
+			const bootstrap = discoveryBootstrap(
+				authorizationServerMetadata({
+					authorization_response_iss_parameter_supported: supported,
+				}),
+			);
+
+			const result = await bootstrap.discover({ serverUrl: SERVER_URL });
+
+			expect(result.kind).toBe("ready");
+			if (result.kind !== "ready") throw new Error("Expected ready discovery.");
+			expect(result.candidate.authority.authorizationResponseIssuerParameterSupported).toBe(false);
+		},
+	);
 
 	it("returns an authority accepted directly by the strict authorization starter", async () => {
 		const bootstrap = discoveryBootstrap(authorizationServerMetadata());
