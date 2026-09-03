@@ -8,6 +8,7 @@ export type {
 } from "@modelcontextprotocol/client";
 
 export * from "./auth-provider.ts";
+export * from "./bootstrap.ts";
 export * from "./credential-store.ts";
 export * from "./protocol.ts";
 export * from "./refresh-coordinator.ts";
