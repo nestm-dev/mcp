@@ -40,6 +40,11 @@
 			"import": "./dist/oauth/index.mjs",
 			"default": "./dist/oauth/index.mjs"
 		},
+		"./oauth/dynamic-registration": {
+			"types": "./dist/oauth/dynamic-registration.d.mts",
+			"import": "./dist/oauth/dynamic-registration.mjs",
+			"default": "./dist/oauth/dynamic-registration.mjs"
+		},
 		"./package.json": "./package.json"
 	},
 	"files": [
