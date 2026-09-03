@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import { assertFixedGroup, assertFixedVersions } from "./publish-state.mjs";
 
 const expectedRef = "refs/heads/main";
+const registryPropagationAttempts = 60;
+const registryPropagationDelayMs = 5_000;
 
 if (
 	process.env.GITHUB_ACTIONS !== "true" ||
@@ -90,10 +92,14 @@ for (const entry of sortForPublishing(workspacePackages)) {
 	const state = await registryVersionState(name, version);
 	if (state === "available") {
 		console.log(`Already published: ${name}@${version}`);
+		recordPublishedVersion(name, version);
 		continue;
 	}
 	if (state === "incomplete") {
-		throw new Error(`${name}@${version} exists in npm metadata but its tarball is unavailable`);
+		console.log(`Waiting for npm to finish publishing: ${name}@${version}`);
+		await waitForAvailableVersion(name, version);
+		recordPublishedVersion(name, version);
+		continue;
 	}
 
 	console.log(`Publishing: ${name}@${version}`);
@@ -130,6 +136,7 @@ for (const entry of sortForPublishing(workspacePackages)) {
 	}
 
 	await waitForAvailableVersion(name, version);
+	recordPublishedVersion(name, version);
 }
 
 function sortForPublishing(entries) {
@@ -175,11 +182,20 @@ async function registryVersionState(name, version) {
 }
 
 async function waitForAvailableVersion(name, version) {
-	for (let attempt = 0; attempt < 12; attempt += 1) {
+	for (let attempt = 0; attempt < registryPropagationAttempts; attempt += 1) {
 		if ((await registryVersionState(name, version)) === "available") return;
-		await new Promise((resolveDelay) => setTimeout(resolveDelay, 5_000));
+		await new Promise((resolveDelay) => setTimeout(resolveDelay, registryPropagationDelayMs));
 	}
-	throw new Error(`${name}@${version} did not become installable within 60 seconds`);
+	throw new Error(`${name}@${version} did not become installable within five minutes`);
+}
+
+function recordPublishedVersion(name, version) {
+	const outputPath = process.env.CHANGESETS_OUTPUT;
+	if (typeof outputPath !== "string" || outputPath.length === 0) return;
+	appendFileSync(
+		outputPath,
+		`${JSON.stringify({ type: "git-tag", tag: `${name}@${version}`, packageName: name })}\n`,
+	);
 }
 
 function withoutOtp(environment) {
