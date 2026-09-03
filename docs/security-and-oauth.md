@@ -28,8 +28,8 @@ That pass-through is useful for application-owned service identities. A multi-te
 shared or per-user credentials should use `@nestm/mcp-client/oauth` instead. Its strict facade
 accepts only pre-provisioned clients, performs RFC 9728 and RFC 8414 discovery in two separately
 policy-checked phases, requires exact configured resource and issuer values, requires PKCE S256,
-requires RFC 9207 authorization-response issuer identification, and pins the discovered endpoints
-into the single-use callback transaction. It never calls the SDK full-flow orchestrator, never
+validates RFC 9207 authorization-response issuer identification when advertised or returned, and
+pins the discovered endpoints into the single-use callback transaction. It never calls the SDK full-flow orchestrator, never
 performs Dynamic Client Registration, and never rediscovers a token endpoint while redeeming an
 authorization code.
 
@@ -454,7 +454,7 @@ NestM lifecycle events omit inputs and outputs, and server/gateway operation pri
 - [ ] Decorated Nest capabilities use `handlerAuthorization`; HTTP-exchange middleware is not treated as a stdio policy.
 - [ ] Gateway downstream and upstream credentials are separate.
 - [ ] OAuth pending state is single-use, authenticated-encrypted, session-bound, and pinned to exact issuer, resource, endpoints, client, owner, and revision.
-- [ ] Interactive OAuth authorities advertise RFC 9207 and every callback carries the exact expected `iss` value.
+- [ ] When an interactive OAuth authority advertises RFC 9207, every callback carries the exact expected `iss` value; any unadvertised but present `iss` is also compared exactly.
 - [ ] OAuth discovery and token calls use a redirect-denying, DNS-pinned, size/time-bounded fetch plus fail-closed endpoint policy.
 - [ ] Refresh rotation uses a durable pre-dispatch claim plus exact-revision commit; stale claims never reactivate, and terminal invalidation evicts credential-bound client leases.
 - [ ] Stdio definitions are trusted, allowlisted, and sandboxed.
