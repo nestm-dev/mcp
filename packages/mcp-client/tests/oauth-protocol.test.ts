@@ -421,6 +421,45 @@ describe("McpClientOAuthProtocol discovery", () => {
 });
 
 describe("McpClientOAuthProtocol authorization transactions", () => {
+	it("supports native loopback HTTP redirects through authorization and token exchange", async () => {
+		const redirectUri = "http://127.0.0.1:5173/api/mcp/oauth/callback";
+		const requests: RecordedRequest[] = [];
+		const protocol = new McpClientOAuthProtocol({
+			fetch: recordingFetch(requests, async () => tokenResponse()),
+			endpointPolicy: allowEndpoint,
+		});
+		const started = await protocol.startAuthorization({
+			authority: defaultAuthority(),
+			client: noneClient(),
+			redirectUri,
+		});
+		const authorizationUrl = new URL(started.authorizationUrl);
+		const state = requireParameter(authorizationUrl, "state");
+		expect(authorizationUrl.searchParams.get("redirect_uri")).toBe(redirectUri);
+
+		await protocol.exchangeAuthorization({
+			transaction: started.transaction,
+			client: noneClient(),
+			callback: new URLSearchParams({ code: "loopback-code", state, iss: ISSUER_URL }),
+		});
+		const request = expectSingleTokenRequest(requests);
+		expect(new URLSearchParams(request.body).get("redirect_uri")).toBe(redirectUri);
+	});
+
+	it("rejects a non-loopback HTTP redirect before endpoint policy", async () => {
+		const endpointPolicy = vi.fn<McpClientOAuthEndpointPolicy>(allowEndpoint);
+		const protocol = new McpClientOAuthProtocol({ fetch: unexpectedFetch, endpointPolicy });
+
+		await expect(
+			protocol.startAuthorization({
+				authority: defaultAuthority(),
+				client: noneClient(),
+				redirectUri: "http://platform.example.test/oauth/callback",
+			}),
+		).rejects.toMatchObject({ code: McpClientOAuthProtocolErrorCode.AuthorityInvalid });
+		expect(endpointPolicy).not.toHaveBeenCalled();
+	});
+
 	it("returns digest-only state and a deeply pinned transaction with a matching S256 challenge", async () => {
 		const policyCalls: PolicyObservation[] = [];
 		const protocol = new McpClientOAuthProtocol({
