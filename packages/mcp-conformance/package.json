@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/mcp-conformance",
-	"version": "0.1.0-alpha.11",
+	"version": "0.1.0-alpha.12",
 	"description": "Bounded runtime integrity and safety probes for third-party MCP servers, with canonicalization, bounded capture, and catalog fingerprinting for drift detection.",
 	"type": "module",
 	"sideEffects": false,
