@@ -1,6 +1,6 @@
 {
 	"name": "@nestm/mcp-auth",
-	"version": "0.1.0-alpha.15",
+	"version": "0.1.0-alpha.16",
 	"description": "OAuth 2.1 authorization-server proxy, Client ID Metadata Documents, and token infrastructure for NestM MCP servers.",
 	"type": "module",
 	"sideEffects": false,

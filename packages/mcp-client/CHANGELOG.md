@@ -1,5 +1,12 @@
 # @nestm/mcp-client
 
+## 0.1.0-alpha.16
+
+### Patch Changes
+
+- 31b41a3: Allow native OAuth clients to use RFC 8252 loopback HTTP redirect URIs throughout authorization and token exchange while continuing to reject non-loopback HTTP callbacks.
+- @nestm/mcp-core@0.1.0-alpha.16
+
 ## 0.1.0-alpha.15
 
 ### Patch Changes
