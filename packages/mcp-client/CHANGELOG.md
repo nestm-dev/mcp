@@ -1,5 +1,13 @@
 # @nestm/mcp-client
 
+## 0.1.0-alpha.19
+
+### Patch Changes
+
+- 54ef651: Add the optional AI SDK tool adapter for sanitized descriptors and host-protected invocation, preserving exact names, inputs and cancellation without adding AI to core consumers.
+- @nestm/mcp-conformance@0.1.0-alpha.19
+  - @nestm/mcp-core@0.1.0-alpha.19
+
 ## 0.1.0-alpha.18
 
 ### Patch Changes
