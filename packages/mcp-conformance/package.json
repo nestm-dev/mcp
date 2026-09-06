@@ -41,7 +41,12 @@
 			"import": "./dist/index.mjs",
 			"default": "./dist/index.mjs"
 		},
-		"./package.json": "./package.json"
+		"./package.json": "./package.json",
+		"./report": {
+			"types": "./dist/report.d.mts",
+			"import": "./dist/report.mjs",
+			"default": "./dist/report.mjs"
+		}
 	},
 	"dependencies": {
 		"zod": "^4.4.3"

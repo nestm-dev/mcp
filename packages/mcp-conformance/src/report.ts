@@ -195,7 +195,8 @@ export const McpConformanceReportSchema = z
 			});
 		}
 		if (
-			Buffer.byteLength(JSON.stringify(report), "utf8") > MCP_CONFORMANCE_HARD_LIMITS.maxJsonBytes
+			new TextEncoder().encode(JSON.stringify(report)).byteLength >
+			MCP_CONFORMANCE_HARD_LIMITS.maxJsonBytes
 		) {
 			context.addIssue({
 				code: "custom",
@@ -298,7 +299,7 @@ function assertReportJsonSize(report: MutableReport, maximumBytes: number): void
 }
 
 function assertJsonBytes(serialized: string, maximumBytes: number): void {
-	if (Buffer.byteLength(serialized, "utf8") > maximumBytes) {
+	if (new TextEncoder().encode(serialized).byteLength > maximumBytes) {
 		throw new RangeError(
 			`The conformance report JSON exceeds the configured ${String(maximumBytes)} byte safety limit.`,
 		);

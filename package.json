@@ -35,7 +35,7 @@
 		"test": "vitest run && pnpm --filter @nestm/mcp-control-plane-web run test",
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage && pnpm --filter @nestm/mcp-control-plane-web run test:coverage",
-		"verify:pack": "pnpm run build && pnpm --filter \"./packages/*\" exec publint --strict && node scripts/check-package-dependencies.mjs",
+		"verify:pack": "pnpm run build && pnpm --filter \"./packages/*\" exec publint --strict && node scripts/check-package-dependencies.mjs && node scripts/verify-report-consumer.mjs",
 		"verify:attw": "pnpm run build && for package in packages/*; do pnpm exec attw --pack \"$package\" --profile esm-only || exit 1; done",
 		"verify:apps": "pnpm --filter @nestm/mcp-control-plane-api run smoke:dist",
 		"verify": "pnpm run check && pnpm run test && pnpm run verify:pack && pnpm run verify:apps && pnpm run verify:attw",
