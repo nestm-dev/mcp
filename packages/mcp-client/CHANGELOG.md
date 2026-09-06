@@ -1,5 +1,13 @@
 # @nestm/mcp-client
 
+## 0.1.0-alpha.18
+
+### Patch Changes
+
+- Updated dependencies [b4c4652]
+  - @nestm/mcp-conformance@0.1.0-alpha.18
+  - @nestm/mcp-core@0.1.0-alpha.18
+
 ## 0.1.0-alpha.17
 
 ### Minor Changes
