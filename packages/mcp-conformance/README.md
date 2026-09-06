@@ -252,3 +252,7 @@ is `{ schemas, version: 2 }`, with absent output schemas represented as `null`.
 
 Connection identity, task/usage support, approval, workspace inheritance, and artifact binding
 remain host decisions. Apply those policies after exact catalog identity selection.
+
+### Browser report consumers
+
+Import `McpConformanceReportSchema`, `McpConformanceReport`, and the existing JSON helpers from `@nestm/mcp-conformance/report` to validate and display reports without loading discovery, runner, or Node modules. The subpath depends only on Zod and standard browser APIs, and enforces the same byte limits and report consistency as the server entry point.
