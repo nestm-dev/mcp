@@ -45,7 +45,12 @@
 			"import": "./dist/oauth/dynamic-registration.mjs",
 			"default": "./dist/oauth/dynamic-registration.mjs"
 		},
-		"./package.json": "./package.json"
+		"./package.json": "./package.json",
+		"./ai-sdk": {
+			"types": "./dist/ai-sdk/index.d.mts",
+			"import": "./dist/ai-sdk/index.mjs",
+			"default": "./dist/ai-sdk/index.mjs"
+		}
 	},
 	"files": [
 		"dist",
@@ -79,11 +84,18 @@
 		"@nestm/mcp-conformance": "workspace:^"
 	},
 	"peerDependencies": {
-		"@modelcontextprotocol/client": ">=2.0.0 <3.0.0"
+		"@modelcontextprotocol/client": ">=2.0.0 <3.0.0",
+		"ai": ">=7.0.0 <8.0.0"
 	},
 	"devDependencies": {
 		"@modelcontextprotocol/client": "2.0.0",
 		"@modelcontextprotocol/node": "2.0.0",
-		"@modelcontextprotocol/server": "2.0.0"
+		"@modelcontextprotocol/server": "2.0.0",
+		"ai": "7.0.83"
+	},
+	"peerDependenciesMeta": {
+		"ai": {
+			"optional": true
+		}
 	}
 }

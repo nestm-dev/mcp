@@ -745,3 +745,13 @@ Only method-not-found on the optional resource-template list is tolerated.
 This is passive diagnostic discovery, with no tool invocation, nested lease, durable state, or SDK
 list-cache population. It retains raw provider definitions so diagnostics can inspect them.
 Use manager refresh for the SDK's execution catalog filtering and schema-cache population.
+
+### Optional AI SDK tools
+
+`@nestm/mcp-client/ai-sdk` exports `createAiSdkMcpTools(descriptors, invoke)`.
+Install AI SDK 7 only when using this subpath. The core client does not import AI.
+The host selects and sanitizes descriptors, owns names and exact source bindings,
+and authorizes every call in `invoke(name, input, signal)`. The adapter rejects
+empty or duplicate names, snapshots schemas, and propagates cancellation before
+and after the delegate. It does not discover tools, rename them, acquire clients,
+or replace an execution gateway.
