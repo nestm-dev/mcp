@@ -5,19 +5,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 const directory = await mkdtemp(join(tmpdir(), "mcp-ai-consumer-"));
 try {
-	const { version } = JSON.parse(await readFile("packages/mcp-client/package.json", "utf8"));
-	execFileSync("pnpm", ["--filter", "@nestm/mcp-client", "pack", "--pack-destination", directory], {
-		stdio: "inherit",
-	});
+	const packed = {};
+	for (const name of ["mcp-client", "mcp-core", "mcp-conformance"]) {
+		const { version } = JSON.parse(await readFile(`packages/${name}/package.json`, "utf8"));
+		execFileSync("pnpm", ["--filter", `@nestm/${name}`, "pack", "--pack-destination", directory], {
+			stdio: "inherit",
+		});
+		packed[`@nestm/${name}`] = `file:./nestm-${name}-${version}.tgz`;
+	}
 	await writeFile(
 		join(directory, "package.json"),
 		JSON.stringify({
 			private: true,
 			type: "module",
-			dependencies: { "@nestm/mcp-client": `file:./nestm-mcp-client-${version}.tgz` },
+			dependencies: packed,
 		}),
 	);
-	execFileSync("pnpm", ["install", "--ignore-workspace", "--ignore-scripts"], {
+	await writeFile(
+		join(directory, "pnpm-workspace.yaml"),
+		JSON.stringify({ packages: ["."], overrides: packed }),
+	);
+	execFileSync("pnpm", ["install", "--ignore-scripts"], {
 		cwd: directory,
 		stdio: "inherit",
 	});
@@ -31,11 +39,10 @@ try {
 		{ cwd: directory, encoding: "utf8" },
 	);
 	assert.match(core, /optional peer absent/);
-	execFileSync(
-		"pnpm",
-		["add", "ai@7.0.83", "typescript@7.0.2", "--ignore-workspace", "--ignore-scripts"],
-		{ cwd: directory, stdio: "inherit" },
-	);
+	execFileSync("pnpm", ["add", "ai@7.0.83", "typescript@7.0.2", "--ignore-scripts"], {
+		cwd: directory,
+		stdio: "inherit",
+	});
 	await writeFile(
 		join(directory, "consumer.ts"),
 		`
