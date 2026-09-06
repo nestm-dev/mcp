@@ -1,5 +1,11 @@
 # @nestm/mcp-server
 
+## 0.1.0-alpha.19
+
+### Patch Changes
+
+- @nestm/mcp-core@0.1.0-alpha.19
+
 ## 0.1.0-alpha.18
 
 ### Patch Changes
