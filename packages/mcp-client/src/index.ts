@@ -99,6 +99,15 @@ export {
 export type { McpClientLeaseManagerErrorCode, McpClientRuntimeErrorCode } from "./errors.ts";
 
 export { McpClientRuntime } from "./runtime.ts";
+export {
+	discoverMcpClientCatalog,
+	createMcpClientInspectionTarget,
+	McpClientCatalogLimitError,
+} from "./catalog-inspection.ts";
+export type {
+	McpClientCatalogSnapshot,
+	McpClientCatalogInspectionOptions,
+} from "./catalog-inspection.ts";
 
 export { McpClientLeaseManager } from "./lease-manager.ts";
 export type {

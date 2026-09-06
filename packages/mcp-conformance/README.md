@@ -211,3 +211,44 @@ Facts are restricted to bounded scalar values. Sensitive-looking fact keys are o
 are truncated, and caught exception details are never serialized. A host should still author plans
 as trusted code and must not deserialize executable checks or accept arbitrary operations from a
 dashboard request.
+
+## Passive discovery and exact tool preparation
+
+`createMcpPassiveDiscoveryPlan({ catalogDomain, toolSchemaDomain })` supplies seven read-only checks:
+connection state, protocol negotiation, ping, bounded discovery, duplicate identities, input/output
+schema compilation, and catalog identity. Optional `id`, `version`, and `title` let the host name
+its fixed plan. Schema inspection stops after 256 schemas and bounds each schema before compiling.
+The structural target owns `snapshot`, `ping`, `catalog`, and `schemaCompiles`; this package never
+imports a transport, client, manager, or SDK. `@nestm/mcp-client` provides an adapter for an already
+acquired runtime. Hosts still own access policy, leases, report persistence, and display.
+
+```ts
+import {
+	selectMcpCatalogTools,
+	selectMcpCatalogTool,
+	captureMcpToolDefinition,
+	digestMcpToolSchemas,
+} from "@nestm/mcp-conformance";
+
+const selection = selectMcpCatalogTools({ tools: catalog.tools }, { limits });
+const exact = selectMcpCatalogTool({ tools: catalog.tools }, "search", { limits });
+// exact.status is "selected", "missing", or "ambiguous".
+const definition = captureMcpToolDefinition(tool, definitionLimits);
+const schemaIdentity = digestMcpToolSchemas(selectedDefinitions, {
+	domain: "example/tool-schemas/v1",
+	limits,
+});
+```
+
+Selection captures bounded immutable definitions, sorts supported names deterministically, and
+excludes every definition sharing an ambiguous name **before** host usage filters. Empty names
+and names over 256 code units are unsupported; `maxNameLength` can tighten that ceiling.
+`definitionLimits` optionally tightens each definition within the collection's `limits` budget.
+Capture preserves typed protocol extensions and rejects over-budget definitions instead of
+truncating schemas. Callers supply already typed protocol definitions; this is not an SDK wire
+schema parser. The schema digest includes names and both complete input and output schemas,
+ignores catalog order and display metadata, and rejects ambiguous names. Its canonical envelope
+is `{ schemas, version: 2 }`, with absent output schemas represented as `null`.
+
+Connection identity, task/usage support, approval, workspace inheritance, and artifact binding
+remain host decisions. Apply those policies after exact catalog identity selection.

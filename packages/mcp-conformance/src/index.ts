@@ -81,3 +81,21 @@ export type {
 	McpConformanceRunResult,
 	McpConformanceVerdict,
 } from "./types.ts";
+
+export { createMcpPassiveDiscoveryPlan } from "./passive-discovery.ts";
+export type {
+	McpPassiveDiscoveryTarget,
+	McpPassiveDiscoveryPlanOptions,
+} from "./passive-discovery.ts";
+export {
+	captureMcpToolDefinition,
+	selectMcpCatalogTools,
+	selectMcpCatalogTool,
+	digestMcpToolSchemas,
+} from "./tool-catalog.ts";
+export type {
+	McpConformanceToolDefinition,
+	McpToolCatalogOptions,
+	McpToolCatalogSelection,
+	McpCatalogToolSelection,
+} from "./tool-catalog.ts";

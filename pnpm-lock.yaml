@@ -368,6 +368,9 @@ importers:
 
   packages/mcp-client:
     dependencies:
+      '@nestm/mcp-conformance':
+        specifier: workspace:^
+        version: link:../mcp-conformance
       '@nestm/mcp-core':
         specifier: workspace:^
         version: link:../mcp-core

@@ -7,5 +7,12 @@
 		"tsBuildInfoFile": "dist-tsc/tsconfig.tsbuildinfo"
 	},
 	"include": ["src", "tests", "*.config.ts", "package.json"],
-	"references": [{ "path": "../mcp-core" }]
+	"references": [
+		{
+			"path": "../mcp-core"
+		},
+		{
+			"path": "../mcp-conformance"
+		}
+	]
 }

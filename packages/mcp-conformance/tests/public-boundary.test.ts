@@ -28,6 +28,8 @@ describe("@nestm/mcp-conformance public boundary", () => {
 			"index.ts",
 			"limits.ts",
 			"plan.ts",
+			"passive-discovery.ts",
+			"tool-catalog.ts",
 			"report.ts",
 			"runner.ts",
 			"tool-result.ts",

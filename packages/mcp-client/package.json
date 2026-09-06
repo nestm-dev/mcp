@@ -75,7 +75,8 @@
 	},
 	"dependencies": {
 		"@nestm/mcp-core": "workspace:^",
-		"zod": "^4.4.3"
+		"zod": "^4.4.3",
+		"@nestm/mcp-conformance": "workspace:^"
 	},
 	"peerDependencies": {
 		"@modelcontextprotocol/client": ">=2.0.0 <3.0.0"

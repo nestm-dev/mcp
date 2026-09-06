@@ -34,6 +34,7 @@ export interface McpConformanceCatalogSnapshot {
 export interface McpConformanceCatalogTool {
 	readonly name: string;
 	readonly inputSchema: unknown;
+	readonly outputSchema?: unknown;
 }
 
 export interface McpConformanceCatalogResource {

@@ -33,6 +33,7 @@ flowchart TB
   sdkNode["@modelcontextprotocol/node v2"]
 
   client --> core
+  client --> conformance
   client --> sdkClient
   manager --> core
   manager --> client
@@ -111,6 +112,24 @@ imports no Nest, MCP SDK, client, manager, or product application code.
 Connections, transports, credentials, fixture selection, durable history, baseline approval, and
 dashboard access policy remain host responsibilities. This separation lets the same plan run in
 different builds or containers without swapping library versions inside one process.
+
+`createMcpPassiveDiscoveryPlan()` supplies seven read-only checks against a structural target.
+`createMcpClientInspectionTarget()` adapts an already acquired client runtime to that target,
+linking check cancellation to the host's lease and sharing one bounded raw catalog per run.
+Inspection opens no connections, acquires no leases, calls no tools, and writes no durable state.
+Raw inspection preserves provider definitions for diagnostics. Normal manager refresh continues
+through SDK list delegates, which also populate schema-validation caches and apply protocol
+filtering. Neither path substitutes for the host's execution authorization.
+
+Conformance also owns ambiguity-first tool selection, immutable definition capture, and exact
+input/output schema identities. Hosts retain usage filters, connection identities, scoped
+authorization, and compound artifact/runtime bindings. The client depends on conformance for
+bounded plain-data capture; that dependency never points back toward client or manager.
+
+Outbound OAuth storage parsers share the protocol's existing validators. They reject unknown
+fields, exotic values, and over-budget input, verify transaction authority digests, and return
+detached immutable values with fixed non-payload-bearing errors. Authenticated storage, endpoint
+admission, encryption, session binding, expiry, and atomic callback consumption remain host policy.
 
 ### `@nestm/mcp-server`
 

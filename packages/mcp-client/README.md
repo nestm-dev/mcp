@@ -681,3 +681,67 @@ For a deliberate legacy-only connection:
 - Prefer an explicit environment allowlist for spawned servers.
 - Keep authorization policy in operation middleware even when transport authentication succeeds;
   authentication and authorization solve different problems.
+
+## Decode OAuth records from host storage
+
+```ts
+import {
+	parseMcpClientOAuthAuthority,
+	parseMcpClientOAuthAuthorizationTransaction,
+	parseMcpClientOAuthBootstrapDiscoveryResult,
+} from "@nestm/mcp-client/oauth";
+
+const bounds = { maxBytes: 65_536, maxUrlLength: 2_048 };
+const authority = parseMcpClientOAuthAuthority(storedAuthority, bounds);
+const transaction = parseMcpClientOAuthAuthorizationTransaction(storedTransaction, bounds);
+const discovery = parseMcpClientOAuthBootstrapDiscoveryResult(storedDiscovery, bounds);
+```
+
+These parsers accept `unknown`, reject unknown fields and executable/exotic values, and return
+complete detached immutable snapshots. They share the protocol validators, including authority
+identity, PKCE, redirect URI, scope, and transaction authority-digest checks. Explicit `undefined`
+is rejected; omit optional persisted fields. Options may tighten the fixed 2 MiB and 4096-character
+URL ceilings. Invalid input raises `McpClientOAuthSnapshotError` with the fixed code
+`MCP_CLIENT_OAUTH_SNAPSHOT_INVALID`, without retaining a cause or input payload.
+
+Parsing performs no I/O. The host must authenticate and decrypt storage, admit endpoints, enforce
+session binding and expiry, and atomically consume pending authorization. A valid snapshot alone
+does not authorize a connection or execution. Native clients may use protocol-approved HTTP
+loopback redirects; browser products can retain a stricter HTTPS redirect policy.
+
+## Inspect an acquired runtime
+
+```ts
+import { createMcpClientInspectionTarget } from "@nestm/mcp-client";
+import { createMcpPassiveDiscoveryPlan, runMcpConformancePlan } from "@nestm/mcp-conformance";
+
+await manager.withClientRuntime(
+	generationKey,
+	async ({ runtime, serverName, signal }) => {
+		const target = createMcpClientInspectionTarget({
+			runtime,
+			serverName,
+			leaseSignal: signal,
+			maxPages: 16,
+			maxItems: 4096,
+		});
+		const plan = createMcpPassiveDiscoveryPlan({
+			catalogDomain: "example/catalog/v1",
+			toolSchemaDomain: "example/schema/v1",
+		});
+		return runMcpConformancePlan(plan, { target, descriptor, runId, signal });
+	},
+	operationOptions,
+);
+```
+
+The target shares one fresh catalog per run, links cancellation to the existing lease, and compiles
+schemas using the client package's existing schema compiler. `discoverMcpClientCatalog()` also
+exposes the bounded raw traversal directly. It takes a signal, page and total-item bounds, and
+optional sequential (default) or parallel mode. Parallel mode settles every request before
+propagating failure. Repeated cursors fail; exceeded limits raise `McpClientCatalogLimitError`.
+Only method-not-found on the optional resource-template list is tolerated.
+
+This is passive diagnostic discovery, with no tool invocation, nested lease, durable state, or SDK
+list-cache population. It retains raw provider definitions so diagnostics can inspect them.
+Use manager refresh for the SDK's execution catalog filtering and schema-cache population.

@@ -14,3 +14,5 @@ export * from "./protocol.ts";
 export * from "./refresh-coordinator.ts";
 export * from "./scope.ts";
 export * from "./state.ts";
+export { McpClientOAuthSnapshotError } from "./snapshot-data.ts";
+export type { McpClientOAuthSnapshotOptions } from "./snapshot-data.ts";
