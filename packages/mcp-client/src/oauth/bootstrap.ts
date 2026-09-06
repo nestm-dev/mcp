@@ -10,8 +10,17 @@ import type {
 	OAuthProtectedResourceMetadata,
 } from "@modelcontextprotocol/client";
 
-import type { McpClientOAuthAuthority } from "./protocol.ts";
+import { parseMcpClientOAuthAuthority, type McpClientOAuthAuthority } from "./protocol.ts";
 import { isMcpClientOAuthScopeToken } from "./scope.ts";
+import {
+	assertOAuthSnapshotKeys,
+	oauthSnapshotBoolean,
+	oauthSnapshotRecord,
+	oauthSnapshotString,
+	oauthSnapshotStrings,
+	parseOAuthSnapshot,
+	type McpClientOAuthSnapshotOptions,
+} from "./snapshot-data.ts";
 
 const MAX_URL_LENGTH = 4_096;
 const MAX_PROTOCOL_VERSION_LENGTH = 64;
@@ -177,6 +186,101 @@ export type McpClientOAuthBootstrapDiscoveryResult =
 	| McpClientOAuthBootstrapSelectionRequired
 	| McpClientOAuthBootstrapReady
 	| McpClientOAuthBootstrapStrictProtocolUnsupported;
+
+/** Decode bounded host-persisted discovery without fetching, admitting endpoints, or registering clients. */
+export function parseMcpClientOAuthBootstrapDiscoveryResult(
+	value: unknown,
+	options: McpClientOAuthSnapshotOptions = {},
+): McpClientOAuthBootstrapDiscoveryResult {
+	return parseOAuthSnapshot(value, options, (record, maximum) => {
+		const resourceValue = oauthSnapshotRecord(record.resource);
+		assertOAuthSnapshotKeys(resourceValue, [
+			"serverUrl",
+			"resource",
+			"resourceMetadataUrl",
+			"scopesSupported",
+		]);
+		const url = (input: unknown, query = true): string => {
+			const text = oauthSnapshotString(input, maximum);
+			requireSecureUrl(text, query);
+			return text;
+		};
+		const scopes = (input: unknown) =>
+			normalizeScopeList(
+				oauthSnapshotStrings(input, MAX_SCOPE_COUNT),
+				McpClientOAuthBootstrapErrorCode.InvalidOptions,
+			);
+		const resource: McpClientOAuthBootstrapResource = Object.freeze({
+			serverUrl: url(resourceValue.serverUrl),
+			resource: url(resourceValue.resource),
+			resourceMetadataUrl: url(resourceValue.resourceMetadataUrl),
+			...(resourceValue.scopesSupported === undefined
+				? {}
+				: { scopesSupported: scopes(resourceValue.scopesSupported) }),
+		});
+		const selectedScopes = record.scopes === undefined ? undefined : scopes(record.scopes);
+		if (record.kind === "authorization-server-selection-required") {
+			assertOAuthSnapshotKeys(record, ["kind", "resource", "scopes", "candidates"]);
+			if (
+				!Array.isArray(record.candidates) ||
+				record.candidates.length < 2 ||
+				record.candidates.length > MAX_AUTHORIZATION_SERVER_COUNT
+			) {
+				throw bootstrapError(McpClientOAuthBootstrapErrorCode.InvalidOptions);
+			}
+			const candidates: readonly unknown[] = record.candidates;
+			const issuers = candidates.map((item) => {
+				const candidate = oauthSnapshotRecord(item);
+				assertOAuthSnapshotKeys(candidate, ["issuer"]);
+				return url(candidate.issuer, false);
+			});
+			if (new Set(issuers).size !== issuers.length)
+				throw bootstrapError(McpClientOAuthBootstrapErrorCode.InvalidOptions);
+			return freezeSelectionRequired(resource, selectedScopes, issuers);
+		}
+		if (record.kind === "ready") {
+			assertOAuthSnapshotKeys(record, ["kind", "resource", "scopes", "candidate"]);
+			const candidate = oauthSnapshotRecord(record.candidate);
+			assertOAuthSnapshotKeys(candidate, [
+				"authority",
+				"clientIdMetadataDocumentSupported",
+				"legacyDynamicRegistrationEndpoint",
+			]);
+			const authority = parseMcpClientOAuthAuthority(candidate.authority, options);
+			if (authority.serverUrl !== resource.serverUrl || authority.resource !== resource.resource) {
+				throw bootstrapError(McpClientOAuthBootstrapErrorCode.AuthorityInvalid);
+			}
+			return freezeReady(resource, selectedScopes, {
+				authority,
+				clientIdMetadataDocumentSupported: oauthSnapshotBoolean(
+					candidate.clientIdMetadataDocumentSupported,
+				),
+				...(candidate.legacyDynamicRegistrationEndpoint === undefined
+					? {}
+					: {
+							legacyDynamicRegistrationEndpoint: url(candidate.legacyDynamicRegistrationEndpoint),
+						}),
+			});
+		}
+		if (record.kind === "strict-protocol-unsupported") {
+			assertOAuthSnapshotKeys(record, ["kind", "resource", "scopes", "issuer", "issues"]);
+			const issues = oauthSnapshotStrings(record.issues, 6);
+			if (
+				issues.length === 0 ||
+				!issues.every(isCompatibilityIssue) ||
+				new Set(issues).size !== issues.length
+			) {
+				throw bootstrapError(McpClientOAuthBootstrapErrorCode.InvalidOptions);
+			}
+			return freezeStrictUnsupported(resource, selectedScopes, url(record.issuer, false), issues);
+		}
+		throw bootstrapError(McpClientOAuthBootstrapErrorCode.InvalidOptions);
+	});
+}
+
+function isCompatibilityIssue(value: string): value is McpClientOAuthStrictCompatibilityIssue {
+	return Object.values(McpClientOAuthStrictCompatibilityIssue).some((issue) => issue === value);
+}
 
 /**
  * Parses the bounded fields needed from a raw `WWW-Authenticate` header. It deliberately drops

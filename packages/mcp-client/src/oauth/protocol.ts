@@ -29,6 +29,14 @@ import {
 	markInternalMcpClientOAuthProtocolError,
 } from "./protocol-error-brand.ts";
 import { isMcpClientOAuthScopeToken } from "./scope.ts";
+import {
+	assertOAuthSnapshotKeys,
+	oauthSnapshotBoolean,
+	oauthSnapshotString,
+	oauthSnapshotStrings,
+	parseOAuthSnapshot,
+	type McpClientOAuthSnapshotOptions,
+} from "./snapshot-data.ts";
 
 const DEFAULT_AUTHORIZATION_TRANSACTION_TTL_MS = 10 * 60 * 1_000;
 const MAX_AUTHORIZATION_TRANSACTION_TTL_MS = 60 * 60 * 1_000;
@@ -675,6 +683,116 @@ function createAuthority(input: {
 	});
 }
 
+/** Decode authenticated host storage; this does not admit endpoints or authorize execution. */
+export function parseMcpClientOAuthAuthority(
+	value: unknown,
+	options: McpClientOAuthSnapshotOptions = {},
+): McpClientOAuthAuthority {
+	return parseOAuthSnapshot(value, options, (record, maximum) => {
+		assertOAuthSnapshotKeys(record, [
+			"serverUrl",
+			"resource",
+			"issuer",
+			"authorizationEndpoint",
+			"tokenEndpoint",
+			"responseTypesSupported",
+			"codeChallengeMethodsSupported",
+			"tokenEndpointAuthMethodsSupported",
+			"grantTypesSupported",
+			"resourceScopesSupported",
+			"authorizationScopesSupported",
+			"authorizationResponseIssuerParameterSupported",
+		]);
+		return normalizeAuthority({
+			serverUrl: oauthSnapshotString(record.serverUrl, maximum),
+			resource: oauthSnapshotString(record.resource, maximum),
+			issuer: oauthSnapshotString(record.issuer, maximum),
+			authorizationEndpoint: oauthSnapshotString(record.authorizationEndpoint, maximum),
+			tokenEndpoint: oauthSnapshotString(record.tokenEndpoint, maximum),
+			responseTypesSupported: oauthSnapshotStrings(
+				record.responseTypesSupported,
+				MAX_METADATA_LIST_LENGTH,
+			),
+			codeChallengeMethodsSupported: oauthSnapshotStrings(
+				record.codeChallengeMethodsSupported,
+				MAX_METADATA_LIST_LENGTH,
+			),
+			tokenEndpointAuthMethodsSupported: oauthSnapshotStrings(
+				record.tokenEndpointAuthMethodsSupported,
+				MAX_METADATA_LIST_LENGTH,
+			),
+			...(record.grantTypesSupported === undefined
+				? {}
+				: {
+						grantTypesSupported: oauthSnapshotStrings(
+							record.grantTypesSupported,
+							MAX_METADATA_LIST_LENGTH,
+						),
+					}),
+			...(record.resourceScopesSupported === undefined
+				? {}
+				: {
+						resourceScopesSupported: oauthSnapshotStrings(
+							record.resourceScopesSupported,
+							MAX_SCOPE_COUNT,
+						),
+					}),
+			...(record.authorizationScopesSupported === undefined
+				? {}
+				: {
+						authorizationScopesSupported: oauthSnapshotStrings(
+							record.authorizationScopesSupported,
+							MAX_SCOPE_COUNT,
+						),
+					}),
+			authorizationResponseIssuerParameterSupported: oauthSnapshotBoolean(
+				record.authorizationResponseIssuerParameterSupported,
+			),
+		});
+	});
+}
+
+/** Pure decoding and authority-digest verification; host session binding and atomic take remain required. */
+export function parseMcpClientOAuthAuthorizationTransaction(
+	value: unknown,
+	options: McpClientOAuthSnapshotOptions = {},
+): McpClientOAuthAuthorizationTransaction {
+	return parseOAuthSnapshot(value, options, (record, maximum) => {
+		assertOAuthSnapshotKeys(record, [
+			"authority",
+			"authorityDigest",
+			"stateDigest",
+			"codeVerifier",
+			"redirectUri",
+			"clientId",
+			"clientAuthenticationMethod",
+			"scope",
+			"createdAtMs",
+		]);
+		const method = record.clientAuthenticationMethod;
+		const stateDigest = oauthSnapshotString(record.stateDigest, 43);
+		if (
+			!isClientAuthenticationMethod(method) ||
+			!/^[A-Za-z0-9_-]{43}$/u.test(stateDigest) ||
+			typeof record.createdAtMs !== "number"
+		)
+			throw transactionInvalidError();
+		return normalizeTransaction({
+			authority: parseMcpClientOAuthAuthority(record.authority, options),
+			authorityDigest: oauthSnapshotString(record.authorityDigest, 43),
+			stateDigest,
+			codeVerifier: oauthSnapshotString(record.codeVerifier, 128),
+			redirectUri: oauthSnapshotString(record.redirectUri, maximum),
+			clientId: oauthSnapshotString(record.clientId, MAX_CLIENT_ID_LENGTH),
+			clientAuthenticationMethod: method,
+			...(record.scope === undefined
+				? {}
+				: { scope: oauthSnapshotString(record.scope, MAX_SCOPE_STRING_LENGTH) }),
+			createdAtMs: record.createdAtMs,
+		});
+	});
+}
+
 function normalizeAuthority(authority: McpClientOAuthAuthority): McpClientOAuthAuthority {
 	if (typeof authority !== "object" || authority === null) throw authorityInvalidError();
 	const normalized = copyAuthority({
@@ -1291,7 +1409,7 @@ function containsControlCharacter(value: string): boolean {
 }
 
 function isClientAuthenticationMethod(
-	value: string,
+	value: unknown,
 ): value is McpClientOAuthClientAuthentication["method"] {
 	return (
 		value === "none" ||
