@@ -34,6 +34,32 @@ The logger emits one immutable structured record per lifecycle event. Failures i
 
 Pass the composed observer to the `lifecycleObserver` option of a NestM runtime. Runtime lifecycle middleware treats observers as best-effort, so telemetry outages do not replace MCP results or errors.
 
+## Mergeable duration statistics
+
+`McpDurationHistogram` is value-level arithmetic for process-local and durable hosts. Configure
+strictly increasing nonnegative upper bounds with a final `Infinity` bucket. `create`, `record`,
+`merge`, and `summarize` share the collector's saturating count/sum and bounded percentile semantics.
+Durations may be fractional; display rounding stays with the host.
+
+```ts
+import { McpDurationHistogram } from "@nestm/mcp-observability";
+
+const histogram = new McpDurationHistogram([5, 10, 100, Infinity]);
+const current = histogram.create();
+histogram.record(current, 8);
+const serialized = JSON.stringify(histogram.snapshot(current));
+const restored = histogram.restore(JSON.parse(serialized));
+histogram.merge(current, restored);
+console.log(histogram.summarize(current));
+```
+
+Snapshots retain count, sum, maximum, and bins. Their versioned geometry uses `null` for the
+unbounded bucket so JSON round trips remain exact. `restore` rejects incompatible bounds and
+invalid counts before returning detached mutable state. Direct data merging is available to
+hosts whose existing storage schema already pins the histogram geometry. The host owns record
+deduplication, dimensions, persistence and time buckets; merging the same history twice counts it
+twice. `addMcpMetricCount` exposes the same nonnegative safe-integer saturation for other counters.
+
 ## Fixed-memory metrics
 
 For a process-local dashboard or a small deployment without a metrics SDK, the package includes a

@@ -1,4 +1,9 @@
 import type { McpMetricMeasurement, McpMetricsSink } from "./metrics.ts";
+import {
+	McpDurationHistogram,
+	addMcpMetricCount as saturatingAdd,
+	type McpDurationHistogramState,
+} from "./duration-histogram.ts";
 
 /**
  * Fixed-memory aggregation vocabulary for a process-local MCP metrics sink.
@@ -26,6 +31,8 @@ export const MCP_METRICS_HISTOGRAM_BOUNDS_MS = Object.freeze([
 	120_000,
 	Number.POSITIVE_INFINITY,
 ] as const);
+
+const durationHistogram = new McpDurationHistogram(MCP_METRICS_HISTOGRAM_BOUNDS_MS);
 
 export const MCP_METRIC_ROLES = Object.freeze(["client", "server", "gateway"] as const);
 export const MCP_METRIC_OPERATION_KINDS = Object.freeze(["request", "notification"] as const);
@@ -116,12 +123,7 @@ interface MutableOutcomes {
 	cancelled: number;
 }
 
-interface MutableDuration {
-	count: number;
-	sumMs: number;
-	maxMs: number;
-	readonly bins: number[];
-}
+type MutableDuration = McpDurationHistogramState;
 
 interface MutableAggregate {
 	started: number;
@@ -502,12 +504,7 @@ function mutableAggregate(): MutableAggregate {
 		started: 0,
 		active: 0,
 		outcomes: { success: 0, error: 0, cancelled: 0 },
-		duration: {
-			count: 0,
-			sumMs: 0,
-			maxMs: 0,
-			bins: Array.from({ length: MCP_METRICS_HISTOGRAM_BOUNDS_MS.length }, () => 0),
-		},
+		duration: durationHistogram.create(),
 	};
 }
 
@@ -531,16 +528,7 @@ function incrementBucketTerminal(
 	durationMs: number,
 ): void {
 	aggregate.outcomes[outcome] = saturatingAdd(aggregate.outcomes[outcome], 1);
-	recordDuration(aggregate.duration, durationMs);
-}
-
-function recordDuration(duration: MutableDuration, valueMs: number): void {
-	duration.count = saturatingAdd(duration.count, 1);
-	duration.sumMs = Math.min(MAX_SAFE_COUNT, duration.sumMs + valueMs);
-	duration.maxMs = Math.max(duration.maxMs, valueMs);
-	const binIndex = MCP_METRICS_HISTOGRAM_BOUNDS_MS.findIndex((bound) => valueMs <= bound);
-	const resolvedIndex = binIndex === -1 ? MCP_METRICS_HISTOGRAM_BOUNDS_MS.length - 1 : binIndex;
-	duration.bins[resolvedIndex] = saturatingAdd(duration.bins[resolvedIndex] ?? 0, 1);
+	durationHistogram.record(aggregate.duration, durationMs);
 }
 
 function aggregateView(aggregate: MutableAggregate): McpMetricAggregateSnapshot {
@@ -564,34 +552,7 @@ function outcomesView(outcomes: MutableOutcomes): McpMetricOutcomesSnapshot {
 }
 
 function durationView(duration: MutableDuration): McpMetricDurationSnapshot {
-	if (duration.count === 0) {
-		return Object.freeze({
-			count: 0,
-			averageMs: null,
-			p50Ms: null,
-			p95Ms: null,
-			maxMs: null,
-		});
-	}
-	return Object.freeze({
-		count: duration.count,
-		averageMs: duration.sumMs / duration.count,
-		p50Ms: histogramPercentile(duration, 0.5),
-		p95Ms: histogramPercentile(duration, 0.95),
-		maxMs: duration.maxMs,
-	});
-}
-
-function histogramPercentile(duration: MutableDuration, percentile: number): number {
-	const target = Math.max(1, Math.ceil(duration.count * percentile));
-	let cumulative = 0;
-	for (const [index, count] of duration.bins.entries()) {
-		cumulative += count;
-		if (cumulative < target) continue;
-		const bound = MCP_METRICS_HISTOGRAM_BOUNDS_MS[index] ?? Number.POSITIVE_INFINITY;
-		return Number.isFinite(bound) ? Math.min(bound, duration.maxMs) : duration.maxMs;
-	}
-	return duration.maxMs;
+	return durationHistogram.summarize(duration);
 }
 
 function compareOperations(
@@ -622,10 +583,6 @@ function bucketStart(timestamp: number): number {
 function bucketIndex(startMs: number): number {
 	const epoch = Math.floor(startMs / MCP_METRICS_BUCKET_MS);
 	return ((epoch % MCP_METRICS_BUCKET_COUNT) + MCP_METRICS_BUCKET_COUNT) % MCP_METRICS_BUCKET_COUNT;
-}
-
-function saturatingAdd(current: number, increment: number): number {
-	return Math.min(MAX_SAFE_COUNT, current + increment);
 }
 
 function validTimestamp(timestamp: number): boolean {

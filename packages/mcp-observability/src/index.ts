@@ -60,3 +60,9 @@ export type {
 	McpTracingMiddlewareOptions,
 	McpTracingPhase,
 } from "./tracing.ts";
+export { McpDurationHistogram, addMcpMetricCount } from "./duration-histogram.ts";
+export type {
+	McpDurationHistogramData,
+	McpDurationHistogramState,
+	McpDurationHistogramSnapshot,
+} from "./duration-histogram.ts";
