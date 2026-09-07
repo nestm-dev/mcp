@@ -320,6 +320,32 @@ suite covers authorization-code, PKCE, state, issuer, and reconnect behavior.
 
 Run `node packages/mcp-client/scripts/external-smoke.mjs --help` for every supported variable.
 
+## Host-managed OAuth provisioning
+
+Use `planMcpClientOAuthProvisioning` from `@nestm/mcp-client/oauth` to decide how to provision a
+client after bootstrap returns `ready`. The planner takes captured discovery, the callback URL,
+optional current CIMD identity, and public existing-client provenance. Supply `strategies` in your
+preferred order, for example `["reuse", "client_id_metadata", "dynamic_registration"]`. An omitted
+strategy cannot be selected. The result includes `kind`, `existingClientStatus`, and the exact
+`authorizationScopes` to request.
+
+Manual clients retain their configured scopes. Dynamically registered clients can reuse their
+registered allowance for a narrower fresh request; absent discovery scopes request no scopes.
+An expansion returns `registration_scope_insufficient` rather than selecting another registration
+unless the host explicitly enables `allowRegistrationAfterScopeExpansion`. CIMD can be preferred
+over that recovery result by its position in the strategy order. The planner supports private-key
+clients through public authentication-availability evidence and never receives their signing keys.
+
+The planner performs no network calls or state transitions. The host supplies authorized current
+records and remains responsible for consent, durable dispatch claims, secret custody, and atomic
+configuration changes. A `dynamic_registration` result does not authorize registration.
+
+`probeMcpClientOAuthChallenge({ serverUrl, fetch, signal })` performs one unauthenticated GET using
+an already-admitted host fetch. It forces omitted credentials and rejected redirects, cancels the
+response body, and returns only a bounded raw 401 challenge for `bootstrap.discover`'s
+`wwwAuthenticate` field. Other statuses return `undefined` for well-known discovery fallback.
+The host must provide a deadline, DNS and response bounds, and close the fetch lease in `finally`.
+
 ## Many servers
 
 ```ts
