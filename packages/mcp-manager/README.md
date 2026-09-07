@@ -65,6 +65,34 @@ fails with `MCP_LEASE_MODE_CONFLICT`; the manager does not hide contention behin
 queue. Retirement and shutdown still abort the operation and wait for its lease cleanup. A cleanup
 failure remains quarantined and capacity-charging.
 
+For concurrent callers that must each use a fresh transport, opt into bounded FIFO waiting:
+
+```ts
+const result = await manager.callTool(
+	generationKey,
+	"search",
+	{ query },
+	{
+		leaseMode: "exclusive",
+		exclusiveContention: "queue",
+		signal,
+	},
+);
+```
+
+Queued callers wait only behind exclusive operations of the same generation. Each caller resolves
+fresh admitted material after the prior operation's runtime and material have fully closed; no
+request or result is reused or retried. `requestTimeoutMs` includes queue waiting, admission, and
+execution. Caller cancellation removes just that waiter. `setOffline`, `retire`, and `close` reject
+pending waiters before they can start; uncertain cleanup rejects them as quarantined. Shared work
+or an online keeper remains a lease-mode conflict even when waiting is requested.
+
+`maxQueuedOperations` bounds waiting callers across all generations (default 100). Excess callers
+receive `MCP_CAPACITY_EXCEEDED`. Waiting does not consume a connection slot, while active transports
+remain bounded by `maxConnections` through cleanup. `snapshot().queuedOperationCount` reports
+waiting callers without exposing generation identities. The ordinary exclusive default remains
+fail-fast.
+
 This is the manager-side close-on-release primitive for a credential-bound transport that cannot
 provide request-correlated OAuth refresh fencing. Do not also retain that generation with
 `ensureOnline()`. A host that supplies request-correlated refresh and exact revision fencing may

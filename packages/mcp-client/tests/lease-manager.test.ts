@@ -312,6 +312,72 @@ describe("McpClientLeaseManager", () => {
 		expect(close).toHaveBeenCalledExactlyOnceWith(staleResource);
 	});
 
+	it.each(["caller", "generation", "shutdown"] as const)(
+		"waits for abandoned acquisition cleanup when opted in during %s cancellation",
+		async (cancellation) => {
+			const created = deferred<TestResource>();
+			const allowClose = deferred<void>();
+			const create = vi.fn(async () => created.promise);
+			const close = vi.fn(async () => allowClose.promise);
+			const manager = new McpClientLeaseManager<string, TestResource>({ create, close });
+			const controller = new AbortController();
+			const reason = new Error("cancelled acquisition");
+			let settled = false;
+			const acquisition = manager
+				.acquire("isolated", {
+					signal: controller.signal,
+					awaitCleanupOnCancel: true,
+				})
+				.finally(() => {
+					settled = true;
+				});
+			await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
+			const rejected =
+				cancellation === "caller"
+					? expect(acquisition).rejects.toBe(reason)
+					: expect(acquisition).rejects.toMatchObject({
+							code:
+								cancellation === "generation"
+									? MCP_CLIENT_LEASE_INVALIDATED
+									: MCP_CLIENT_LEASE_MANAGER_CLOSED,
+						});
+			const retirement =
+				cancellation === "generation"
+					? manager.invalidate("isolated")
+					: cancellation === "shutdown"
+						? manager.close()
+						: undefined;
+			if (cancellation === "caller") controller.abort(reason);
+			created.resolve({ id: "isolated" });
+			await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+			expect(settled).toBe(false);
+			expect(manager.snapshot().closingResourceCount).toBe(1);
+			allowClose.resolve();
+			await Promise.all([rejected, retirement]);
+			expect(manager.size).toBe(0);
+			await manager.close();
+		},
+	);
+
+	it("keeps opt-in acquisition cancellation local when another caller shares creation", async () => {
+		const created = deferred<TestResource>();
+		const create = vi.fn(async () => created.promise);
+		const close = vi.fn(async () => undefined);
+		const manager = new McpClientLeaseManager<string, TestResource>({ create, close });
+		const caller = new AbortController();
+		const reason = new Error("cancel just one");
+		const first = manager.acquire("shared", { signal: caller.signal, awaitCleanupOnCancel: true });
+		const second = manager.acquire("shared");
+		const rejected = expect(first).rejects.toBe(reason);
+		caller.abort(reason);
+		await rejected;
+		expect(manager.snapshot().referenceCount).toBe(1);
+		expect(close).not.toHaveBeenCalled();
+		created.resolve({ id: "shared" });
+		await (await second).release();
+		await manager.close();
+	});
+
 	it("aborts pending factories and settles every generation during idempotent shutdown", async () => {
 		const pendingCreated = deferred<TestResource>();
 		let pendingSignal: AbortSignal | undefined;

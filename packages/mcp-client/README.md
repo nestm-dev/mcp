@@ -421,6 +421,12 @@ The default `"close"` mode is intended for credential-bound resources. Only reso
 safe to retain and reuse should opt into `{ releaseMode: "idle" }`; they remain cached until
 `idleTtlMs` expires and may be evicted earlier to admit another identity within `maxResources`.
 
+Acquisition cancellation settles immediately by default while abandoned creation drains in the
+background. An owner requiring cleanup before settlement can pass `awaitCleanupOnCancel: true`;
+it then waits for cleanup caused by caller cancellation, invalidation, or shutdown before rejecting.
+Cancelling one reservation never aborts another caller's shared creation. Exclusive managed
+operations select this option so pending acquisition cleanup also precedes the next queued caller.
+
 `invalidate(identityKey)` retires the matching generation before awaiting its close. It aborts a
 pending factory and prevents a late result from publishing, even if a replacement generation has
 already started. Active leases drain before their resource closes, so callers must release every

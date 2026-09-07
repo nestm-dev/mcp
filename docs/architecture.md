@@ -94,10 +94,16 @@ capacity-charging quarantine instead of being silently forgotten.
 
 Ordinary operations reuse a generation-keyed runtime, including the keeper installed by
 `ensureOnline()`. The explicit exclusive lease mode instead creates one non-pooled runtime for one
-operation, rejects overlapping same-generation work, and closes the runtime and admitted material
+operation, rejects overlapping same-generation work by default, and closes the runtime and admitted material
 before settlement. This is the generic close-on-release boundary for collaborators such as OAuth
 bridges that cannot correlate a failed request to its credential revision; product credential
 records and the decision to select that mode remain outside the manager.
+
+Hosts may select `exclusiveContention: "queue"` for bounded FIFO operation admission behind the
+same generation's exclusive work. The manager owns this queue, caller deadlines and cancellation,
+retirement fencing, and granting the next operation only after complete cleanup. Queued work does
+not retain or reuse a runtime, and does not retry a dispatched operation. Shared keepers still
+conflict. Product consumers select this behavior without implementing a parallel lease queue.
 
 ### `@nestm/mcp-conformance`
 

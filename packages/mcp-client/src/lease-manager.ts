@@ -39,6 +39,8 @@ export interface McpClientLeaseAcquireOptions {
 	readonly releaseMode?: McpClientLeaseReleaseMode;
 	/** Cancels only this acquisition, never another caller sharing the same creation. */
 	readonly signal?: AbortSignal;
+	/** Wait for this reservation's required cleanup on cancellation; defaults to false. */
+	readonly awaitCleanupOnCancel?: boolean;
 }
 
 export interface McpClientLease<Resource extends object> extends AsyncDisposable {
@@ -177,6 +179,12 @@ export class McpClientLeaseManager<Identity, Resource extends object> implements
 	): Promise<McpClientLease<Resource>> {
 		const releaseMode = options.releaseMode ?? "close";
 		assertReleaseMode(releaseMode);
+		if (
+			options.awaitCleanupOnCancel !== undefined &&
+			typeof options.awaitCleanupOnCancel !== "boolean"
+		) {
+			throw new TypeError("McpClientLeaseManager awaitCleanupOnCancel must be a boolean.");
+		}
 		throwIfAborted(options.signal);
 
 		for (;;) {
@@ -187,13 +195,13 @@ export class McpClientLeaseManager<Identity, Resource extends object> implements
 			if (existing !== undefined && !existing.retired) {
 				if (existing.releaseMode !== releaseMode) throw leaseReleaseModeConflictError();
 				this.#reserve(existing);
-				return this.#awaitLease(existing, options.signal);
+				return this.#awaitLease(existing, options.signal, options.awaitCleanupOnCancel ?? false);
 			}
 
 			if (this.#generations.size < this.#maxResources) {
 				const entry = this.#createEntry(identity, releaseMode);
 				this.#reserve(entry);
-				return this.#awaitLease(entry, options.signal);
+				return this.#awaitLease(entry, options.signal, options.awaitCleanupOnCancel ?? false);
 			}
 
 			const idle = this.#oldestIdleEntry();
@@ -295,6 +303,7 @@ export class McpClientLeaseManager<Identity, Resource extends object> implements
 	async #awaitLease(
 		entry: LeaseEntry<Identity, Resource>,
 		callerSignal: AbortSignal | undefined,
+		awaitCleanupOnCancel: boolean,
 	): Promise<McpClientLease<Resource>> {
 		const createTask = requireCreateTask(entry);
 		const retired = waitForAbort(entry.controller.signal, ENTRY_RETIRED);
@@ -309,11 +318,14 @@ export class McpClientLeaseManager<Identity, Resource extends object> implements
 			]);
 
 			if (outcome === CALLER_ABORTED) {
-				this.#observeBackground(this.#cancelReservation(entry));
+				const cleanup = this.#cancelReservation(entry);
+				if (awaitCleanupOnCancel) await cleanup;
+				else this.#observeBackground(cleanup);
 				throw abortReason(callerSignal);
 			}
 			if (entry.retired || outcome === ENTRY_RETIRED) {
 				this.#dropReference(entry);
+				if (awaitCleanupOnCancel) await entry.closeTask;
 				throw entry.retirementReason;
 			}
 			if (entry.creationFailed) {
@@ -321,7 +333,9 @@ export class McpClientLeaseManager<Identity, Resource extends object> implements
 				throw entry.creationFailure;
 			}
 			if (entry.state !== "ready" || entry.resource === undefined) {
-				this.#observeBackground(this.#cancelReservation(entry));
+				const cleanup = this.#cancelReservation(entry);
+				if (awaitCleanupOnCancel) await cleanup;
+				else this.#observeBackground(cleanup);
 				throw new Error("The MCP client lease resource did not become ready.");
 			}
 

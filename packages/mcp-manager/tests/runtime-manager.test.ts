@@ -100,6 +100,7 @@ import {
 	mcpRuntimeStateSnapshotSchema,
 	type McpAdmittedRuntimeGeneration,
 	type McpRuntimeGenerationResolver,
+	type McpRuntimeOperationOptions,
 	type McpRuntimeStateTransitionEvent,
 } from "../src/index.ts";
 
@@ -404,6 +405,386 @@ describe("McpRuntimeManager", () => {
 		await manager.close();
 	});
 
+	it("queues exclusive calls FIFO and opens each fresh runtime only after prior cleanup", async () => {
+		const started = deferred();
+		const allowOperation = deferred();
+		const allowClose = deferred();
+		const close = vi.fn(async () => allowClose.promise);
+		let calls = 0;
+		runtimeHarness.callToolHook = async () => {
+			calls += 1;
+			if (calls === 1) {
+				started.resolve();
+				await allowOperation.promise;
+			}
+			return { content: [{ type: "text", text: String(calls) }] };
+		};
+		const resolver = resolverFrom(async () => admitted(close));
+		const manager = new McpRuntimeManager({ generationResolver: resolver, maxConnections: 1 });
+		const first = manager.callTool("same", "first", {}, { leaseMode: "exclusive" });
+		await started.promise;
+		const second = manager.callTool(
+			"same",
+			"second",
+			{},
+			{
+				leaseMode: "exclusive",
+				exclusiveContention: "queue",
+			},
+		);
+		const third = manager.callTool(
+			"same",
+			"third",
+			{},
+			{
+				leaseMode: "exclusive",
+				exclusiveContention: "queue",
+			},
+		);
+		expect(manager.snapshot()).toMatchObject({ queuedOperationCount: 2, connectionCount: 1 });
+		allowOperation.resolve();
+		await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+		expect(resolver.resolve).toHaveBeenCalledOnce();
+		expect(calls).toBe(1);
+		allowClose.resolve();
+		await expect(first).resolves.toMatchObject({ content: [{ text: "1" }] });
+		await expect(second).resolves.toMatchObject({ content: [{ text: "2" }] });
+		await expect(third).resolves.toMatchObject({ content: [{ text: "3" }] });
+		expect(runtimeHarness.instances).toHaveLength(3);
+		expect(resolver.resolve).toHaveBeenCalledTimes(3);
+		expect(close).toHaveBeenCalledTimes(3);
+		expect(manager.snapshot()).toMatchObject({ queuedOperationCount: 0, connectionCount: 0 });
+		await manager.close();
+	});
+
+	it.each([false, true])(
+		"drains cancelled acquisition before the next caller (cleanup fails: %s)",
+		async (cleanupFails) => {
+			const started = deferred();
+			const allowAdmission = deferred();
+			const allowClose = deferred();
+			const close = vi.fn(async () => {
+				await allowClose.promise;
+				if (cleanupFails) throw new Error("uncertain abandoned material cleanup");
+			});
+			let admissions = 0;
+			const resolver = resolverFrom(async () => {
+				admissions += 1;
+				if (admissions === 1) {
+					started.resolve();
+					await allowAdmission.promise;
+				}
+				return admitted(close);
+			});
+			const manager = new McpRuntimeManager({ generationResolver: resolver, maxConnections: 1 });
+			const controller = new AbortController();
+			const reason = new Error("cancel active acquisition");
+			let firstSettled = false;
+			const first = manager
+				.callTool(
+					"same",
+					"cancelled",
+					{},
+					{
+						leaseMode: "exclusive",
+						signal: controller.signal,
+					},
+				)
+				.finally(() => {
+					firstSettled = true;
+				});
+			const rejected = expect(first).rejects.toBe(reason);
+			await started.promise;
+			const second = manager.callTool(
+				"same",
+				"next",
+				{},
+				{
+					leaseMode: "exclusive",
+					exclusiveContention: "queue",
+				},
+			);
+			const secondSettlement = cleanupFails
+				? expect(second).rejects.toMatchObject({ code: "MCP_QUARANTINED" })
+				: expect(second).resolves.toMatchObject({ content: [] });
+			controller.abort(reason);
+			allowAdmission.resolve();
+			await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+			expect(firstSettled).toBe(false);
+			expect(resolver.resolve).toHaveBeenCalledOnce();
+			expect(manager.snapshot()).toMatchObject({ queuedOperationCount: 1, connectionCount: 1 });
+			allowClose.resolve();
+			await rejected;
+			await secondSettlement;
+			expect(resolver.resolve).toHaveBeenCalledTimes(cleanupFails ? 1 : 2);
+			expect(runtimeHarness.instances[0]?.callTool).not.toHaveBeenCalled();
+			expect(manager.snapshot()).toMatchObject({
+				queuedOperationCount: 0,
+				connectionCount: cleanupFails ? 1 : 0,
+			});
+			if (cleanupFails) await expect(manager.close()).rejects.toThrow();
+			else await manager.close();
+		},
+	);
+
+	it("cancels only the waiting caller and never dispatches its request", async () => {
+		const started = deferred();
+		const allowOperation = deferred();
+		runtimeHarness.callToolHook = async () => {
+			started.resolve();
+			await allowOperation.promise;
+			return { content: [] };
+		};
+		const resolver = resolverFrom(async () => admitted());
+		const manager = new McpRuntimeManager({ generationResolver: resolver });
+		const first = manager.callTool("same", "first", {}, { leaseMode: "exclusive" });
+		await started.promise;
+		const caller = new AbortController();
+		const reason = new Error("cancel queued caller");
+		const second = manager.callTool(
+			"same",
+			"cancelled",
+			{},
+			{
+				leaseMode: "exclusive",
+				exclusiveContention: "queue",
+				signal: caller.signal,
+			},
+		);
+		const cancelled = expect(second).rejects.toBe(reason);
+		const third = manager.callTool(
+			"same",
+			"third",
+			{},
+			{
+				leaseMode: "exclusive",
+				exclusiveContention: "queue",
+			},
+		);
+		caller.abort(reason);
+		await cancelled;
+		expect(manager.snapshot().queuedOperationCount).toBe(1);
+		allowOperation.resolve();
+		await Promise.all([first, third]);
+		expect(resolver.resolve).toHaveBeenCalledTimes(2);
+		expect(manager.snapshot().queuedOperationCount).toBe(0);
+		await manager.close();
+	});
+
+	it("includes queue wait in the request timeout without a late dispatch", async () => {
+		const started = deferred();
+		const allowOperation = deferred();
+		runtimeHarness.callToolHook = async () => {
+			started.resolve();
+			await allowOperation.promise;
+			return { content: [] };
+		};
+		const resolver = resolverFrom(async () => admitted());
+		const manager = new McpRuntimeManager({ generationResolver: resolver, requestTimeoutMs: 30 });
+		const first = manager.callTool("same", "first", {}, { leaseMode: "exclusive" });
+		await started.promise;
+		await expect(
+			manager.callTool(
+				"same",
+				"timed-out",
+				{},
+				{
+					leaseMode: "exclusive",
+					exclusiveContention: "queue",
+				},
+			),
+		).rejects.toMatchObject({ code: "MCP_UPSTREAM_FAILED", cause: { name: "TimeoutError" } });
+		expect(manager.snapshot().queuedOperationCount).toBe(0);
+		allowOperation.resolve();
+		await first;
+		expect(resolver.resolve).toHaveBeenCalledOnce();
+		await manager.close();
+	});
+
+	it.each(["setOffline", "retire", "close"] as const)(
+		"%s rejects queued work before admission and fences the active operation",
+		async (action) => {
+			const started = deferred();
+			runtimeHarness.callToolHook = async (signal) => {
+				if (signal === undefined) throw new Error("signal required");
+				started.resolve();
+				await rejectWhenAborted(signal);
+			};
+			const resolver = resolverFrom(async () => admitted());
+			const manager = new McpRuntimeManager({ generationResolver: resolver });
+			const first = manager.callTool("same", "first", {}, { leaseMode: "exclusive" });
+			await started.promise;
+			const firstRejected = expect(first).rejects.toMatchObject({
+				code: action === "close" ? "MCP_RUNTIME_CLOSED" : "MCP_GENERATION_RETIRED",
+			});
+			const second = manager.callTool(
+				"same",
+				"queued",
+				{},
+				{
+					leaseMode: "exclusive",
+					exclusiveContention: "queue",
+				},
+			);
+			const secondRejected = expect(second).rejects.toMatchObject({
+				code: action === "close" ? "MCP_RUNTIME_CLOSED" : "MCP_GENERATION_RETIRED",
+			});
+			await (action === "close" ? manager.close() : manager[action]("same"));
+			await Promise.all([firstRejected, secondRejected]);
+			expect(resolver.resolve).toHaveBeenCalledOnce();
+			expect(manager.snapshot()).toMatchObject({ queuedOperationCount: 0, connectionCount: 0 });
+			await manager.close();
+		},
+	);
+
+	it("rejects queued work when cleanup quarantines its generation", async () => {
+		const started = deferred();
+		const allowOperation = deferred();
+		runtimeHarness.callToolHook = async () => {
+			started.resolve();
+			await allowOperation.promise;
+			return { content: [] };
+		};
+		const resolver = resolverFrom(async () =>
+			admitted(async () => {
+				throw new Error("uncertain close");
+			}),
+		);
+		const manager = new McpRuntimeManager({ generationResolver: resolver, maxConnections: 1 });
+		const first = manager.callTool("same", "first", {}, { leaseMode: "exclusive" });
+		await started.promise;
+		const firstRejected = expect(first).rejects.toMatchObject({ code: "MCP_QUARANTINED" });
+		const second = manager.callTool(
+			"same",
+			"queued",
+			{},
+			{
+				leaseMode: "exclusive",
+				exclusiveContention: "queue",
+			},
+		);
+		const secondRejected = expect(second).rejects.toMatchObject({ code: "MCP_QUARANTINED" });
+		allowOperation.resolve();
+		await Promise.all([firstRejected, secondRejected]);
+		expect(resolver.resolve).toHaveBeenCalledOnce();
+		expect(manager.snapshot()).toMatchObject({
+			queuedOperationCount: 0,
+			quarantinedConnectionCount: 1,
+		});
+		await expect(manager.close()).rejects.toThrow();
+	});
+
+	it("bounds the queue across generations and leaves admitted operations independent", async () => {
+		const allowOperation = deferred();
+		runtimeHarness.callToolHook = async () => {
+			await allowOperation.promise;
+			return { content: [] };
+		};
+		const resolver = resolverFrom(async () => admitted());
+		const manager = new McpRuntimeManager({
+			generationResolver: resolver,
+			maxConnections: 2,
+			maxQueuedOperations: 1,
+		});
+		const first = manager.callTool("one", "first", {}, { leaseMode: "exclusive" });
+		const other = manager.callTool("two", "other", {}, { leaseMode: "exclusive" });
+		const queued = manager.callTool(
+			"one",
+			"queued",
+			{},
+			{
+				leaseMode: "exclusive",
+				exclusiveContention: "queue",
+			},
+		);
+		await expect(
+			manager.callTool(
+				"two",
+				"over-limit",
+				{},
+				{
+					leaseMode: "exclusive",
+					exclusiveContention: "queue",
+				},
+			),
+		).rejects.toMatchObject({ code: "MCP_CAPACITY_EXCEEDED" });
+		expect(manager.snapshot()).toMatchObject({ queuedOperationCount: 1, maxQueuedOperations: 1 });
+		allowOperation.resolve();
+		await Promise.all([first, other, queued]);
+		expect(resolver.resolve).toHaveBeenCalledTimes(3);
+		await manager.close();
+	});
+
+	it.each(["admission", "operation"] as const)(
+		"releases the queue after %s failure without replaying the failed call",
+		async (failureStage) => {
+			const started = deferred();
+			const allowFailure = deferred();
+			const failure = new Error("controlled failure");
+			let calls = 0;
+			let admissions = 0;
+			runtimeHarness.callToolHook = async () => {
+				calls += 1;
+				if (failureStage === "operation" && calls === 1) {
+					started.resolve();
+					await allowFailure.promise;
+					throw failure;
+				}
+				return { content: [] };
+			};
+			const resolver = resolverFrom(async () => {
+				admissions += 1;
+				if (failureStage === "admission" && admissions === 1) {
+					started.resolve();
+					await allowFailure.promise;
+					throw failure;
+				}
+				return admitted();
+			});
+			const manager = new McpRuntimeManager({ generationResolver: resolver });
+			const first = manager.callTool("same", "first", {}, { leaseMode: "exclusive" });
+			await started.promise;
+			const rejected =
+				failureStage === "admission"
+					? expect(first).rejects.toBe(failure)
+					: expect(first).rejects.toMatchObject({ code: "MCP_UPSTREAM_FAILED", cause: failure });
+			const second = manager.callTool(
+				"same",
+				"second",
+				{},
+				{
+					leaseMode: "exclusive",
+					exclusiveContention: "queue",
+				},
+			);
+			allowFailure.resolve();
+			await rejected;
+			await expect(second).resolves.toMatchObject({ content: [] });
+			expect(admissions).toBe(2);
+			expect(calls).toBe(failureStage === "admission" ? 1 : 2);
+			expect(manager.snapshot().queuedOperationCount).toBe(0);
+			await manager.close();
+		},
+	);
+
+	it("requires explicit exclusive mode for queueing and validates its bound", async () => {
+		const resolver = resolverFrom(async () => admitted());
+		const manager = new McpRuntimeManager({ generationResolver: resolver });
+		await expect(
+			manager.callTool("same", "first", {}, { exclusiveContention: "queue" }),
+		).rejects.toThrow('queued contention requires leaseMode "exclusive"');
+		const invalidOptions: McpRuntimeOperationOptions = { leaseMode: "exclusive" };
+		Reflect.set(invalidOptions, "exclusiveContention", "invalid");
+		await expect(manager.probe("same", invalidOptions)).rejects.toThrow(
+			'options.exclusiveContention must be "reject" or "queue"',
+		);
+		expect(
+			() => new McpRuntimeManager({ generationResolver: resolver, maxQueuedOperations: 0 }),
+		).toThrow("maxQueuedOperations");
+		expect(resolver.resolve).not.toHaveBeenCalled();
+		await manager.close();
+	});
+
 	it("rejects exclusive work while the generation has a retained online keeper", async () => {
 		const manager = new McpRuntimeManager({
 			generationResolver: resolverFrom(async () => admitted()),
@@ -412,6 +793,17 @@ describe("McpRuntimeManager", () => {
 
 		await expect(
 			manager.callTool("retained-generation", "controlled", {}, { leaseMode: "exclusive" }),
+		).rejects.toMatchObject({ code: MCP_RUNTIME_LEASE_MODE_CONFLICT });
+		await expect(
+			manager.callTool(
+				"retained-generation",
+				"controlled",
+				{},
+				{
+					leaseMode: "exclusive",
+					exclusiveContention: "queue",
+				},
+			),
 		).rejects.toMatchObject({ code: MCP_RUNTIME_LEASE_MODE_CONFLICT });
 		expect(runtimeHarness.instances).toHaveLength(1);
 		await manager.close();

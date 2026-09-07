@@ -53,6 +53,8 @@ export interface McpRuntimeStateSnapshot {
 export interface McpRuntimeManagerSnapshot {
 	readonly closed: boolean;
 	readonly maxConnections: number;
+	readonly maxQueuedOperations: number;
+	readonly queuedOperationCount: number;
 	readonly connectionCount: number;
 	readonly pendingConnectionCount: number;
 	readonly activeConnectionCount: number;
@@ -84,7 +86,8 @@ export interface McpRuntimeProbeSnapshot {
  *
  * `"shared"` preserves the manager's ordinary retained-generation behavior. `"exclusive"`
  * creates one unshared runtime for the operation and closes it before settlement. Exclusive
- * work is fail-fast when the same generation already has shared or exclusive work. A custom
+ * work is fail-fast unless `exclusiveContention: "queue"` opts into bounded waiting behind
+ * another exclusive operation. Shared work and retained keepers still conflict. A custom
  * `withClientRuntime` callback remains responsible for not starting parallel protocol requests.
  */
 export type McpRuntimeOperationLeaseMode = "shared" | "exclusive";
@@ -93,6 +96,8 @@ export interface McpRuntimeOperationOptions {
 	readonly signal?: AbortSignal;
 	/** Defaults to `"shared"`; use `"exclusive"` for a non-pooled close-before-settlement runtime. */
 	readonly leaseMode?: McpRuntimeOperationLeaseMode;
+	/** Defaults to `"reject"`. `"queue"` waits FIFO behind exclusive work within the request deadline. */
+	readonly exclusiveContention?: "reject" | "queue";
 }
 
 /**
@@ -164,6 +169,8 @@ export type McpRuntimeStateListener = (event: McpRuntimeStateTransitionEvent) =>
 export interface McpRuntimeManagerOptions<GenerationKey = string> {
 	readonly generationResolver: McpRuntimeGenerationResolver<GenerationKey>;
 	readonly maxConnections?: number;
+	/** Global bound on operations waiting behind exclusive work; defaults to 100. */
+	readonly maxQueuedOperations?: number;
 	/** Maximum retained generation state projections; must be at least maxConnections. */
 	readonly maxStateEntries?: number;
 	readonly requestTimeoutMs?: number;
@@ -195,6 +202,8 @@ export interface McpRuntimeToolCallOptions {
 	readonly signal?: AbortSignal;
 	/** Defaults to `"shared"`; exclusive calls do not require an online keeper. */
 	readonly leaseMode?: McpRuntimeOperationLeaseMode;
+	/** Defaults to `"reject"`; requires `leaseMode: "exclusive"` when set to `"queue"`. */
+	readonly exclusiveContention?: "reject" | "queue";
 	readonly toolDefinition?: Tool;
 }
 

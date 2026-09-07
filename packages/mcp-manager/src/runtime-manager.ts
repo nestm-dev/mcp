@@ -28,6 +28,7 @@ import {
 	type OwnedMcpRuntime,
 } from "./runtime-factory.ts";
 import { RuntimeStateStore } from "./runtime-state.ts";
+import { ExclusiveOperationQueue } from "./exclusive-operation-queue.ts";
 import type {
 	McpRuntimeCatalogSnapshot,
 	McpManagedClientRuntimeOperation,
@@ -56,6 +57,7 @@ interface ActiveOperationLeaseMode {
 
 export const MCP_RUNTIME_MANAGER_DEFAULTS = Object.freeze({
 	maxConnections: 100,
+	maxQueuedOperations: 100,
 	maxStateEntries: 1_000,
 	requestTimeoutMs: 10_000,
 	shutdownTimeoutMs: 30_000,
@@ -76,6 +78,7 @@ export class McpRuntimeManager<GenerationKey = string>
 		Set<ExclusiveRuntimeLeaseIdentity<GenerationKey>>
 	>();
 	readonly #operationLeaseModes = new Map<GenerationKey, ActiveOperationLeaseMode>();
+	readonly #queuedOperations: ExclusiveOperationQueue<GenerationKey>;
 	readonly #onlineTasks = new Map<GenerationKey, Promise<McpRuntimeStateSnapshot>>();
 	readonly #offlineTasks = new Map<GenerationKey, Promise<McpRuntimeStateSnapshot>>();
 	readonly #postOfflineOnlineTasks = new Map<GenerationKey, Promise<McpRuntimeStateSnapshot>>();
@@ -97,6 +100,12 @@ export class McpRuntimeManager<GenerationKey = string>
 		const maxConnections = positiveInteger(
 			options.maxConnections ?? MCP_RUNTIME_MANAGER_DEFAULTS.maxConnections,
 			"maxConnections",
+		);
+		this.#queuedOperations = new ExclusiveOperationQueue(
+			positiveInteger(
+				options.maxQueuedOperations ?? MCP_RUNTIME_MANAGER_DEFAULTS.maxQueuedOperations,
+				"maxQueuedOperations",
+			),
 		);
 		const maxStateEntries = positiveInteger(
 			options.maxStateEntries ??
@@ -211,6 +220,13 @@ export class McpRuntimeManager<GenerationKey = string>
 
 	setOffline(generationKey: GenerationKey): Promise<McpRuntimeStateSnapshot> {
 		this.#assertOpen();
+		this.#queuedOperations.rejectGeneration(
+			generationKey,
+			new McpRuntimeManagerError(
+				MCP_RUNTIME_GENERATION_RETIRED,
+				"The MCP runtime generation was retired before the operation started.",
+			),
+		);
 		let task = this.#offlineTasks.get(generationKey);
 		if (task !== undefined) return task;
 		task = Promise.resolve().then(() => this.#performSetOffline(generationKey));
@@ -538,6 +554,8 @@ export class McpRuntimeManager<GenerationKey = string>
 		return Object.freeze({
 			closed: snapshot.closed,
 			maxConnections: snapshot.maxResources,
+			maxQueuedOperations: this.#queuedOperations.maxOperations,
+			queuedOperationCount: this.#queuedOperations.size,
 			connectionCount: snapshot.resourceCount,
 			pendingConnectionCount: snapshot.pendingResourceCount,
 			activeConnectionCount: snapshot.activeResourceCount,
@@ -555,6 +573,7 @@ export class McpRuntimeManager<GenerationKey = string>
 	close(): Promise<void> {
 		if (this.#closeTask !== undefined) return this.#closeTask;
 		this.#closed = true;
+		this.#queuedOperations.rejectAll(runtimeManagerClosedError());
 		this.#closeTask = this.#performClose();
 		return this.#closeTask;
 	}
@@ -646,30 +665,76 @@ export class McpRuntimeManager<GenerationKey = string>
 		this.#assertNotQuarantined(generationKey);
 		const leaseMode = options.leaseMode ?? "shared";
 		if (leaseMode === "shared" && requireOnline) this.#assertOnlineKeeper(generationKey);
-		this.#enterOperationLeaseMode(generationKey, leaseMode);
-		const identity =
-			leaseMode === "exclusive" ? this.#createExclusiveIdentity(generationKey) : generationKey;
 		const callerSignal = options.signal;
 		const acquisitionSignal = AbortSignal.any([
 			AbortSignal.timeout(this.#requestTimeoutMs),
 			...(callerSignal === undefined ? [] : [callerSignal]),
 		]);
+		try {
+			acquisitionSignal.throwIfAborted();
+			if (
+				leaseMode === "exclusive" &&
+				options.exclusiveContention === "queue" &&
+				this.#operationLeaseModes.get(generationKey)?.mode === "exclusive"
+			) {
+				await this.#queuedOperations.enqueue(generationKey, acquisitionSignal);
+			} else {
+				this.#enterOperationLeaseMode(generationKey, leaseMode);
+			}
+		} catch (error) {
+			throwIfCallerAborted(callerSignal);
+			throw mapMcpRuntimeManagerError(error);
+		}
+		try {
+			// A granted waiter may be cancelled or retired before its continuation runs.
+			this.#assertOpen();
+			if (this.#offlineTasks.has(generationKey)) {
+				throw new McpRuntimeManagerError(
+					MCP_RUNTIME_GENERATION_RETIRED,
+					"The MCP runtime generation was retired before the operation started.",
+				);
+			}
+			this.#assertNotQuarantined(generationKey);
+			if (acquisitionSignal.aborted) throw mapMcpRuntimeManagerError(acquisitionSignal.reason);
+			return await this.#runOperation(
+				generationKey,
+				operation,
+				leaseMode,
+				acquisitionSignal,
+				callerSignal,
+			);
+		} catch (error) {
+			throwIfCallerAborted(callerSignal);
+			throw error;
+		} finally {
+			this.#leaveOperationLeaseMode(generationKey, leaseMode);
+		}
+	}
+
+	async #runOperation<Result>(
+		generationKey: GenerationKey,
+		operation: (owned: ActiveMcpRuntime<GenerationKey>, signal: AbortSignal) => Promise<Result>,
+		leaseMode: McpRuntimeOperationLeaseMode,
+		acquisitionSignal: AbortSignal,
+		callerSignal: AbortSignal | undefined,
+	): Promise<Result> {
+		const identity =
+			leaseMode === "exclusive" ? this.#createExclusiveIdentity(generationKey) : generationKey;
 		let lease: McpClientLease<OwnedMcpRuntime<GenerationKey>>;
 		try {
 			lease = await this.#leases.acquire(identity, {
 				releaseMode: "close",
 				signal: acquisitionSignal,
+				awaitCleanupOnCancel: leaseMode === "exclusive",
 			});
 		} catch (error) {
 			this.#forgetExclusiveIdentity(identity);
-			this.#leaveOperationLeaseMode(generationKey, leaseMode);
 			throwIfCallerAborted(callerSignal);
 			throw mapMcpRuntimeManagerError(error);
 		}
 		const owned = lease.resource;
 		if (owned.quarantined) {
 			await releaseIgnoringFailure(lease);
-			this.#leaveOperationLeaseMode(generationKey, leaseMode);
 			throw runtimeQuarantinedError();
 		}
 		const operationSignal = AbortSignal.any([acquisitionSignal, owned.generationSignal]);
@@ -684,12 +749,10 @@ export class McpRuntimeManager<GenerationKey = string>
 		try {
 			await lease.release();
 		} catch (error) {
-			this.#leaveOperationLeaseMode(generationKey, leaseMode);
 			this.#states.transition(generationKey, "quarantined", MCP_RUNTIME_CLEANUP_FAILED);
 			throw runtimeQuarantinedError(error);
 		}
 		this.#forgetExclusiveIdentity(identity);
-		this.#leaveOperationLeaseMode(generationKey, leaseMode);
 		if (!outcome.success) {
 			throwIfCallerAborted(callerSignal);
 			throw mapMcpRuntimeManagerError(outcome.error);
@@ -747,7 +810,15 @@ export class McpRuntimeManager<GenerationKey = string>
 		const active = this.#operationLeaseModes.get(generationKey);
 		if (active === undefined || active.mode !== mode) return;
 		active.count -= 1;
-		if (active.count === 0) this.#operationLeaseModes.delete(generationKey);
+		if (active.count !== 0) return;
+		this.#operationLeaseModes.delete(generationKey);
+		if (this.#states.read(generationKey).phase === "quarantined") {
+			this.#queuedOperations.rejectGeneration(generationKey, runtimeQuarantinedError());
+		} else if (!this.#closed && !this.#offlineTasks.has(generationKey)) {
+			this.#queuedOperations.grantNext(generationKey, () =>
+				this.#enterOperationLeaseMode(generationKey, "exclusive"),
+			);
+		}
 	}
 
 	#createExclusiveIdentity(
@@ -806,9 +877,11 @@ function normalizeOperationOptions(
 	if (isAbortSignal(options)) return { signal: options };
 	let signal: unknown;
 	let leaseMode: unknown;
+	let exclusiveContention: unknown;
 	try {
 		signal = Reflect.get(options, "signal");
 		leaseMode = Reflect.get(options, "leaseMode");
+		exclusiveContention = Reflect.get(options, "exclusiveContention");
 	} catch {
 		throw new TypeError(`${operationName} options could not be read.`);
 	}
@@ -820,6 +893,18 @@ function normalizeOperationOptions(
 	}
 	if (leaseMode !== undefined && leaseMode !== "shared" && leaseMode !== "exclusive") {
 		throw new TypeError(`${operationName} options.leaseMode must be "shared" or "exclusive".`);
+	}
+	if (
+		exclusiveContention !== undefined &&
+		exclusiveContention !== "reject" &&
+		exclusiveContention !== "queue"
+	) {
+		throw new TypeError(
+			`${operationName} options.exclusiveContention must be "reject" or "queue".`,
+		);
+	}
+	if (exclusiveContention === "queue" && leaseMode !== "exclusive") {
+		throw new TypeError(`${operationName} queued contention requires leaseMode "exclusive".`);
 	}
 	return options;
 }
