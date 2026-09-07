@@ -1,5 +1,17 @@
 # @nestm/mcp-observability
 
+## 0.1.0-alpha.20
+
+### Minor Changes
+
+- 24646ad: Add a pure OAuth provisioning planner over captured discovery, public client provenance, and explicit host strategy order, plus a bounded challenge probe over host-admitted fetch. Hosts retain credential custody, browser consent, endpoint admission, atomic state transitions, and registration dispatch fences.
+
+  Expose configurable duration histogram arithmetic with JSON-safe, geometry-checked snapshots and lossless sufficient-statistic merging. The fixed-memory collector now shares this arithmetic with durable consumers without selecting their persistence, dimensions, or telemetry policy.
+
+### Patch Changes
+
+- @nestm/mcp-core@0.1.0-alpha.20
+
 ## 0.1.0-alpha.19
 
 ### Patch Changes
