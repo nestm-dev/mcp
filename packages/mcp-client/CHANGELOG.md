@@ -1,5 +1,18 @@
 # @nestm/mcp-client
 
+## 0.1.0-alpha.23
+
+### Minor Changes
+
+- b207d20: Add passive MCP authentication detection over host-admitted fetch. Validate anonymous modern discovery or a complete legacy handshake through the official SDK, or require validated OAuth bootstrap evidence after an authorization denial. Keep unsupported authentication, unreachable endpoints, invalid responses, and failed metadata discovery indeterminate. Bound streaming response reads, deadlines, and legacy session cleanup without performing registration, token acquisition, or feature invocation.
+
+  Hosts may supply a separate guarded OAuth metadata fetch while retaining endpoint-only admission for MCP traffic. Existing challenge probing and OAuth enrollment APIs are unchanged.
+
+### Patch Changes
+
+- @nestm/mcp-conformance@0.1.0-alpha.23
+  - @nestm/mcp-core@0.1.0-alpha.23
+
 ## 0.1.0-alpha.22
 
 ### Patch Changes
