@@ -97,7 +97,7 @@ After Nest application bootstrap, inject `McpRuntimeService`. Mount
 `runtime.server("artifact").toNodeHandler()` at the desired route, access the named upstream with
 `runtime.client("knowledge")`, or use `runtime.clients` for registry operations. The module closes
 inbound server handlers before upstream clients during Nest shutdown. For Nest-native routing,
-guards, interceptors, prefixes, and versioning, prefer `McpHttpControllerFor()` below.
+guards, interceptors, prefixes, and versioning, declare `httpRoutes` below.
 
 For an outbound-only agent host, import `McpClientModule` directly and inject `McpClientService`:
 
@@ -524,7 +524,78 @@ HTTP exchange before official dispatch and do not run for stdio. Use them for ex
 concerns, not as the sole authorization seam for individual capabilities. A raw Node handler
 mounted beside Nest routes also does not automatically execute Nest guards or interceptors.
 
-## Nest-native HTTP controller
+## Declarative Nest HTTP routes
+
+Declare `httpRoutes` on `McpModule.forRoot()` or `forRootAsync()` to serve a named runtime without
+writing a controller:
+
+```ts
+McpModule.forRootAsync({
+	httpRoutes: [
+		{
+			serverName: "artifact",
+			path: "mcp",
+			decorators: [UseGuards(ArtifactRouteGuard)],
+			discovery: {
+				protectedResourcePaths: [".well-known/oauth-protected-resource/mcp"],
+				authorizationServerPaths: [".well-known/oauth-authorization-server/api/auth"],
+				decorators: [PublicRoute()],
+			},
+		},
+	],
+	imports: [RuntimeConfigModule],
+	inject: [RuntimeConfigService],
+	collaborators: { providers: [ArtifactRouteGuard, ArtifactTokenVerifier] },
+	useFactory: (config: RuntimeConfigService) => ({
+		servers: [
+			{
+				name: "artifact",
+				serverInfo: { name: "artifact", version: "1.0.0" },
+				oauth: {
+					resource: {
+						resourceServerUrl: config.mcpUrl, // e.g. https://example.com/mcp
+						verifier: ArtifactTokenVerifier,
+						requiredScopes: ["mcp:invoke"],
+						metadata: { oauthMetadata: config.authorizationServerMetadata },
+					},
+				},
+			},
+		],
+	}),
+});
+```
+
+`PublicRoute`, the guard, verifier, and configuration service above are application-owned. Register
+providers required by route decorators in `collaborators.providers` or export them from imported
+modules. Routing metadata is static: with `forRootAsync()`, put `httpRoutes` beside `useFactory`,
+not in its result. Omitting `httpRoutes` registers no controllers.
+
+Each entry creates ordinary Nest controllers using the existing MCP handler. Express and Fastify
+retain Nest guards, interceptors, global prefixes, and optional `version`. The named server still
+owns bearer authentication, `httpSecurity`, and capability authorization. Class `decorators` let
+applications attach their existing route metadata without creating wrapper classes. Manual
+`McpHttpControllerFor()` controllers and direct Node handlers remain available when needed.
+
+Optional `discovery` serves official SDK metadata from that server's `oauth.resource.metadata`.
+It does not implement authorization, consent, or token issuance. Discovery has its own decorators;
+transport decorators are not copied to it. Set application public-route metadata here when global
+guards otherwise require a login. Discovery is version-neutral, including when Nest has a default
+version. If the application sets a global prefix, exclude the declared well-known paths using
+`app.setGlobalPrefix(prefix, { exclude: paths })` so clients can find them at the origin root.
+
+When declaring protected-resource discovery, include the exact path advertised by the resource
+URL's bearer challenge: for `https://example.com/api/v1/mcp`, use
+`.well-known/oauth-protected-resource/api/v1/mcp`. Additional aliases are optional. Supply
+authorization-server discovery paths appropriate for the configured issuer. The SDK handles GET,
+HEAD, OPTIONS, and unsupported methods. Discovery for `oauth.proxy` continues to use the explicit
+proxy controller factory.
+
+Paths must be non-empty literal paths without router patterns, dot segments, queries, or fragments.
+Leading and trailing slashes are normalized; paths must be unique across all declared MCP and
+discovery routes, ignoring case. Do not register a manual controller at the same path. Unknown
+server names or discovery without resource metadata fail during Nest module initialization.
+
+## Custom Nest HTTP controller
 
 Bind a named runtime to a normal Nest controller when MCP should participate in the application's
 HTTP route pipeline:

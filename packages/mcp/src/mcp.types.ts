@@ -225,6 +225,8 @@ export interface McpModuleOptions {
 }
 
 export interface McpModuleExtras {
+	/** Static Nest routes generated at module registration, outside an async useFactory. */
+	readonly httpRoutes?: readonly import("./http/mcp-http-route.types.ts").McpHttpRoute[];
 	/** Make the runtime services globally injectable. Defaults to false. */
 	readonly isGlobal?: boolean;
 	/** Nest modules whose exported providers are consumed by the MCP root. */
