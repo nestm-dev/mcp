@@ -303,6 +303,11 @@ are local by default. Import the MCP server root exactly once per Nest applicati
 discovery is application-wide; configure `McpClientModule` independently. Set `isGlobal: true` on
 either module only when application-wide injection is intentional.
 
+Declare `httpRoutes: [{ serverName: "artifact-tools", path: "mcp" }]` on `McpModule` to register
+Nest HTTP routes without wrapper controllers. With `forRootAsync()`, this option belongs beside
+`useFactory`. Route decorators, versioning, and optional public OAuth discovery are documented in
+the [Nest adapter guide](packages/mcp/README.md#declarative-nest-http-routes).
+
 After Nest application bootstrap, inject `McpRuntimeService`. Use `runtime.server("artifact-tools")` for the local inbound server, `runtime.clients` or `runtime.client(name)` for upstreams from the imported client module, and `runtime.gateway("agent-gateway")` to inspect or invalidate the dedicated server's aggregate discovery cache. Inject `McpClientService` directly in client-only application services. Shutdown closes inbound server handlers before closing upstream clients. The Nest destroy hook contains cleanup failures so framework adapter disposal can continue; inspect `runtime.shutdownError` or call `runtime.close()` explicitly when the host must fail on cleanup errors.
 
 Call `app.enableShutdownHooks()` during bootstrap when SIGTERM/SIGINT should trigger Nest lifecycle cleanup. A failed MCP bootstrap automatically rolls back any clients and servers that were already initialized.

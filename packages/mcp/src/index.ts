@@ -88,6 +88,7 @@ export type {
 } from "./client/mcp-client.types.ts";
 export { McpCapabilitiesService } from "./mcp-capabilities.service.ts";
 export { McpRuntimeService } from "./mcp-runtime.service.ts";
+export type { McpHttpRoute, McpHttpDiscoveryRoutes } from "./http/mcp-http-route.types.ts";
 export { createMcpHandlerPassthroughMiddleware } from "./mcp-handler.middleware.ts";
 export type {
 	McpCapabilityMutation,

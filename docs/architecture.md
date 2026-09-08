@@ -216,6 +216,13 @@ not flattened into the server module's options. Applications import exactly one 
 root because decorator discovery is intentionally application-wide. Each module is local by
 default, and `isGlobal: true` is an explicit opt-in.
 
+The static `httpRoutes` module extra optionally generates ordinary Nest controllers for named
+servers. It preserves Nest route decorators, guards, interceptors, prefixes, and versioning while
+delegating to the existing HTTP handler and security pipeline. Optional version-neutral discovery
+controllers serve official SDK metadata from `oauth.resource.metadata` with separately configured
+public-route decorators. Applications still own authorization, consent, token issuance, global
+prefix exclusions, and route policy. No routes are mounted unless explicitly configured.
+
 Ordinary Nest modules own decorated capability providers and their imports/exports. Server and
 client runtime collaborators are explicitly owned by their respective dynamic module through
 `collaborators.providers` and `collaborators.imports`, preserving module isolation and lifecycle
