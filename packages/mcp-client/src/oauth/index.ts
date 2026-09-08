@@ -15,6 +15,7 @@ export * from "./refresh-coordinator.ts";
 export * from "./scope.ts";
 export * from "./provisioning.ts";
 export * from "./challenge-probe.ts";
+export * from "./authentication-detection.ts";
 export * from "./state.ts";
 export { McpClientOAuthSnapshotError } from "./snapshot-data.ts";
 export type { McpClientOAuthSnapshotOptions } from "./snapshot-data.ts";
