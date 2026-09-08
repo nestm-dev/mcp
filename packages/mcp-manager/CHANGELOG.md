@@ -1,5 +1,13 @@
 # @nestm/mcp-manager
 
+## 0.1.0-alpha.23
+
+### Patch Changes
+
+- Updated dependencies [b207d20]
+  - @nestm/mcp-client@0.1.0-alpha.23
+  - @nestm/mcp-core@0.1.0-alpha.23
+
 ## 0.1.0-alpha.22
 
 ### Patch Changes
