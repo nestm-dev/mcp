@@ -322,6 +322,64 @@ Run `node packages/mcp-client/scripts/external-smoke.mjs --help` for every suppo
 
 ## Host-managed OAuth provisioning
 
+### Detect authentication before enrollment
+
+`detectMcpClientAuthentication` from `@nestm/mcp-client/oauth` performs credential-free,
+passive Streamable HTTP detection:
+
+```ts
+import { detectMcpClientAuthentication } from "@nestm/mcp-client/oauth";
+
+const result = await detectMcpClientAuthentication({
+	serverUrl: endpoint,
+	fetch: admittedEndpointLease.fetch,
+	discoveryFetch: ssrfGuardedOAuthFetch,
+	endpointPolicy: oauthEndpointPolicy,
+	signal: hostDeadlineSignal,
+	timeoutMs: 10_000,
+	maxResponseBytes: 262_144,
+});
+// Always release the host's admitted fetch lease in the host's finally block.
+```
+
+- `anonymous`: the SDK validated modern `server/discover` or completed legacy
+  `initialize` / `notifications/initialized`. Includes `protocolVersion`, `protocolEra`, and
+  optional bounded `serverInfo` (`name`, `version`, `title`). Identity is self-reported display
+  data. This proves anonymous connection/discovery at inspection time, not anonymous access to
+  every future operation; a server may protect individual tools or change policy later.
+- `oauth-required`: an MCP request received `401`, or `403` with a parsed Bearer challenge,
+  and existing OAuth bootstrap validated discovery. `discovery` retains its existing `ready`,
+  `authorization-server-selection-required`, or `strict-protocol-unsupported` discriminant.
+  The host still decides whether and how it can enroll that authority.
+- `indeterminate`: a fixed `reason` and optional numeric `httpStatus` / bootstrap
+  `discoveryErrorCode`. Missing metadata, Basic/API-key authentication, redirects, malformed
+  responses, network errors, unsupported protocol, and deadline failures never mean anonymous.
+  Raw response bodies, challenge text, and provider errors are not returned.
+
+`fetch` must already admit the MCP endpoint and support POST, optional legacy GET, and DELETE
+cleanup. `discoveryFetch` defaults to `fetch`; provide it separately when the MCP fetch is
+restricted to one exact endpoint. It must enforce the host's DNS/network policy for generated
+OAuth metadata URLs. The same bootstrap `endpointPolicy` admits every generated metadata URL and
+checks authorization/token endpoints without fetching them. The helper forces omitted
+credentials, no caching, and rejected redirects, and installs no auth provider. Never supply a
+fetch that injects cookies, bearer tokens, or other credentials.
+
+Detection has a default 10-second total deadline (configurable up to 60 seconds), an aggregate
+256-KiB response budget including SSE framing and OAuth metadata (up to 1 MiB), and at most 12
+requests plus one legacy session DELETE. It parses streaming responses incrementally through
+the SDK; an SSE stream need not close after its result. It cancels remaining bodies and closes
+the SDK client/transport, with at most one additional second for cleanup. Failed anonymous
+session cleanup becomes `indeterminate`. Host cancellation rejects with the original reason.
+The host must release its network lease even after failure or cancellation; the helper cannot
+force an uncooperative fetch/cancel implementation to release sockets.
+
+Only HTTP Streamable MCP is inspected; old HTTP+SSE endpoints are not followed. No tool/list
+invocation, client registration, authorization navigation, token acquisition, persistence,
+permission checks, or enrollment occurs. Inspection results are advisory and are not admission
+receipts or activation credentials.
+
+### Plan OAuth enrollment
+
 Use `planMcpClientOAuthProvisioning` from `@nestm/mcp-client/oauth` to decide how to provision a
 client after bootstrap returns `ready`. The planner takes captured discovery, the callback URL,
 optional current CIMD identity, and public existing-client provenance. Supply `strategies` in your

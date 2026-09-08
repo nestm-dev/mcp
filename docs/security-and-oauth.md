@@ -92,6 +92,33 @@ The transport may retry once after a `401` when the provider refreshes or comple
 
 Authentication failures are not protocol-era evidence. A `401` or `403` response to `server/discover` must remain an auth error and must not trigger a guess that the server is legacy.
 
+### Passive authentication inspection
+
+`detectMcpClientAuthentication` (`@nestm/mcp-client/oauth`) composes the official SDK's protocol
+negotiation with the existing guarded OAuth bootstrap. The current
+[MCP HTTP transport specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
+uses POST and per-request discovery; the helper also completes the SDK's legacy handshake,
+cancels its optional GET stream, and attempts DELETE for any session it creates. A successful
+GET or missing `WWW-Authenticate` header cannot prove an anonymous MCP endpoint.
+
+The detector reports `anonymous` only after validated credential-free MCP connection/discovery.
+Per-operation authorization may still apply. Under the
+[MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization),
+a denied request can lead to protected-resource and issuer metadata discovery; the detector
+reports `oauth-required` only when that discovery validates. Unsupported strict-runtime
+capabilities and issuer selection remain explicit bootstrap result variants. A bare `401`
+supports well-known discovery; a bare `403` or non-Bearer challenge remains indeterminate.
+Malformed or unavailable discovery never downgrades authentication to anonymous.
+
+Hosts retain permission, tenant, endpoint, and network admission policy. An exact-endpoint MCP
+fetch can be supplied separately from a guarded `discoveryFetch`; neither may inject credentials.
+All metadata URLs pass the bootstrap endpoint policy. Reads share an aggregate byte/request
+budget and deadline, including SSE framing; remaining bodies, client/transport, and session
+cleanup are bounded. The host always releases its admitted network lease, since a helper cannot
+forcibly close sockets held by an uncooperative host fetch. Inspection performs no enrollment,
+feature invocation, or persistence. Recheck host admission and authorization before creating or
+activating a connection; an inspection result is not a permission grant.
+
 ## Server-side resource protection
 
 `McpResourceServer` from `@nestm/mcp-server/auth` wraps a web-standard MCP handler as a resource
