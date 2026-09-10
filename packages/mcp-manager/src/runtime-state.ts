@@ -48,6 +48,7 @@ export class RuntimeStateStore<GenerationKey> {
 		errorCode?: McpRuntimeStateErrorCode,
 	): McpRuntimeStateSnapshot {
 		const previous = this.#states.get(generationKey);
+		if (previous?.phase === "quarantined") return previous;
 		const timestamp = readTimestamp(this.#now);
 		const lastTransitionAt =
 			previous?.phase === phase && previous.errorCode === errorCode
@@ -73,6 +74,7 @@ export class RuntimeStateStore<GenerationKey> {
 	): McpRuntimeStateSnapshot {
 		const capabilities = snapshot.serverCapabilities;
 		const previous = this.#states.get(generationKey);
+		if (previous?.phase === "quarantined") return previous;
 		const timestamp = readTimestamp(this.#now);
 		const state: McpRuntimeStateSnapshot = Object.freeze({
 			phase: "online",

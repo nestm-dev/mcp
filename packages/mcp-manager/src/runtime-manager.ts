@@ -28,7 +28,7 @@ import {
 	type OwnedMcpRuntime,
 } from "./runtime-factory.ts";
 import { RuntimeStateStore } from "./runtime-state.ts";
-import { ExclusiveOperationQueue } from "./exclusive-operation-queue.ts";
+import { OperationAdmission } from "./operation-admission.ts";
 import type {
 	McpRuntimeCatalogSnapshot,
 	McpManagedClientRuntimeOperation,
@@ -50,14 +50,10 @@ class ExclusiveRuntimeLeaseIdentity<GenerationKey> {
 type RuntimeLeaseIdentity<GenerationKey> =
 	GenerationKey | ExclusiveRuntimeLeaseIdentity<GenerationKey>;
 
-interface ActiveOperationLeaseMode {
-	readonly mode: McpRuntimeOperationLeaseMode;
-	count: number;
-}
-
 export const MCP_RUNTIME_MANAGER_DEFAULTS = Object.freeze({
 	maxConnections: 100,
 	maxQueuedOperations: 100,
+	maxConcurrentOperationsPerAdmissionKey: 4,
 	maxStateEntries: 1_000,
 	requestTimeoutMs: 10_000,
 	shutdownTimeoutMs: 30_000,
@@ -77,8 +73,7 @@ export class McpRuntimeManager<GenerationKey = string>
 		GenerationKey,
 		Set<ExclusiveRuntimeLeaseIdentity<GenerationKey>>
 	>();
-	readonly #operationLeaseModes = new Map<GenerationKey, ActiveOperationLeaseMode>();
-	readonly #queuedOperations: ExclusiveOperationQueue<GenerationKey>;
+	readonly #admission: OperationAdmission<GenerationKey>;
 	readonly #onlineTasks = new Map<GenerationKey, Promise<McpRuntimeStateSnapshot>>();
 	readonly #offlineTasks = new Map<GenerationKey, Promise<McpRuntimeStateSnapshot>>();
 	readonly #postOfflineOnlineTasks = new Map<GenerationKey, Promise<McpRuntimeStateSnapshot>>();
@@ -101,10 +96,15 @@ export class McpRuntimeManager<GenerationKey = string>
 			options.maxConnections ?? MCP_RUNTIME_MANAGER_DEFAULTS.maxConnections,
 			"maxConnections",
 		);
-		this.#queuedOperations = new ExclusiveOperationQueue(
+		this.#admission = new OperationAdmission(
 			positiveInteger(
 				options.maxQueuedOperations ?? MCP_RUNTIME_MANAGER_DEFAULTS.maxQueuedOperations,
 				"maxQueuedOperations",
+			),
+			positiveInteger(
+				options.maxConcurrentOperationsPerAdmissionKey ??
+					MCP_RUNTIME_MANAGER_DEFAULTS.maxConcurrentOperationsPerAdmissionKey,
+				"maxConcurrentOperationsPerAdmissionKey",
 			),
 		);
 		const maxStateEntries = positiveInteger(
@@ -220,7 +220,7 @@ export class McpRuntimeManager<GenerationKey = string>
 
 	setOffline(generationKey: GenerationKey): Promise<McpRuntimeStateSnapshot> {
 		this.#assertOpen();
-		this.#queuedOperations.rejectGeneration(
+		this.#admission.rejectGeneration(
 			generationKey,
 			new McpRuntimeManagerError(
 				MCP_RUNTIME_GENERATION_RETIRED,
@@ -554,8 +554,8 @@ export class McpRuntimeManager<GenerationKey = string>
 		return Object.freeze({
 			closed: snapshot.closed,
 			maxConnections: snapshot.maxResources,
-			maxQueuedOperations: this.#queuedOperations.maxOperations,
-			queuedOperationCount: this.#queuedOperations.size,
+			maxQueuedOperations: this.#admission.maxOperations,
+			queuedOperationCount: this.#admission.size,
 			connectionCount: snapshot.resourceCount,
 			pendingConnectionCount: snapshot.pendingResourceCount,
 			activeConnectionCount: snapshot.activeResourceCount,
@@ -573,7 +573,7 @@ export class McpRuntimeManager<GenerationKey = string>
 	close(): Promise<void> {
 		if (this.#closeTask !== undefined) return this.#closeTask;
 		this.#closed = true;
-		this.#queuedOperations.rejectAll(runtimeManagerClosedError());
+		this.#admission.rejectAll(runtimeManagerClosedError());
 		this.#closeTask = this.#performClose();
 		return this.#closeTask;
 	}
@@ -588,7 +588,6 @@ export class McpRuntimeManager<GenerationKey = string>
 		this.#keepers.clear();
 		const settled = await Promise.allSettled([close, ...keepers.map((keeper) => keeper.release())]);
 		this.#exclusiveIdentities.clear();
-		this.#operationLeaseModes.clear();
 		const failures = settled.flatMap((result) =>
 			result.status === "rejected" ? [result.reason as unknown] : [],
 		);
@@ -670,17 +669,22 @@ export class McpRuntimeManager<GenerationKey = string>
 			AbortSignal.timeout(this.#requestTimeoutMs),
 			...(callerSignal === undefined ? [] : [callerSignal]),
 		]);
+		let releaseAdmission: (quarantine: boolean) => void;
 		try {
 			acquisitionSignal.throwIfAborted();
 			if (
-				leaseMode === "exclusive" &&
-				options.exclusiveContention === "queue" &&
-				this.#operationLeaseModes.get(generationKey)?.mode === "exclusive"
+				leaseMode !== "shared" &&
+				(this.#keepers.has(generationKey) || this.#onlineTasks.has(generationKey))
 			) {
-				await this.#queuedOperations.enqueue(generationKey, acquisitionSignal);
-			} else {
-				this.#enterOperationLeaseMode(generationKey, leaseMode);
+				throw runtimeLeaseModeConflictError();
 			}
+			releaseAdmission = await this.#admission.enter(
+				generationKey,
+				leaseMode,
+				options.admissionKey,
+				options.exclusiveContention === "queue",
+				acquisitionSignal,
+			);
 		} catch (error) {
 			throwIfCallerAborted(callerSignal);
 			throw mapMcpRuntimeManagerError(error);
@@ -707,7 +711,7 @@ export class McpRuntimeManager<GenerationKey = string>
 			throwIfCallerAborted(callerSignal);
 			throw error;
 		} finally {
-			this.#leaveOperationLeaseMode(generationKey, leaseMode);
+			releaseAdmission(this.#states.read(generationKey).phase === "quarantined");
 		}
 	}
 
@@ -719,13 +723,13 @@ export class McpRuntimeManager<GenerationKey = string>
 		callerSignal: AbortSignal | undefined,
 	): Promise<Result> {
 		const identity =
-			leaseMode === "exclusive" ? this.#createExclusiveIdentity(generationKey) : generationKey;
+			leaseMode !== "shared" ? this.#createExclusiveIdentity(generationKey) : generationKey;
 		let lease: McpClientLease<OwnedMcpRuntime<GenerationKey>>;
 		try {
 			lease = await this.#leases.acquire(identity, {
 				releaseMode: "close",
 				signal: acquisitionSignal,
-				awaitCleanupOnCancel: leaseMode === "exclusive",
+				awaitCleanupOnCancel: leaseMode !== "shared",
 			});
 		} catch (error) {
 			this.#forgetExclusiveIdentity(identity);
@@ -785,39 +789,8 @@ export class McpRuntimeManager<GenerationKey = string>
 	}
 
 	#assertSharedLeaseAvailable(generationKey: GenerationKey): void {
-		if (this.#operationLeaseModes.get(generationKey)?.mode === "exclusive") {
+		if (this.#admission.hasIsolatedGeneration(generationKey)) {
 			throw runtimeLeaseModeConflictError();
-		}
-	}
-
-	#enterOperationLeaseMode(generationKey: GenerationKey, mode: McpRuntimeOperationLeaseMode): void {
-		const active = this.#operationLeaseModes.get(generationKey);
-		if (
-			active !== undefined ||
-			(mode === "exclusive" &&
-				(this.#keepers.has(generationKey) || this.#onlineTasks.has(generationKey)))
-		) {
-			if (active?.mode !== "shared" || mode !== "shared") {
-				throw runtimeLeaseModeConflictError();
-			}
-			active.count += 1;
-			return;
-		}
-		this.#operationLeaseModes.set(generationKey, { mode, count: 1 });
-	}
-
-	#leaveOperationLeaseMode(generationKey: GenerationKey, mode: McpRuntimeOperationLeaseMode): void {
-		const active = this.#operationLeaseModes.get(generationKey);
-		if (active === undefined || active.mode !== mode) return;
-		active.count -= 1;
-		if (active.count !== 0) return;
-		this.#operationLeaseModes.delete(generationKey);
-		if (this.#states.read(generationKey).phase === "quarantined") {
-			this.#queuedOperations.rejectGeneration(generationKey, runtimeQuarantinedError());
-		} else if (!this.#closed && !this.#offlineTasks.has(generationKey)) {
-			this.#queuedOperations.grantNext(generationKey, () =>
-				this.#enterOperationLeaseMode(generationKey, "exclusive"),
-			);
 		}
 	}
 
@@ -878,10 +851,12 @@ function normalizeOperationOptions(
 	let signal: unknown;
 	let leaseMode: unknown;
 	let exclusiveContention: unknown;
+	let admissionKey: unknown;
 	try {
 		signal = Reflect.get(options, "signal");
 		leaseMode = Reflect.get(options, "leaseMode");
 		exclusiveContention = Reflect.get(options, "exclusiveContention");
+		admissionKey = Reflect.get(options, "admissionKey");
 	} catch {
 		throw new TypeError(`${operationName} options could not be read.`);
 	}
@@ -891,8 +866,15 @@ function normalizeOperationOptions(
 	) {
 		throw new TypeError(`${operationName} options.signal must be an AbortSignal.`);
 	}
-	if (leaseMode !== undefined && leaseMode !== "shared" && leaseMode !== "exclusive") {
-		throw new TypeError(`${operationName} options.leaseMode must be "shared" or "exclusive".`);
+	if (
+		leaseMode !== undefined &&
+		leaseMode !== "shared" &&
+		leaseMode !== "exclusive" &&
+		leaseMode !== "concurrent"
+	) {
+		throw new TypeError(
+			`${operationName} options.leaseMode must be "shared", "exclusive", or "concurrent".`,
+		);
 	}
 	if (
 		exclusiveContention !== undefined &&
@@ -906,7 +888,24 @@ function normalizeOperationOptions(
 	if (exclusiveContention === "queue" && leaseMode !== "exclusive") {
 		throw new TypeError(`${operationName} queued contention requires leaseMode "exclusive".`);
 	}
-	return options;
+	if (
+		admissionKey !== undefined &&
+		(typeof admissionKey !== "string" || admissionKey.length === 0 || admissionKey.length > 1024)
+	) {
+		throw new TypeError(`${operationName} options.admissionKey must be a nonempty bounded string.`);
+	}
+	if (leaseMode === "concurrent" && admissionKey === undefined) {
+		throw new TypeError(`${operationName} concurrent execution requires an admissionKey.`);
+	}
+	if (admissionKey !== undefined && leaseMode !== "concurrent" && leaseMode !== "exclusive") {
+		throw new TypeError(`${operationName} admissionKey requires an isolated lease mode.`);
+	}
+	return {
+		...(signal === undefined ? {} : { signal }),
+		...(leaseMode === undefined ? {} : { leaseMode }),
+		...(exclusiveContention === undefined ? {} : { exclusiveContention }),
+		...(admissionKey === undefined ? {} : { admissionKey }),
+	};
 }
 
 /** Accepts the positional cancellation form and the richer per-call options object. */
@@ -918,8 +917,10 @@ function normalizeToolCallOptions(
 		throw new TypeError("callTool options must be an AbortSignal or a tool call options object.");
 	}
 	if (isAbortSignal(options)) return { signal: options };
-	normalizeOperationOptions(options, "callTool");
-	return options;
+	return {
+		...normalizeOperationOptions(options, "callTool"),
+		...(options.toolDefinition === undefined ? {} : { toolDefinition: options.toolDefinition }),
+	};
 }
 
 function isAbortSignal(value: object): value is AbortSignal {

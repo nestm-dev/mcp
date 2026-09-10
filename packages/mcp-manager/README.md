@@ -211,3 +211,32 @@ Cleanup failures quarantine and continue charging the affected generation agains
 capacity. Runtime cleanup runs before admitted-material cleanup, and both are bounded by
 `shutdownTimeoutMs`; a timed-out host `close()` remains quarantined. The manager is in memory only
 and implements both `close()` and `AsyncDisposable`.
+
+## Concurrent isolated operations
+
+Use `leaseMode: "concurrent"` with an opaque `admissionKey` for host-authorized independent
+operations. Each admitted call creates its own client and closes it before settlement; no online
+keeper or shared session is retained. The default `maxConcurrentOperationsPerAdmissionKey` is four.
+The existing `maxConnections` process limit also applies. Admission counts acquisition, execution,
+and cleanup. Saturation or conflicting admission returns `MCP_CAPACITY_EXCEEDED` immediately;
+concurrent calls never enter a waiting queue or retry automatically.
+
+Supply the same stable `admissionKey` to **every isolated operation for that connector**, including
+exclusive discovery, probes, OAuth, and tool calls, across actors and configuration generations.
+The host owns this identity and the eligibility policy; tool annotations are not authorization.
+Keys are bounded to 1–1024 characters and are never emitted in manager diagnostics. Shared/retained
+runtimes cannot use keyed admission and must not be mixed into a keyed connector's lifecycle.
+
+An exclusive call with `exclusiveContention: "queue"` waits for related concurrent calls to drain
+and blocks new concurrent arrivals until it settles or is cancelled. Waiting remains bounded by
+`maxQueuedOperations` and the call deadline. Retirement cancels that generation's calls and waiting
+operations, without retiring sibling generations. Uncertain cleanup quarantines its generation
+and admission identity until manager replacement, retaining the failed transport's capacity charge.
+A successful sibling cleanup cannot clear quarantine.
+
+Limits are local to one manager/process. Hosts operating several processes must allocate their
+provider budget across them; this is not a fleet-wide semaphore.
+
+For concurrent runtimes, generation `state()` is the latest lifecycle observation, not an aggregate
+connection count. Use `snapshot()` for bounded aggregate pending, active, closing, and quarantined
+transport counts. Quarantine is sticky even when a sibling reports another lifecycle transition.
