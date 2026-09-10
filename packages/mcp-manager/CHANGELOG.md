@@ -1,5 +1,16 @@
 # @nestm/mcp-manager
 
+## 0.1.0-alpha.25
+
+### Minor Changes
+
+- 01ef75b: Add immediate bounded admission for concurrent isolated operations keyed by a host-owned connector identity. Preserve exclusive ordering across generations, cancellation, close-before-settlement, and quarantine after uncertain cleanup. Hosts must supply the same admission key to all isolated operations for a connector and explicitly authorize independent concurrency.
+
+### Patch Changes
+
+- @nestm/mcp-client@0.1.0-alpha.25
+  - @nestm/mcp-core@0.1.0-alpha.25
+
 ## 0.1.0-alpha.24
 
 ### Patch Changes
