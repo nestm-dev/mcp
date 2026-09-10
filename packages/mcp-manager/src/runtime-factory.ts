@@ -111,7 +111,9 @@ export class ManagedRuntimeFactory<GenerationKey> {
 			await runtime.connect(serverName, {
 				signal: AbortSignal.any([context.signal, AbortSignal.timeout(this.#requestTimeoutMs)]),
 			});
-			this.#states.connected(generationKey, runtime.snapshot(serverName));
+			const snapshot = this.#states.connected(generationKey, runtime.snapshot(serverName));
+			await admitted.onConnected?.(snapshot, context.signal);
+			context.signal.throwIfAborted();
 			return Object.freeze({
 				generationKey,
 				generationSignal: context.signal,
@@ -155,6 +157,9 @@ function withSharedClose(admitted: McpAdmittedRuntimeGeneration): McpAdmittedRun
 	let closeTask: Promise<void> | undefined;
 	return Object.freeze({
 		transport: admitted.transport,
+		...(admitted.onConnected === undefined
+			? {}
+			: { onConnected: admitted.onConnected.bind(admitted) }),
 		close(): Promise<void> {
 			closeTask ??= Promise.resolve().then(() => admitted.close());
 			return closeTask;
