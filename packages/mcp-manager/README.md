@@ -107,6 +107,16 @@ that reason.
 
 ## Catalog freshness and change detection
 
+An admitted generation may provide `onConnected(snapshot, signal)`. The manager awaits it once
+after successful negotiation and before handing the runtime to an operation. The frozen snapshot
+contains the negotiated protocol version, era, capabilities, and connection timestamp. Hosts can
+persist a last observation there without keeping a runtime online or making a second probe.
+Connection records, timestamp ordering, configuration invalidation, and persistence remain host
+policy. This callback is part of acquisition: rejection closes the runtime and admitted material;
+best-effort persistence must catch its own errors. Honor the generation signal and keep work bounded.
+Ordinary operation cleanup still transitions the current state to offline and removes its active
+connection metadata. The hook does not change that lifecycle or the key-free metrics event contract.
+
 `refreshCatalog(key, options)` is the reusable freshness seam. It performs protocol liveness first,
 forces every supported list delegate through `cacheMode: "refresh"`, applies the configured page and
 item bounds, and only then releases the generation lease. Shared mode runs the list wave in parallel

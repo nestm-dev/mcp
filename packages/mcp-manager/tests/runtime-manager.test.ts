@@ -101,6 +101,7 @@ import {
 	type McpAdmittedRuntimeGeneration,
 	type McpRuntimeGenerationResolver,
 	type McpRuntimeOperationOptions,
+	type McpRuntimeStateSnapshot,
 	type McpRuntimeStateTransitionEvent,
 } from "../src/index.ts";
 
@@ -141,6 +142,78 @@ describe("McpRuntimeManager", () => {
 		await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
 		allowClose.resolve();
 		await expect(firstClose).resolves.toBeUndefined();
+	});
+
+	it("awaits each negotiated observation before dispatch and retains no online keeper", async () => {
+		const allowObservation = deferred();
+		const close = vi.fn(async () => undefined);
+		const onConnected = vi.fn(async (snapshot: McpRuntimeStateSnapshot, signal: AbortSignal) => {
+			expect(Object.isFrozen(snapshot)).toBe(true);
+			expect(Object.isFrozen(snapshot.capabilities)).toBe(true);
+			expect(signal).toBeInstanceOf(AbortSignal);
+			await allowObservation.promise;
+		});
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => ({ ...admitted(close), onConnected })),
+		});
+		const options = { leaseMode: "exclusive" as const };
+		const refresh = manager.refreshCatalog("observed", options);
+		await vi.waitFor(() => expect(onConnected).toHaveBeenCalledOnce());
+		expect(runtimeHarness.instances[0]?.listTools).not.toHaveBeenCalled();
+		allowObservation.resolve();
+		await refresh;
+		await manager.probe("observed", options);
+		await manager.callTool("observed", "search", {}, options);
+		expect(onConnected).toHaveBeenCalledTimes(3);
+		expect(onConnected.mock.calls[0]?.[0]).toMatchObject({
+			phase: "online",
+			protocolVersion: "2025-11-25",
+			protocolEra: "modern",
+			connectedAt: new Date(1).toISOString(),
+			capabilities: {
+				tools: true,
+				resources: true,
+				prompts: true,
+				completion: true,
+				subscriptions: true,
+			},
+		});
+		expect(manager.state("observed")).toMatchObject({ phase: "offline" });
+		expect(manager.state("observed").protocolVersion).toBeUndefined();
+		expect(manager.snapshot()).toMatchObject({ connectionCount: 0, onlineKeeperCount: 0 });
+		expect(close).toHaveBeenCalledTimes(3);
+		await manager.close();
+	});
+
+	it("closes admitted material when the observation callback rejects", async () => {
+		const close = vi.fn(async () => undefined);
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => ({
+				...admitted(close),
+				onConnected: async () => {
+					throw new Error("observation failed");
+				},
+			})),
+		});
+		await expect(manager.refreshCatalog("failed", { leaseMode: "exclusive" })).rejects.toThrow();
+		expect(close).toHaveBeenCalledOnce();
+		expect(runtimeHarness.instances[0]?.connected).toBe(false);
+		expect(runtimeHarness.instances[0]?.listTools).not.toHaveBeenCalled();
+		expect(manager.snapshot().connectionCount).toBe(0);
+		await manager.close();
+	});
+
+	it("does not report observations when runtime creation fails", async () => {
+		const onConnected = vi.fn();
+		const close = vi.fn(async () => undefined);
+		runtimeHarness.constructorFailure = new Error("connect unavailable");
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => ({ ...admitted(close), onConnected })),
+		});
+		await expect(manager.probe("failed")).rejects.toThrow();
+		expect(onConnected).not.toHaveBeenCalled();
+		expect(close).toHaveBeenCalledOnce();
+		await manager.close();
 	});
 
 	it("retains failed cleanup as quarantined capacity", async () => {

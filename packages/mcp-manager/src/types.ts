@@ -137,6 +137,13 @@ export type McpManagedClientRuntimeOperation<Result> = (
  */
 export interface McpAdmittedRuntimeGeneration {
 	readonly transport: McpClientTransportDefinition;
+	/**
+	 * Called once after successful negotiation, before the runtime is handed to an operation.
+	 * The host may retain this immutable observation independently of transient runtime state.
+	 * Awaited as part of acquisition; rejection fails acquisition and closes admitted material.
+	 * Hosts that need best-effort persistence must handle their own persistence errors.
+	 */
+	onConnected?(snapshot: McpRuntimeStateSnapshot, signal: AbortSignal): MaybePromise<void>;
 	close(): Promise<void>;
 }
 
