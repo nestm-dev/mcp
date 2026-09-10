@@ -115,6 +115,183 @@ describe("McpRuntimeManager", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("overlaps four isolated calls, counts other generations, and refuses a fifth immediately", async () => {
+		const finish = deferred();
+		const closeGate = deferred();
+		const resolver = resolverFrom(async () => admitted(async () => closeGate.promise));
+		const manager = new McpRuntimeManager({ generationResolver: resolver, maxConnections: 8 });
+		const operation = vi.fn(async () => {
+			await finish.promise;
+			return "done";
+		});
+		const options = { leaseMode: "concurrent" as const, admissionKey: "connector" };
+		const calls = ["v1", "v1", "v2", "v2"].map((key) =>
+			manager.withClientRuntime(key, operation, options),
+		);
+		await vi.waitFor(() => expect(operation).toHaveBeenCalledTimes(4));
+		expect(runtimeHarness.instances).toHaveLength(4);
+		await expect(manager.withClientRuntime("v3", operation, options)).rejects.toMatchObject({
+			code: "MCP_CAPACITY_EXCEEDED",
+		});
+		expect(manager.snapshot()).toMatchObject({
+			connectionCount: 4,
+			queuedOperationCount: 0,
+			onlineKeeperCount: 0,
+		});
+		finish.resolve();
+		await vi.waitFor(() => expect(manager.snapshot().closingConnectionCount).toBe(4));
+		await expect(manager.withClientRuntime("v3", operation, options)).rejects.toMatchObject({
+			code: "MCP_CAPACITY_EXCEEDED",
+		});
+		closeGate.resolve();
+		await expect(Promise.all(calls)).resolves.toEqual(["done", "done", "done", "done"]);
+		expect(manager.snapshot().connectionCount).toBe(0);
+		await manager.withClientRuntime("v3", operation, options);
+		await manager.close();
+	});
+
+	it("drains concurrent work before a queued exclusive operation across generations", async () => {
+		const finish = deferred();
+		const exclusiveFinish = deferred();
+		const resolver = resolverFrom(async () => admitted());
+		const manager = new McpRuntimeManager({ generationResolver: resolver });
+		const parallel = { leaseMode: "concurrent" as const, admissionKey: "connector" };
+		const first = manager.withClientRuntime("old", async () => finish.promise, parallel);
+		await vi.waitFor(() => expect(resolver.resolve).toHaveBeenCalledOnce());
+		const exclusiveOperation = vi.fn(async () => exclusiveFinish.promise);
+		const exclusive = manager.withClientRuntime("new", exclusiveOperation, {
+			leaseMode: "exclusive",
+			exclusiveContention: "queue",
+			admissionKey: "connector",
+		});
+		expect(manager.snapshot().queuedOperationCount).toBe(1);
+		await expect(manager.probe("newer", parallel)).rejects.toMatchObject({
+			code: "MCP_CAPACITY_EXCEEDED",
+		});
+		expect(exclusiveOperation).not.toHaveBeenCalled();
+		finish.resolve();
+		await first;
+		await vi.waitFor(() => expect(exclusiveOperation).toHaveBeenCalledOnce());
+		await expect(manager.probe("old", parallel)).rejects.toMatchObject({
+			code: "MCP_CAPACITY_EXCEEDED",
+		});
+		exclusiveFinish.resolve();
+		await exclusive;
+		await manager.probe("old", parallel);
+		await manager.close();
+	});
+
+	it("cancels a queued exclusive barrier without cancelling independent calls", async () => {
+		const finish = deferred();
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted()),
+		});
+		const options = { leaseMode: "concurrent" as const, admissionKey: "connector" };
+		const first = manager.withClientRuntime("v1", async () => finish.promise, options);
+		const controller = new AbortController();
+		const exclusive = manager.probe("v2", {
+			leaseMode: "exclusive",
+			exclusiveContention: "queue",
+			admissionKey: "connector",
+			signal: controller.signal,
+		});
+		controller.abort();
+		await expect(exclusive).rejects.toBe(controller.signal.reason);
+		await manager.probe("v3", options);
+		expect(manager.snapshot().queuedOperationCount).toBe(0);
+		finish.resolve();
+		await first;
+		await manager.close();
+	});
+
+	it("keeps connector quarantine after another isolated generation closes successfully", async () => {
+		const finish = deferred();
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async (key) =>
+				admitted(async () => {
+					if (key === "bad") throw new Error("close failed");
+				}),
+			),
+		});
+		const options = { leaseMode: "concurrent" as const, admissionKey: "connector" };
+		const good = manager.withClientRuntime("good", async () => finish.promise, options);
+		await expect(manager.probe("bad", options)).rejects.toMatchObject({ code: "MCP_QUARANTINED" });
+		finish.resolve();
+		await good;
+		await expect(manager.probe("next", options)).rejects.toMatchObject({ code: "MCP_QUARANTINED" });
+		await expect(manager.close()).rejects.toThrow();
+	});
+
+	it("retiring one generation cancels its concurrent calls without cancelling a sibling generation", async () => {
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted()),
+		});
+		const siblingFinish = deferred();
+		const entered = deferred();
+		const options = { leaseMode: "concurrent" as const, admissionKey: "connector" };
+		const first = manager.withClientRuntime(
+			"retired",
+			async ({ signal }) => {
+				entered.resolve();
+				await new Promise<void>((_, reject) =>
+					signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
+				);
+			},
+			options,
+		);
+		const failed = expect(first).rejects.toMatchObject({ code: "MCP_GENERATION_RETIRED" });
+		const sibling = manager.withClientRuntime(
+			"sibling",
+			async () => siblingFinish.promise,
+			options,
+		);
+		await entered.promise;
+		await manager.retire("retired");
+		await failed;
+		expect(manager.snapshot().connectionCount).toBe(1);
+		siblingFinish.resolve();
+		await sibling;
+		await manager.close();
+	});
+
+	it("enforces the process transport limit independently of connector admission", async () => {
+		const finish = deferred();
+		const resolver = resolverFrom(async () => admitted());
+		const manager = new McpRuntimeManager({ generationResolver: resolver, maxConnections: 1 });
+		const first = manager.withClientRuntime("a", async () => finish.promise, {
+			leaseMode: "concurrent",
+			admissionKey: "a",
+		});
+		await vi.waitFor(() => expect(resolver.resolve).toHaveBeenCalledOnce());
+		await expect(
+			manager.probe("b", { leaseMode: "concurrent", admissionKey: "b" }),
+		).rejects.toMatchObject({ code: "MCP_CAPACITY_EXCEEDED" });
+		expect(resolver.resolve).toHaveBeenCalledOnce();
+		finish.resolve();
+		await first;
+		await manager.probe("b", { leaseMode: "concurrent", admissionKey: "b" });
+		await manager.close();
+	});
+
+	it("requires a bounded admission identity and rejects concurrent queue options before acquisition", async () => {
+		const resolver = resolverFrom(async () => admitted());
+		const manager = new McpRuntimeManager({ generationResolver: resolver });
+		for (const options of [
+			{ leaseMode: "concurrent" as const },
+			{ leaseMode: "concurrent" as const, admissionKey: "" },
+			{ leaseMode: "concurrent" as const, admissionKey: "x".repeat(1025) },
+			{
+				leaseMode: "concurrent" as const,
+				admissionKey: "connector",
+				exclusiveContention: "queue" as const,
+			},
+			{ leaseMode: "shared" as const, admissionKey: "connector" },
+		])
+			await expect(manager.probe("g", options)).rejects.toBeInstanceOf(TypeError);
+		expect(resolver.resolve).not.toHaveBeenCalled();
+		await manager.close();
+	});
+
 	it("deduplicates creation and shares one shutdown settlement", async () => {
 		const allowResolve = deferred();
 		const allowClose = deferred();
@@ -1017,7 +1194,7 @@ describe("McpRuntimeManager", () => {
 			}),
 		).rejects.toMatchObject({
 			name: "TypeError",
-			message: 'refreshCatalog options.leaseMode must be "shared" or "exclusive".',
+			message: 'refreshCatalog options.leaseMode must be "shared", "exclusive", or "concurrent".',
 		});
 		expect(resolver.resolve).not.toHaveBeenCalled();
 		await manager.close();

@@ -394,3 +394,13 @@ policies; request error callbacks; bearer verifiers; discovery caches; telemetry
 Nest contributor providers.
 
 The implemented observability package remains backend-neutral. OpenTelemetry SDK bindings, persistent encrypted OAuth provider state, RFC 8693-style token exchange, distributed event buses/caches, external policy engines, and artifact-specific catalogs can be added as adapters without forcing a telemetry backend, database, identity provider, cache, or Nest deployment shape into core.
+
+### Isolated connector admission
+
+The manager owns synchronous bounded admission before transport acquisition. Host-supplied opaque
+admission keys join isolated calls across configuration generations. Concurrent calls receive a
+separate client and refuse immediately at capacity; exclusive waiting uses the existing bounded
+FIFO policy and establishes a barrier against new concurrent arrivals. Admission remains charged
+through cleanup; uncertain cleanup quarantines both the generation and connector identity. Product
+code owns authorization, concurrency eligibility, and stable key selection. No product records,
+credentials, provider URLs, or tool payloads enter the admission mechanism or diagnostic labels.
