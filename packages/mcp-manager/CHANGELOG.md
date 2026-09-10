@@ -1,5 +1,13 @@
 # @nestm/mcp-manager
 
+## 0.1.0-alpha.24
+
+### Patch Changes
+
+- 71d65cf: Expose an awaited admitted-generation onConnected hook with the immutable negotiated state so hosts can retain connection observations without extending runtime leases or probing twice.
+- @nestm/mcp-client@0.1.0-alpha.24
+  - @nestm/mcp-core@0.1.0-alpha.24
+
 ## 0.1.0-alpha.23
 
 ### Patch Changes

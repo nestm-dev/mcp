@@ -1,5 +1,12 @@
 # @nestm/mcp-client
 
+## 0.1.0-alpha.24
+
+### Patch Changes
+
+- @nestm/mcp-conformance@0.1.0-alpha.24
+  - @nestm/mcp-core@0.1.0-alpha.24
+
 ## 0.1.0-alpha.23
 
 ### Minor Changes
