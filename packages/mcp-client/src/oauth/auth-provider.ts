@@ -4,6 +4,7 @@ import {
 	createMcpClientOAuthCredentialSnapshot,
 	isMcpClientOAuthCredentialRevision,
 	type McpClientOAuthCredentialSnapshot,
+	type McpClientOAuthCredentialRevision,
 	type McpClientOAuthCredentialStore,
 } from "./credential-store.ts";
 import type { McpClientOAuthRefreshCoordinator } from "./refresh-coordinator.ts";
@@ -18,6 +19,7 @@ export const McpClientOAuthAuthProviderErrorCode = {
 	InvalidOptions: "MCP_CLIENT_OAUTH_AUTH_PROVIDER_INVALID_OPTIONS",
 	Closed: "MCP_CLIENT_OAUTH_AUTH_PROVIDER_CLOSED",
 	CredentialMissing: "MCP_CLIENT_OAUTH_AUTH_PROVIDER_CREDENTIAL_MISSING",
+	CredentialRevisionChanged: "MCP_CLIENT_OAUTH_AUTH_PROVIDER_CREDENTIAL_REVISION_CHANGED",
 	StoreFailed: "MCP_CLIENT_OAUTH_AUTH_PROVIDER_STORE_FAILED",
 	InvalidStoreResult: "MCP_CLIENT_OAUTH_AUTH_PROVIDER_STORE_RESULT_INVALID",
 	TokenMissing: "MCP_CLIENT_OAUTH_AUTH_PROVIDER_TOKEN_MISSING",
@@ -57,6 +59,8 @@ export type McpClientOAuthBearerTokenAccessor<Credential extends object> = (
 export interface McpClientOAuthAuthProviderOptions<Identity, Credential extends object> {
 	/** One opaque, stable, non-secret credential binding. It is never exposed by the provider. */
 	readonly identity: Identity;
+	/** Pin one operation to an exact revision. Rotation requires a new provider; delayed 401s cannot refresh its replacement. */
+	readonly expectedCredentialRevision?: McpClientOAuthCredentialRevision;
 	readonly store: McpClientOAuthCredentialStore<Identity, Credential>;
 	readonly refreshCoordinator: McpClientOAuthRefreshCoordinator<Identity, Credential>;
 	readonly selectBearerToken: McpClientOAuthBearerTokenAccessor<Credential>;
@@ -69,12 +73,14 @@ export interface McpClientOAuthAuthProviderOptions<Identity, Credential extends 
  * transport cannot classify it as an `OAuthClientProvider` and cannot start interactive or
  * Dynamic Client Registration flows. The store and coordinator are borrowed; closing this
  * bridge never closes either dependency. It follows successful credential revisions within one
- * stable binding; revision-keyed runtime leases must be released or reacquired by their host.
+ * stable binding by default. Set expectedCredentialRevision for an operation that must close
+ * and be reacquired after rotation; its token and refresh paths both enforce the exact revision.
  */
 export class McpClientOAuthAuthProvider<Identity, Credential extends object>
 	implements AuthProvider, AsyncDisposable
 {
 	readonly #identity: Identity;
+	readonly #expectedCredentialRevision: McpClientOAuthCredentialRevision | undefined;
 	readonly #store: McpClientOAuthCredentialStore<Identity, Credential>;
 	readonly #refreshCoordinator: McpClientOAuthRefreshCoordinator<Identity, Credential>;
 	readonly #selectBearerToken: McpClientOAuthBearerTokenAccessor<Credential>;
@@ -86,6 +92,7 @@ export class McpClientOAuthAuthProvider<Identity, Credential extends object>
 	constructor(options: McpClientOAuthAuthProviderOptions<Identity, Credential>) {
 		const normalized = normalizeOptions(options);
 		this.#identity = normalized.identity;
+		this.#expectedCredentialRevision = normalized.expectedCredentialRevision;
 		this.#store = normalized.store;
 		this.#refreshCoordinator = normalized.refreshCoordinator;
 		this.#selectBearerToken = normalized.selectBearerToken;
@@ -110,8 +117,10 @@ export class McpClientOAuthAuthProvider<Identity, Credential extends object>
 	 * stale refresh token. The
 	 * SDK does not identify the failed request's credential revision in this callback. A delayed 401
 	 * can therefore arrive after another request published a newer generation and refresh that newer
-	 * generation. Hosts that permit concurrent requests must close/reacquire conservatively or use a
-	 * request-correlated fetch boundary; the transport only bounds each wire request to one retry.
+	 * generation. An expectedCredentialRevision fences this reload before refresh: a pinned provider
+	 * never refreshes or adopts a replacement. Its successful refresh still publishes for a fresh
+	 * acquisition, while the old operation fails closed. Unpinned hosts need request correlation
+	 * or conservative close/reacquire; the transport bounds each wire request to one retry.
 	 */
 	onUnauthorized(_context: UnauthorizedContext): Promise<void> {
 		return this.#start(async () => {
@@ -184,6 +193,7 @@ export class McpClientOAuthAuthProvider<Identity, Credential extends object>
 		this.#assertActive();
 		if (snapshot === undefined) return undefined;
 
+		let captured: McpClientOAuthCredentialSnapshot<Credential>;
 		try {
 			if (
 				!isMcpClientOAuthCredentialRevision(snapshot.revision) ||
@@ -191,13 +201,22 @@ export class McpClientOAuthAuthProvider<Identity, Credential extends object>
 			) {
 				throw invalidStoreResultError();
 			}
-			return createMcpClientOAuthCredentialSnapshot<Credential>(
+			captured = createMcpClientOAuthCredentialSnapshot<Credential>(
 				snapshot.revision,
 				snapshot.credential,
 			);
 		} catch {
 			throw invalidStoreResultError();
 		}
+		if (
+			this.#expectedCredentialRevision !== undefined &&
+			captured.revision !== this.#expectedCredentialRevision
+		) {
+			throw new McpClientOAuthAuthProviderError(
+				McpClientOAuthAuthProviderErrorCode.CredentialRevisionChanged,
+			);
+		}
+		return captured;
 	}
 
 	async #readBearerToken(snapshot: McpClientOAuthCredentialSnapshot<Credential>): Promise<string> {
@@ -230,11 +249,13 @@ function normalizeOptions<Identity, Credential extends object>(
 ): McpClientOAuthAuthProviderOptions<Identity, Credential> {
 	if (!isObjectLike(options)) throw invalidOptionsError();
 	let identity: Identity;
+	let expectedCredentialRevision: McpClientOAuthCredentialRevision | undefined;
 	let store: McpClientOAuthCredentialStore<Identity, Credential>;
 	let refreshCoordinator: McpClientOAuthRefreshCoordinator<Identity, Credential>;
 	let selectBearerToken: McpClientOAuthBearerTokenAccessor<Credential>;
 	try {
 		identity = options.identity;
+		expectedCredentialRevision = options.expectedCredentialRevision;
 		store = options.store;
 		refreshCoordinator = options.refreshCoordinator;
 		selectBearerToken = options.selectBearerToken;
@@ -244,6 +265,8 @@ function normalizeOptions<Identity, Credential extends object>(
 	let valid = false;
 	try {
 		valid =
+			(expectedCredentialRevision === undefined ||
+				isMcpClientOAuthCredentialRevision(expectedCredentialRevision)) &&
 			isObjectLike(store) &&
 			typeof store.load === "function" &&
 			typeof store.claimRefresh === "function" &&
@@ -260,7 +283,13 @@ function normalizeOptions<Identity, Credential extends object>(
 	if (!valid) {
 		throw invalidOptionsError();
 	}
-	return Object.freeze({ identity, store, refreshCoordinator, selectBearerToken });
+	return Object.freeze({
+		identity,
+		store,
+		refreshCoordinator,
+		selectBearerToken,
+		...(expectedCredentialRevision === undefined ? {} : { expectedCredentialRevision }),
+	});
 }
 
 function isObjectLike(value: unknown): value is object {
@@ -324,6 +353,8 @@ function authProviderErrorMessage(code: McpClientOAuthAuthProviderErrorCode): st
 			return "The OAuth auth provider is closed and cannot accept new work.";
 		case McpClientOAuthAuthProviderErrorCode.CredentialMissing:
 			return "The OAuth credential generation is unavailable.";
+		case McpClientOAuthAuthProviderErrorCode.CredentialRevisionChanged:
+			return "The OAuth credential revision changed; acquire a new operation.";
 		case McpClientOAuthAuthProviderErrorCode.StoreFailed:
 			return "The OAuth credential store operation failed.";
 		case McpClientOAuthAuthProviderErrorCode.InvalidStoreResult:

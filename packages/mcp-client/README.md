@@ -201,11 +201,15 @@ stable owner/authority binding. A host that treats every token revision as a new
 must close or reacquire that runtime after the operation instead of pooling it under the old
 revision.
 
-The SDK's minimal `onUnauthorized` callback does not report which token revision was attached to
-the failed request. On a concurrent or long-lived transport, a delayed `401` can therefore arrive
-after another request has published a newer generation. Use close-on-release/no credentialed
-pooling for this bridge, or perform request-correlated refresh at a host fetch boundary; do not
-claim exact 401-to-revision attribution from the minimal provider alone.
+The SDK's minimal `onUnauthorized` callback does not identify the failed request's credential
+revision. For isolated concurrent operations, pass `expectedCredentialRevision` when constructing
+each provider. Every credential load is fenced to that exact revision, including the load before
+refresh. Concurrent failures for the same revision share the coordinator's refresh, but after
+rotation the old operations fail with `MCP_CLIENT_OAUTH_AUTH_PROVIDER_CREDENTIAL_REVISION_CHANGED`.
+A delayed failure cannot refresh the replacement credential. A fresh, authorized acquisition can
+use the published revision; the host must not automatically replay a dispatched tool operation.
+Omitting the option retains the binding-following behavior and requires the host to coordinate
+long-lived or concurrent requests appropriately.
 
 When the bridge is admitted through `McpRuntimeManager`, the ordinary `ensureOnline()` keeper is a
 pool and does not meet that close-on-release condition. Use the manager operation option
