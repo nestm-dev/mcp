@@ -117,6 +117,126 @@ describe("McpClientOAuthAuthProvider", () => {
 		await coordinator.close();
 	});
 
+	it("pins concurrent providers across rotation and refuses delayed 401s before another refresh", async () => {
+		const initial = credentialSnapshot(7, "old-access", "old-refresh");
+		const memory = createMemoryStore([["shared-binding", initial]]);
+		const rotation = deferred<Readonly<TestCredential>>();
+		const refresh = vi.fn(async () => rotation.promise);
+		const coordinator = new McpClientOAuthRefreshCoordinator<string, TestCredential>({
+			store: memory.store,
+			refresh,
+		});
+		const provider = () =>
+			new McpClientOAuthAuthProvider({
+				identity: "shared-binding",
+				store: memory.store,
+				refreshCoordinator: coordinator,
+				expectedCredentialRevision: initial.revision,
+				selectBearerToken: (snapshot) => snapshot.credential.accessToken,
+			});
+		const providers = [provider(), provider(), provider()];
+		try {
+			await expect(Promise.all(providers.map((item) => item.token()))).resolves.toEqual([
+				"old-access",
+				"old-access",
+				"old-access",
+			]);
+			const outcomes = Promise.allSettled(
+				providers.slice(0, 2).map((item) => item.onUnauthorized(unauthorizedContext())),
+			);
+			await vi.waitFor(() => expect(coordinator.snapshot().waiterCount).toBe(2));
+			rotation.resolve({ accessToken: "next-access", refreshToken: "next-refresh" });
+			for (const outcome of await outcomes) {
+				expect(outcome).toMatchObject({
+					status: "rejected",
+					reason: { code: McpClientOAuthAuthProviderErrorCode.CredentialRevisionChanged },
+				});
+			}
+			await expect(providers[2]!.onUnauthorized(unauthorizedContext())).rejects.toMatchObject({
+				code: McpClientOAuthAuthProviderErrorCode.CredentialRevisionChanged,
+			});
+			await expect(providers[0]!.token()).rejects.toMatchObject({
+				code: McpClientOAuthAuthProviderErrorCode.CredentialRevisionChanged,
+			});
+			expect(refresh).toHaveBeenCalledOnce();
+			expect(memory.commitRefresh).toHaveBeenCalledOnce();
+			const current = memory.records.get("shared-binding")!;
+			expect(current.revision).toBe(8);
+			const fresh = new McpClientOAuthAuthProvider({
+				identity: "shared-binding",
+				store: memory.store,
+				refreshCoordinator: coordinator,
+				expectedCredentialRevision: current.revision,
+				selectBearerToken: (snapshot) => snapshot.credential.accessToken,
+			});
+			try {
+				await expect(fresh.token()).resolves.toBe("next-access");
+			} finally {
+				await fresh.close();
+			}
+		} finally {
+			rotation.resolve({ accessToken: "next-access", refreshToken: "next-refresh" });
+			await Promise.all(providers.map((item) => item.close()));
+			await coordinator.close();
+		}
+	});
+
+	it("rejects a winner published between pinned preflight and refresh without dispatching a refresh", async () => {
+		const initial = credentialSnapshot(1, "old-access", "old-refresh");
+		const winner = credentialSnapshot(2, "new-access", "new-refresh");
+		const memory = createMemoryStore([["binding", winner]]);
+		memory.load.mockResolvedValueOnce(initial);
+		const refresh = vi.fn(async () => winner.credential);
+		const coordinator = new McpClientOAuthRefreshCoordinator<string, TestCredential>({
+			store: memory.store,
+			refresh,
+		});
+		const provider = new McpClientOAuthAuthProvider({
+			identity: "binding",
+			store: memory.store,
+			refreshCoordinator: coordinator,
+			expectedCredentialRevision: initial.revision,
+			selectBearerToken: (snapshot) => snapshot.credential.accessToken,
+		});
+		try {
+			await expect(provider.onUnauthorized(unauthorizedContext())).rejects.toMatchObject({
+				code: McpClientOAuthAuthProviderErrorCode.CredentialRevisionChanged,
+			});
+			expect(refresh).not.toHaveBeenCalled();
+			expect(memory.commitRefresh).not.toHaveBeenCalled();
+		} finally {
+			await provider.close();
+			await coordinator.close();
+		}
+	});
+
+	it("validates an optional exact credential revision at construction", async () => {
+		const memory = createMemoryStore([]);
+		const coordinator = new McpClientOAuthRefreshCoordinator<string, TestCredential>({
+			store: memory.store,
+			refresh: async () => ({ accessToken: "access", refreshToken: "refresh" }),
+		});
+		try {
+			for (const revision of [0, -1, 1.5, NaN, "1", null]) {
+				expect(() =>
+					Reflect.construct(McpClientOAuthAuthProvider, [
+						{
+							identity: "binding",
+							store: memory.store,
+							refreshCoordinator: coordinator,
+							expectedCredentialRevision: revision,
+							selectBearerToken: () => "access",
+						},
+					]),
+				).toThrow(
+					expect.objectContaining({ code: McpClientOAuthAuthProviderErrorCode.InvalidOptions }),
+				);
+			}
+		} finally {
+			await coordinator.close();
+		}
+	});
+
 	it("accepts an authoritative newer revision without retrying a stale refresh token", async () => {
 		const initial = credentialSnapshot(2, "stale-access", "stale-refresh");
 		const winner = credentialSnapshot(3, "winner-access", "winner-refresh");
