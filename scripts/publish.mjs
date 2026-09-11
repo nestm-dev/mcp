@@ -92,13 +92,13 @@ for (const entry of sortForPublishing(workspacePackages)) {
 	const state = await registryVersionState(name, version);
 	if (state === "available") {
 		console.log(`Already published: ${name}@${version}`);
-		recordPublishedVersion(name, version);
+		await recordPublishedVersion(name, version);
 		continue;
 	}
 	if (state === "incomplete") {
 		console.log(`Waiting for npm to finish publishing: ${name}@${version}`);
 		await waitForAvailableVersion(name, version);
-		recordPublishedVersion(name, version);
+		await recordPublishedVersion(name, version);
 		continue;
 	}
 
@@ -136,7 +136,7 @@ for (const entry of sortForPublishing(workspacePackages)) {
 	}
 
 	await waitForAvailableVersion(name, version);
-	recordPublishedVersion(name, version);
+	await recordPublishedVersion(name, version);
 }
 
 function sortForPublishing(entries) {
@@ -189,13 +189,27 @@ async function waitForAvailableVersion(name, version) {
 	throw new Error(`${name}@${version} did not become installable within five minutes`);
 }
 
-function recordPublishedVersion(name, version) {
+async function recordPublishedVersion(name, version) {
 	const outputPath = process.env.CHANGESETS_OUTPUT;
 	if (typeof outputPath !== "string" || outputPath.length === 0) return;
-	appendFileSync(
-		outputPath,
-		`${JSON.stringify({ type: "git-tag", tag: `${name}@${version}`, packageName: name })}\n`,
+	const tag = `${name}@${version}`;
+	// A partially successful run can already have created this GitHub release.
+	// Changesets rejects duplicate releases, so emit only missing release metadata.
+	const existing = await fetch(
+		`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/releases/tags/${encodeURIComponent(tag)}`,
+		{
+			headers: {
+				accept: "application/vnd.github+json",
+				authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+			},
+			signal: AbortSignal.timeout(30_000),
+		},
 	);
+	if (existing.status === 200) return;
+	if (existing.status !== 404) {
+		throw new Error(`Could not inspect the GitHub release for ${tag}: HTTP ${existing.status}`);
+	}
+	appendFileSync(outputPath, `${JSON.stringify({ type: "git-tag", tag, packageName: name })}\n`);
 }
 
 function withoutOtp(environment) {
