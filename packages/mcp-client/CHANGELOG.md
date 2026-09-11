@@ -1,5 +1,13 @@
 # @nestm/mcp-client
 
+## 0.1.0-alpha.26
+
+### Patch Changes
+
+- 10fa09f: Add an optional exact credential revision to the minimal OAuth auth provider. Pinned operations fail closed after rotation, and delayed concurrent authentication failures cannot refresh or adopt a replacement credential. Existing unpinned providers retain their binding-following behavior.
+- @nestm/mcp-conformance@0.1.0-alpha.26
+  - @nestm/mcp-core@0.1.0-alpha.26
+
 ## 0.1.0-alpha.25
 
 ### Patch Changes
