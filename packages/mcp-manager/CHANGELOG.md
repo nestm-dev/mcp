@@ -1,5 +1,15 @@
 # @nestm/mcp-manager
 
+## 0.1.0-alpha.27
+
+### Patch Changes
+
+- 85062b0: Preserve the waiting caller's async context when a different caller releases capacity and wakes transport allocation. Tenant context and request-local diagnostics remain attached to the admitted caller.
+- 7641d5e: Add opt-in bounded concurrent admission across process and connector capacity, nullable connector ceilings, fair FIFO scheduling across connector keys, and distinct queue-full and admission-timeout diagnostics. Reserve transports against the existing lease ledger and retain charges through cleanup; cancellation, retirement, and shutdown remove queued work without redispatch. Expose key-free admission timing and capacity notifications.
+- Updated dependencies [7641d5e]
+  - @nestm/mcp-client@0.1.0-alpha.27
+  - @nestm/mcp-core@0.1.0-alpha.27
+
 ## 0.1.0-alpha.26
 
 ### Patch Changes

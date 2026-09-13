@@ -1,5 +1,13 @@
 # @nestm/mcp-client
 
+## 0.1.0-alpha.27
+
+### Patch Changes
+
+- 7641d5e: Add opt-in bounded concurrent admission across process and connector capacity, nullable connector ceilings, fair FIFO scheduling across connector keys, and distinct queue-full and admission-timeout diagnostics. Reserve transports against the existing lease ledger and retain charges through cleanup; cancellation, retirement, and shutdown remove queued work without redispatch. Expose key-free admission timing and capacity notifications.
+- @nestm/mcp-conformance@0.1.0-alpha.27
+  - @nestm/mcp-core@0.1.0-alpha.27
+
 ## 0.1.0-alpha.26
 
 ### Patch Changes
