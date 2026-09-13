@@ -216,10 +216,24 @@ and implements both `close()` and `AsyncDisposable`.
 
 Use `leaseMode: "concurrent"` with an opaque `admissionKey` for host-authorized independent
 operations. Each admitted call creates its own client and closes it before settlement; no online
-keeper or shared session is retained. The default `maxConcurrentOperationsPerAdmissionKey` is four.
-The existing `maxConnections` process limit also applies. Admission counts acquisition, execution,
-and cleanup. Saturation or conflicting admission returns `MCP_CAPACITY_EXCEEDED` immediately;
-concurrent calls never enter a waiting queue or retry automatically.
+keeper or shared session is retained. The default `maxConcurrentOperationsPerAdmissionKey` is four;
+set it to `null` to use only process capacity. A call's `maxConcurrentOperations` can override this
+with a positive integer or `null`. Across related active calls, the strictest supplied ceiling
+applies, including calls from older configuration generations.
+
+Opt into `concurrentContention: "queue"` to wait for both connector and process capacity before
+allocating a transport. Without this option, saturation returns `MCP_CAPACITY_EXCEEDED` immediately.
+One transport ledger charges acquisition, execution, cleanup, and failed cleanup against
+`maxConnections`. Waiting neither restarts the operation deadline nor redispatches an operation.
+
+Queued calls rotate fairly across connector keys and remain FIFO within each key. A blocked
+connector does not block eligible work for another connector. The queue is bounded by
+`maxQueuedOperations` (100 by default). Queue overflow returns `MCP_QUEUE_FULL`; expiry before
+admission returns `MCP_ADMISSION_TIMEOUT`. Cancellation removes the waiter immediately. The
+optional per-call `onAdmission` observer receives outcome, elapsed admission time, queued count,
+and occupied connection count, without keys, credentials, or provider payloads. Observer errors
+cannot affect admission. Hosts retain responsibility for authorization and configuration checks
+inside the protected operation callback, after admission and before dispatch.
 
 Supply the same stable `admissionKey` to **every isolated operation for that connector**, including
 exclusive discovery, probes, OAuth, and tool calls, across actors and configuration generations.

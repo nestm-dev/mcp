@@ -115,6 +115,309 @@ describe("McpRuntimeManager", () => {
 		vi.restoreAllMocks();
 	});
 
+	it.each([4, 8])(
+		"completes six reads with a %i-slot process budget and no connector ceiling",
+		async (maxConnections) => {
+			const finish = deferred();
+			const manager = new McpRuntimeManager({
+				generationResolver: resolverFrom(async () => admitted()),
+				maxConnections,
+			});
+			const operation = vi.fn(async () => {
+				await finish.promise;
+				return "read";
+			});
+			const events: unknown[] = [];
+			const calls = Array.from({ length: 6 }, () =>
+				manager.withClientRuntime("g", operation, {
+					leaseMode: "concurrent",
+					admissionKey: "connector",
+					maxConcurrentOperations: null,
+					concurrentContention: "queue",
+					onAdmission: (event) => events.push(event),
+				}),
+			);
+			await vi.waitFor(() => expect(operation).toHaveBeenCalledTimes(Math.min(6, maxConnections)));
+			expect(manager.snapshot().queuedOperationCount).toBe(Math.max(0, 6 - maxConnections));
+			finish.resolve();
+			await expect(Promise.all(calls)).resolves.toEqual(Array(6).fill("read"));
+			expect(operation).toHaveBeenCalledTimes(6);
+			expect(events).toHaveLength(6);
+			expect(manager.snapshot()).toMatchObject({
+				connectionCount: 0,
+				queuedOperationCount: 0,
+				operationReferenceCount: 0,
+			});
+			await manager.close();
+		},
+	);
+
+	it("rotates connector keys while preserving each key's FIFO order", async () => {
+		const finish = deferred();
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted()),
+			maxConnections: 1,
+		});
+		const options = {
+			leaseMode: "concurrent" as const,
+			concurrentContention: "queue" as const,
+			maxConcurrentOperations: null,
+		};
+		const first = manager.withClientRuntime("a", async () => finish.promise, {
+			...options,
+			admissionKey: "a",
+		});
+		const order: string[] = [];
+		const calls = ["a1", "a2", "b1", "b2", "c1", "c2"].map((name) =>
+			manager.withClientRuntime(
+				name,
+				async () => {
+					order.push(name);
+				},
+				{ ...options, admissionKey: name.slice(0, 1) },
+			),
+		);
+		finish.resolve();
+		await Promise.all([first, ...calls]);
+		expect(order).toEqual(["b1", "c1", "a1", "b2", "c2", "a2"]);
+		await manager.close();
+	});
+
+	it("skips a capped connector and preserves ceilings across callers and generations", async () => {
+		const finish = deferred();
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted()),
+			maxConnections: 4,
+		});
+		const options = {
+			leaseMode: "concurrent" as const,
+			concurrentContention: "queue" as const,
+			admissionKey: "capped",
+			maxConcurrentOperations: 1,
+		};
+		const first = manager.withClientRuntime("old", async () => finish.promise, options);
+		const operation = vi.fn(async () => "second");
+		const second = manager.withClientRuntime("new", operation, {
+			...options,
+			maxConcurrentOperations: null,
+		});
+		await manager.probe("unrelated", { ...options, admissionKey: "other" });
+		expect(operation).not.toHaveBeenCalled();
+		expect(manager.snapshot().queuedOperationCount).toBe(1);
+		finish.resolve();
+		await Promise.all([first, second]);
+		expect(operation).toHaveBeenCalledOnce();
+		await manager.close();
+	});
+
+	it("removes 100 cancelled waiters without allocating or dispatching and reports overflow", async () => {
+		const finish = deferred();
+		const resolver = resolverFrom(async () => admitted());
+		const manager = new McpRuntimeManager({ generationResolver: resolver, maxConnections: 1 });
+		const options = {
+			leaseMode: "concurrent" as const,
+			concurrentContention: "queue" as const,
+			admissionKey: "a",
+			maxConcurrentOperations: null,
+		};
+		const first = manager.withClientRuntime("a", async () => finish.promise, options);
+		const controller = new AbortController();
+		const operation = vi.fn(async () => undefined);
+		const waiting = Array.from({ length: 100 }, () =>
+			manager.withClientRuntime("b", operation, { ...options, signal: controller.signal }),
+		);
+		const settled = Promise.allSettled(waiting);
+		expect(manager.snapshot().queuedOperationCount).toBe(100);
+		const observer = vi.fn();
+		await expect(
+			manager.probe("overflow", { ...options, onAdmission: observer }),
+		).rejects.toMatchObject({ code: "MCP_QUEUE_FULL" });
+		expect(observer).toHaveBeenCalledWith(
+			expect.objectContaining({ outcome: "queue-full", queuedOperationCount: 100 }),
+		);
+		controller.abort();
+		expect(manager.snapshot().queuedOperationCount).toBe(0);
+		expect(
+			(await settled).every(
+				(result) => result.status === "rejected" && result.reason === controller.signal.reason,
+			),
+		).toBe(true);
+		finish.resolve();
+		await first;
+		expect(resolver.resolve).toHaveBeenCalledOnce();
+		expect(operation).not.toHaveBeenCalled();
+		await manager.close();
+	});
+
+	it("expires process waiters within the original deadline and dispatches provider failures once", async () => {
+		const finish = deferred();
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted()),
+			maxConnections: 1,
+		});
+		const options = {
+			leaseMode: "concurrent" as const,
+			concurrentContention: "queue" as const,
+			admissionKey: "a",
+			maxConcurrentOperations: null,
+		};
+		const first = manager.withClientRuntime("a", async () => finish.promise, options);
+		const operation = vi.fn(async () => {
+			throw new Error("provider failure");
+		});
+		await expect(
+			manager.withClientRuntime("b", operation, { ...options, signal: AbortSignal.timeout(20) }),
+		).rejects.toMatchObject({ code: "MCP_ADMISSION_TIMEOUT" });
+		expect(operation).not.toHaveBeenCalled();
+		expect(manager.snapshot().queuedOperationCount).toBe(0);
+		finish.resolve();
+		await first;
+		await expect(manager.withClientRuntime("b", operation, options)).rejects.toMatchObject({
+			code: "MCP_UPSTREAM_FAILED",
+		});
+		expect(operation).toHaveBeenCalledOnce();
+		expect(manager.snapshot().connectionCount).toBe(0);
+		await manager.close();
+	});
+
+	it.each(["retire", "close"] as const)(
+		"%s rejects concurrent process waiters before allocation",
+		async (action) => {
+			const finish = deferred();
+			const resolver = resolverFrom(async () => admitted());
+			const manager = new McpRuntimeManager({ generationResolver: resolver, maxConnections: 1 });
+			const options = {
+				leaseMode: "concurrent" as const,
+				concurrentContention: "queue" as const,
+				admissionKey: "a",
+				maxConcurrentOperations: null,
+			};
+			const first = manager.withClientRuntime("a", async () => finish.promise, options);
+			const operation = vi.fn(async () => undefined);
+			const waiting = manager.withClientRuntime("b", operation, options);
+			const rejected = expect(waiting).rejects.toMatchObject({
+				code: action === "retire" ? "MCP_GENERATION_RETIRED" : "MCP_RUNTIME_CLOSED",
+			});
+			const teardown = action === "retire" ? manager.retire("b") : manager.close();
+			await rejected;
+			expect(manager.snapshot().queuedOperationCount).toBe(0);
+			finish.resolve();
+			await Promise.allSettled([first, teardown]);
+			expect(operation).not.toHaveBeenCalled();
+			expect(resolver.resolve.mock.calls.length).toBeLessThanOrEqual(1);
+			await manager.close();
+		},
+	);
+
+	it("retains process and connector capacity through slow cleanup", async () => {
+		const closeGate = deferred();
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async (key) =>
+				admitted(async () => {
+					if (key === "a") await closeGate.promise;
+				}),
+			),
+			maxConnections: 1,
+		});
+		const options = {
+			leaseMode: "concurrent" as const,
+			concurrentContention: "queue" as const,
+			admissionKey: "a",
+			maxConcurrentOperations: null,
+		};
+		const first = manager.probe("a", options);
+		await vi.waitFor(() => expect(manager.snapshot().closingConnectionCount).toBe(1));
+		const operation = vi.fn(async () => undefined);
+		const second = manager.withClientRuntime("b", operation, { ...options, admissionKey: "b" });
+		expect(manager.snapshot()).toMatchObject({ connectionCount: 1, queuedOperationCount: 1 });
+		expect(operation).not.toHaveBeenCalled();
+		closeGate.resolve();
+		await Promise.all([first, second]);
+		expect(operation).toHaveBeenCalledOnce();
+		expect(manager.snapshot().connectionCount).toBe(0);
+		await manager.close();
+	});
+
+	it("admits unrelated eligible work even when blocked connector waiters fill the queue", async () => {
+		const finish = deferred();
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted()),
+			maxConnections: 2,
+			maxQueuedOperations: 1,
+		});
+		const options = {
+			leaseMode: "concurrent" as const,
+			concurrentContention: "queue" as const,
+			admissionKey: "a",
+			maxConcurrentOperations: 1,
+		};
+		const first = manager.withClientRuntime("a", async () => finish.promise, options);
+		const second = manager.probe("a", options);
+		expect(manager.snapshot().queuedOperationCount).toBe(1);
+		await manager.probe("b", { ...options, admissionKey: "b" });
+		finish.resolve();
+		await Promise.all([first, second]);
+		await manager.close();
+	});
+
+	it("rejects concurrent waiters after failed cleanup and keeps the failed transport charged", async () => {
+		const finish = deferred();
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () =>
+				admitted(async () => {
+					throw new Error("close");
+				}),
+			),
+			maxConnections: 1,
+		});
+		const options = {
+			leaseMode: "concurrent" as const,
+			concurrentContention: "queue" as const,
+			admissionKey: "a",
+			maxConcurrentOperations: null,
+		};
+		const first = manager.withClientRuntime("a", async () => finish.promise, options);
+		const failed = expect(first).rejects.toMatchObject({ code: "MCP_QUARANTINED" });
+		const operation = vi.fn(async () => undefined);
+		const queued = expect(manager.withClientRuntime("b", operation, options)).rejects.toMatchObject(
+			{ code: "MCP_QUARANTINED" },
+		);
+		finish.resolve();
+		await Promise.all([failed, queued]);
+		expect(operation).not.toHaveBeenCalled();
+		expect(manager.snapshot()).toMatchObject({
+			connectionCount: 1,
+			quarantinedConnectionCount: 1,
+			queuedOperationCount: 0,
+		});
+		await expect(manager.close()).rejects.toThrow();
+	});
+
+	it("cleans a just-granted reservation if its observer cancels before dispatch", async () => {
+		const manager = new McpRuntimeManager({
+			generationResolver: resolverFrom(async () => admitted()),
+		});
+		const controller = new AbortController();
+		const reason = new DOMException("cancel", "AbortError");
+		const operation = vi.fn(async () => undefined);
+		await expect(
+			manager.withClientRuntime("a", operation, {
+				leaseMode: "concurrent",
+				concurrentContention: "queue",
+				admissionKey: "a",
+				maxConcurrentOperations: null,
+				signal: controller.signal,
+				onAdmission: () => {
+					controller.abort(reason);
+					throw new Error("observer");
+				},
+			}),
+		).rejects.toBe(reason);
+		expect(operation).not.toHaveBeenCalled();
+		expect(manager.snapshot()).toMatchObject({ connectionCount: 0, queuedOperationCount: 0 });
+		await manager.close();
+	});
+
 	it("overlaps four isolated calls, counts other generations, and refuses a fifth immediately", async () => {
 		const finish = deferred();
 		const closeGate = deferred();
@@ -843,7 +1146,7 @@ describe("McpRuntimeManager", () => {
 					exclusiveContention: "queue",
 				},
 			),
-		).rejects.toMatchObject({ code: "MCP_UPSTREAM_FAILED", cause: { name: "TimeoutError" } });
+		).rejects.toMatchObject({ code: "MCP_ADMISSION_TIMEOUT", cause: { name: "TimeoutError" } });
 		expect(manager.snapshot().queuedOperationCount).toBe(0);
 		allowOperation.resolve();
 		await first;
@@ -957,7 +1260,7 @@ describe("McpRuntimeManager", () => {
 					exclusiveContention: "queue",
 				},
 			),
-		).rejects.toMatchObject({ code: "MCP_CAPACITY_EXCEEDED" });
+		).rejects.toMatchObject({ code: "MCP_QUEUE_FULL" });
 		expect(manager.snapshot()).toMatchObject({ queuedOperationCount: 1, maxQueuedOperations: 1 });
 		allowOperation.resolve();
 		await Promise.all([first, other, queued]);
