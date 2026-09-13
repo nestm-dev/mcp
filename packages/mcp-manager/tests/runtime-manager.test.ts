@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { ProtocolError, ProtocolErrorCode, type Tool } from "@modelcontextprotocol/client";
 import type { McpClientConnectionSnapshot, McpClientRuntimeOptions } from "@nestm/mcp-client";
 import type { McpLifecycleObserver } from "@nestm/mcp-core";
@@ -151,6 +152,37 @@ describe("McpRuntimeManager", () => {
 			await manager.close();
 		},
 	);
+
+	it("preserves the waiting caller's async context during transport allocation and dispatch", async () => {
+		const context = new AsyncLocalStorage<string>();
+		const gate = deferred();
+		const factoryContexts: (string | undefined)[] = [];
+		const manager = new McpRuntimeManager({
+			maxConnections: 1,
+			generationResolver: resolverFrom(async () => {
+				factoryContexts.push(context.getStore());
+				return admitted();
+			}),
+		});
+		const options = {
+			leaseMode: "concurrent" as const,
+			concurrentContention: "queue" as const,
+			admissionKey: "a",
+			maxConcurrentOperations: null,
+		};
+		const first = context.run("first-actor", () =>
+			manager.withClientRuntime("a", async () => gate.promise, options),
+		);
+		const queued = context.run("waiting-actor", () =>
+			manager.withClientRuntime("b", async () => context.getStore(), options),
+		);
+		expect(manager.snapshot().queuedOperationCount).toBe(1);
+		gate.resolve();
+		await first;
+		await expect(queued).resolves.toBe("waiting-actor");
+		expect(factoryContexts).toEqual(["first-actor", "waiting-actor"]);
+		await manager.close();
+	});
 
 	it("rotates connector keys while preserving each key's FIFO order", async () => {
 		const finish = deferred();

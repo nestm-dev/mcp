@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import {
 	MCP_CLIENT_LEASE_INVALIDATED,
 	McpClientLeaseManager,
@@ -706,7 +707,7 @@ export class McpRuntimeManager<GenerationKey = string>
 				options.exclusiveContention === "queue" || options.concurrentContention === "queue",
 				acquisitionSignal,
 				options.maxConcurrentOperations,
-				() => {
+				AsyncResource.bind(() => {
 					acquisitionSignal.throwIfAborted();
 					if (!this.#leases.canAcquire(identity)) return false;
 					reserved = this.#leases.acquire(identity, {
@@ -716,7 +717,7 @@ export class McpRuntimeManager<GenerationKey = string>
 					});
 					void reserved.catch(() => undefined);
 					return true;
-				},
+				}),
 			);
 		} catch (error) {
 			this.#forgetExclusiveIdentity(identity);
