@@ -80,6 +80,9 @@ function runtimeErrorStatus(code: McpRuntimeManagerError["code"]): number {
 		case "MCP_LEASE_MODE_CONFLICT":
 		case "MCP_NOT_READY":
 			return 409;
+		case "MCP_ADMISSION_TIMEOUT":
+			return 504;
+		case "MCP_QUEUE_FULL":
 		case "MCP_CAPACITY_EXCEEDED":
 		case "MCP_QUARANTINED":
 		case "MCP_RUNTIME_CLOSED":

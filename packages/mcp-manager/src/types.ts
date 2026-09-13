@@ -84,8 +84,8 @@ export interface McpRuntimeProbeSnapshot {
 /**
  * Selects whether an operation may reuse the generation-keyed runtime.
  *
- * `"concurrent"` immediately admits a bounded isolated transport per operation; capacity or
- * pending exclusive work refuses with MCP_CAPACITY_EXCEEDED, without waiting.
+ * `"concurrent"` admits an isolated transport per operation. `concurrentContention: "queue"`
+ * opts into bounded waiting for connector and process capacity; the default rejects contention.
  * `"shared"` preserves the manager's ordinary retained-generation behavior. `"exclusive"`
  * creates one unshared runtime for the operation and closes it before settlement. Exclusive
  * work is fail-fast unless `exclusiveContention: "queue"` opts into bounded waiting behind
@@ -93,6 +93,13 @@ export interface McpRuntimeProbeSnapshot {
  * `withClientRuntime` callback remains responsible for not starting parallel protocol requests.
  */
 export type McpRuntimeOperationLeaseMode = "shared" | "exclusive" | "concurrent";
+
+export interface McpRuntimeAdmissionEvent {
+	readonly outcome: "admitted" | "queue-full" | "timeout" | "cancelled" | "refused";
+	readonly durationMs: number;
+	readonly queuedOperationCount: number;
+	readonly activeConnectionCount: number;
+}
 
 export interface McpRuntimeOperationOptions {
 	readonly signal?: AbortSignal;
@@ -103,6 +110,12 @@ export interface McpRuntimeOperationOptions {
 	readonly admissionKey?: string;
 	/** Defaults to `"reject"`. `"queue"` waits FIFO behind exclusive work within the request deadline. */
 	readonly exclusiveContention?: "reject" | "queue";
+	/** Opt into bounded waiting for isolated concurrent calls, including process capacity. */
+	readonly concurrentContention?: "reject" | "queue";
+	/** Host-owned connector limit; null removes the per-key ceiling, undefined uses the manager default. */
+	readonly maxConcurrentOperations?: number | null;
+	/** Bounded, key-free admission timing. Observer failures never alter execution. */
+	readonly onAdmission?: (event: McpRuntimeAdmissionEvent) => void;
 }
 
 /**
@@ -184,7 +197,7 @@ export interface McpRuntimeManagerOptions<GenerationKey = string> {
 	/** Global bound on operations waiting behind exclusive work; defaults to 100. */
 	readonly maxQueuedOperations?: number;
 	/** Concurrent isolated operations per admissionKey, including cleanup. Defaults to four. */
-	readonly maxConcurrentOperationsPerAdmissionKey?: number;
+	readonly maxConcurrentOperationsPerAdmissionKey?: number | null;
 	/** Maximum retained generation state projections; must be at least maxConnections. */
 	readonly maxStateEntries?: number;
 	readonly requestTimeoutMs?: number;
@@ -221,6 +234,12 @@ export interface McpRuntimeToolCallOptions {
 	readonly admissionKey?: string;
 	/** Defaults to `"reject"`; requires `leaseMode: "exclusive"` when set to `"queue"`. */
 	readonly exclusiveContention?: "reject" | "queue";
+	/** Opt into bounded waiting for isolated concurrent calls, including process capacity. */
+	readonly concurrentContention?: "reject" | "queue";
+	/** Host-owned connector limit; null removes the per-key ceiling, undefined uses the manager default. */
+	readonly maxConcurrentOperations?: number | null;
+	/** Bounded, key-free admission timing. Observer failures never alter execution. */
+	readonly onAdmission?: (event: McpRuntimeAdmissionEvent) => void;
 	readonly toolDefinition?: Tool;
 }
 

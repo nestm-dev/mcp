@@ -32,6 +32,8 @@ export interface McpClientLeaseManagerOptions<Identity, Resource extends object>
 	readonly idleTtlMs?: number;
 	/** Injectable monotonic-enough wall clock for deterministic expiry tests. */
 	readonly now?: () => number;
+	/** Called after capacity is released; observer failures cannot affect cleanup. */
+	readonly onCapacityAvailable?: () => void;
 }
 
 export interface McpClientLeaseAcquireOptions {
@@ -102,6 +104,7 @@ export class McpClientLeaseManager<Identity, Resource extends object> implements
 	readonly #maxResources: number;
 	readonly #idleTtlMs: number;
 	readonly #now: () => number;
+	readonly #onCapacityAvailable: (() => void) | undefined;
 	#closed = false;
 	#closeTask: Promise<void> | undefined;
 
@@ -119,6 +122,7 @@ export class McpClientLeaseManager<Identity, Resource extends object> implements
 		this.#maxResources = maxResources;
 		this.#idleTtlMs = idleTtlMs;
 		this.#now = options.now ?? Date.now;
+		this.#onCapacityAvailable = options.onCapacityAvailable;
 	}
 
 	get closed(): boolean {
@@ -171,6 +175,13 @@ export class McpClientLeaseManager<Identity, Resource extends object> implements
 			failedResourceCount,
 			referenceCount,
 		});
+	}
+
+	/** Read-only availability for a synchronous acquire reservation. Includes all cleanup. */
+	canAcquire(identity: Identity): boolean {
+		if (this.#closed) return false;
+		const entry = this.#entries.get(identity);
+		return (entry !== undefined && !entry.retired) || this.#generations.size < this.#maxResources;
 	}
 
 	async acquire(
@@ -462,6 +473,7 @@ export class McpClientLeaseManager<Identity, Resource extends object> implements
 					entry.resource = undefined;
 				}
 				this.#generations.delete(entry);
+				this.#notifyCapacity();
 			})
 			.catch((error: unknown) => {
 				entry.state = "close-failed";
@@ -479,6 +491,15 @@ export class McpClientLeaseManager<Identity, Resource extends object> implements
 		}
 		this.#generations.delete(entry);
 		entry.controller.abort(error);
+		this.#notifyCapacity();
+	}
+
+	#notifyCapacity(): void {
+		try {
+			this.#onCapacityAvailable?.();
+		} catch {
+			/* Observers cannot fail resource cleanup. */
+		}
 	}
 
 	#observeBackground(task: Promise<void>): void {

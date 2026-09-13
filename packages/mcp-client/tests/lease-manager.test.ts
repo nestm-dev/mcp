@@ -13,6 +13,32 @@ interface TestResource {
 }
 
 describe("McpClientLeaseManager", () => {
+	it("notifies availability only after cleanup and isolates observer failures", async () => {
+		const cleanup = deferred<void>();
+		const observer = vi.fn(() => {
+			throw new Error("observer");
+		});
+		const manager = new McpClientLeaseManager<string, TestResource>({
+			maxResources: 1,
+			create: async (id) => ({ id }),
+			close: async () => cleanup.promise,
+			onCapacityAvailable: observer,
+		});
+		expect(manager.canAcquire("a")).toBe(true);
+		const lease = await manager.acquire("a");
+		expect(manager.canAcquire("a")).toBe(true);
+		expect(manager.canAcquire("b")).toBe(false);
+		const closing = lease.release();
+		expect(manager.canAcquire("a")).toBe(false);
+		expect(observer).not.toHaveBeenCalled();
+		cleanup.resolve();
+		await closing;
+		expect(observer).toHaveBeenCalledOnce();
+		expect(manager.canAcquire("b")).toBe(true);
+		await manager.close();
+		expect(manager.canAcquire("b")).toBe(false);
+	});
+
 	it("deduplicates concurrent creation and maintains one reference per lease", async () => {
 		const resource = { id: "shared" };
 		const created = deferred<TestResource>();

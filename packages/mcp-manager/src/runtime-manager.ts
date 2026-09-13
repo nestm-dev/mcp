@@ -10,6 +10,8 @@ import {
 import { METHOD_NOT_FOUND, ProtocolError } from "@modelcontextprotocol/client";
 
 import {
+	MCP_RUNTIME_ADMISSION_TIMEOUT,
+	MCP_RUNTIME_QUEUE_FULL,
 	MCP_RUNTIME_CLEANUP_FAILED,
 	MCP_RUNTIME_CONNECTION_LOST,
 	MCP_RUNTIME_DISCOVERY_LIMIT_EXCEEDED,
@@ -30,12 +32,12 @@ import {
 import { RuntimeStateStore } from "./runtime-state.ts";
 import { OperationAdmission } from "./operation-admission.ts";
 import type {
+	McpRuntimeAdmissionEvent,
 	McpRuntimeCatalogSnapshot,
 	McpManagedClientRuntimeOperation,
 	McpRuntimeManagerOptions,
 	McpRuntimeManagerPort,
 	McpRuntimeManagerSnapshot,
-	McpRuntimeOperationLeaseMode,
 	McpRuntimeOperationOptions,
 	McpRuntimeProbeSnapshot,
 	McpRuntimeStateListener,
@@ -101,11 +103,13 @@ export class McpRuntimeManager<GenerationKey = string>
 				options.maxQueuedOperations ?? MCP_RUNTIME_MANAGER_DEFAULTS.maxQueuedOperations,
 				"maxQueuedOperations",
 			),
-			positiveInteger(
-				options.maxConcurrentOperationsPerAdmissionKey ??
-					MCP_RUNTIME_MANAGER_DEFAULTS.maxConcurrentOperationsPerAdmissionKey,
-				"maxConcurrentOperationsPerAdmissionKey",
-			),
+			options.maxConcurrentOperationsPerAdmissionKey === null
+				? null
+				: positiveInteger(
+						options.maxConcurrentOperationsPerAdmissionKey ??
+							MCP_RUNTIME_MANAGER_DEFAULTS.maxConcurrentOperationsPerAdmissionKey,
+						"maxConcurrentOperationsPerAdmissionKey",
+					),
 		);
 		const maxStateEntries = positiveInteger(
 			options.maxStateEntries ??
@@ -154,6 +158,7 @@ export class McpRuntimeManager<GenerationKey = string>
 		});
 		this.#leases = new McpClientLeaseManager({
 			maxResources: maxConnections,
+			onCapacityAvailable: () => this.#admission.drain(),
 			create: (identity, context) => factory.create(generationKeyOf(identity), context),
 			close: (owned) => factory.close(owned),
 		});
@@ -669,6 +674,22 @@ export class McpRuntimeManager<GenerationKey = string>
 			AbortSignal.timeout(this.#requestTimeoutMs),
 			...(callerSignal === undefined ? [] : [callerSignal]),
 		]);
+		const identity =
+			leaseMode !== "shared" ? this.#createExclusiveIdentity(generationKey) : generationKey;
+		let reserved: Promise<McpClientLease<OwnedMcpRuntime<GenerationKey>>> | undefined;
+		const startedAt = this.#now();
+		const observe = (outcome: McpRuntimeAdmissionEvent["outcome"]): void => {
+			try {
+				options.onAdmission?.({
+					outcome,
+					durationMs: Math.max(0, this.#now() - startedAt),
+					queuedOperationCount: this.#admission.size,
+					activeConnectionCount: this.#leases.size,
+				});
+			} catch {
+				/* Observers cannot change admission or dispatch. */
+			}
+		};
 		let releaseAdmission: (quarantine: boolean) => void;
 		try {
 			acquisitionSignal.throwIfAborted();
@@ -682,35 +703,57 @@ export class McpRuntimeManager<GenerationKey = string>
 				generationKey,
 				leaseMode,
 				options.admissionKey,
-				options.exclusiveContention === "queue",
+				options.exclusiveContention === "queue" || options.concurrentContention === "queue",
 				acquisitionSignal,
+				options.maxConcurrentOperations,
+				() => {
+					acquisitionSignal.throwIfAborted();
+					if (!this.#leases.canAcquire(identity)) return false;
+					reserved = this.#leases.acquire(identity, {
+						releaseMode: "close",
+						signal: acquisitionSignal,
+						awaitCleanupOnCancel: leaseMode !== "shared",
+					});
+					void reserved.catch(() => undefined);
+					return true;
+				},
 			);
 		} catch (error) {
+			this.#forgetExclusiveIdentity(identity);
+			if (
+				acquisitionSignal.aborted &&
+				acquisitionSignal.reason instanceof DOMException &&
+				acquisitionSignal.reason.name === "TimeoutError"
+			) {
+				observe("timeout");
+				throw new McpRuntimeManagerError(
+					MCP_RUNTIME_ADMISSION_TIMEOUT,
+					"The MCP operation deadline expired while waiting for admission.",
+					{ cause: error },
+				);
+			}
+			observe(
+				acquisitionSignal.aborted
+					? "cancelled"
+					: runtimeManagerErrorCode(error) === MCP_RUNTIME_QUEUE_FULL
+						? "queue-full"
+						: "refused",
+			);
 			throwIfCallerAborted(callerSignal);
 			throw mapMcpRuntimeManagerError(error);
 		}
+		observe("admitted");
 		try {
-			// A granted waiter may be cancelled or retired before its continuation runs.
-			this.#assertOpen();
-			if (this.#offlineTasks.has(generationKey)) {
-				throw new McpRuntimeManagerError(
-					MCP_RUNTIME_GENERATION_RETIRED,
-					"The MCP runtime generation was retired before the operation started.",
-				);
-			}
-			this.#assertNotQuarantined(generationKey);
-			if (acquisitionSignal.aborted) throw mapMcpRuntimeManagerError(acquisitionSignal.reason);
+			if (reserved === undefined) throw new Error("MCP admission did not reserve a transport.");
 			return await this.#runOperation(
 				generationKey,
 				operation,
-				leaseMode,
+				reserved,
 				acquisitionSignal,
 				callerSignal,
 			);
-		} catch (error) {
-			throwIfCallerAborted(callerSignal);
-			throw error;
 		} finally {
+			this.#forgetExclusiveIdentity(identity);
 			releaseAdmission(this.#states.read(generationKey).phase === "quarantined");
 		}
 	}
@@ -718,34 +761,32 @@ export class McpRuntimeManager<GenerationKey = string>
 	async #runOperation<Result>(
 		generationKey: GenerationKey,
 		operation: (owned: ActiveMcpRuntime<GenerationKey>, signal: AbortSignal) => Promise<Result>,
-		leaseMode: McpRuntimeOperationLeaseMode,
+		reservation: Promise<McpClientLease<OwnedMcpRuntime<GenerationKey>>>,
 		acquisitionSignal: AbortSignal,
 		callerSignal: AbortSignal | undefined,
 	): Promise<Result> {
-		const identity =
-			leaseMode !== "shared" ? this.#createExclusiveIdentity(generationKey) : generationKey;
 		let lease: McpClientLease<OwnedMcpRuntime<GenerationKey>>;
 		try {
-			lease = await this.#leases.acquire(identity, {
-				releaseMode: "close",
-				signal: acquisitionSignal,
-				awaitCleanupOnCancel: leaseMode !== "shared",
-			});
+			lease = await reservation;
 		} catch (error) {
-			this.#forgetExclusiveIdentity(identity);
 			throwIfCallerAborted(callerSignal);
 			throw mapMcpRuntimeManagerError(error);
 		}
-		const owned = lease.resource;
-		if (owned.quarantined) {
-			await releaseIgnoringFailure(lease);
-			throw runtimeQuarantinedError();
-		}
-		const operationSignal = AbortSignal.any([acquisitionSignal, owned.generationSignal]);
 		let outcome:
 			| { readonly success: true; readonly value: Result }
 			| { readonly success: false; readonly error: unknown };
 		try {
+			// The lease may have been granted immediately before cancellation or retirement.
+			this.#assertOpen();
+			this.#assertNotQuarantined(generationKey);
+			const owned = requireActiveRuntime(lease.resource);
+			const operationSignal = AbortSignal.any([acquisitionSignal, owned.generationSignal]);
+			operationSignal.throwIfAborted();
+			if (this.#offlineTasks.has(generationKey))
+				throw new McpRuntimeManagerError(
+					MCP_RUNTIME_GENERATION_RETIRED,
+					"The MCP runtime generation was retired before dispatch.",
+				);
 			outcome = { success: true, value: await operation(owned, operationSignal) };
 		} catch (error) {
 			outcome = { success: false, error };
@@ -756,7 +797,6 @@ export class McpRuntimeManager<GenerationKey = string>
 			this.#states.transition(generationKey, "quarantined", MCP_RUNTIME_CLEANUP_FAILED);
 			throw runtimeQuarantinedError(error);
 		}
-		this.#forgetExclusiveIdentity(identity);
 		if (!outcome.success) {
 			throwIfCallerAborted(callerSignal);
 			throw mapMcpRuntimeManagerError(outcome.error);
@@ -852,11 +892,17 @@ function normalizeOperationOptions(
 	let leaseMode: unknown;
 	let exclusiveContention: unknown;
 	let admissionKey: unknown;
+	let concurrentContention: unknown;
+	let maxConcurrentOperations: unknown;
+	let onAdmission: unknown;
 	try {
 		signal = Reflect.get(options, "signal");
 		leaseMode = Reflect.get(options, "leaseMode");
 		exclusiveContention = Reflect.get(options, "exclusiveContention");
 		admissionKey = Reflect.get(options, "admissionKey");
+		concurrentContention = Reflect.get(options, "concurrentContention");
+		maxConcurrentOperations = Reflect.get(options, "maxConcurrentOperations");
+		onAdmission = Reflect.get(options, "onAdmission");
 	} catch {
 		throw new TypeError(`${operationName} options could not be read.`);
 	}
@@ -885,6 +931,27 @@ function normalizeOperationOptions(
 			`${operationName} options.exclusiveContention must be "reject" or "queue".`,
 		);
 	}
+	if (
+		concurrentContention !== undefined &&
+		concurrentContention !== "reject" &&
+		concurrentContention !== "queue"
+	) {
+		throw new TypeError(
+			`${operationName} options.concurrentContention must be "reject" or "queue".`,
+		);
+	}
+	if (concurrentContention === "queue" && leaseMode !== "concurrent") {
+		throw new TypeError(
+			`${operationName} queued concurrent contention requires leaseMode "concurrent".`,
+		);
+	}
+	if (maxConcurrentOperations !== undefined && maxConcurrentOperations !== null) {
+		if (typeof maxConcurrentOperations !== "number")
+			throw new TypeError("maxConcurrentOperations must be a positive integer or null.");
+		positiveInteger(maxConcurrentOperations, "maxConcurrentOperations");
+	}
+	if (onAdmission !== undefined && !isAdmissionObserver(onAdmission))
+		throw new TypeError("onAdmission must be a function.");
 	if (exclusiveContention === "queue" && leaseMode !== "exclusive") {
 		throw new TypeError(`${operationName} queued contention requires leaseMode "exclusive".`);
 	}
@@ -905,6 +972,9 @@ function normalizeOperationOptions(
 		...(leaseMode === undefined ? {} : { leaseMode }),
 		...(exclusiveContention === undefined ? {} : { exclusiveContention }),
 		...(admissionKey === undefined ? {} : { admissionKey }),
+		...(concurrentContention === undefined ? {} : { concurrentContention }),
+		...(maxConcurrentOperations === undefined ? {} : { maxConcurrentOperations }),
+		...(onAdmission === undefined ? {} : { onAdmission }),
 	};
 }
 
@@ -921,6 +991,10 @@ function normalizeToolCallOptions(
 		...normalizeOperationOptions(options, "callTool"),
 		...(options.toolDefinition === undefined ? {} : { toolDefinition: options.toolDefinition }),
 	};
+}
+
+function isAdmissionObserver(value: unknown): value is (event: McpRuntimeAdmissionEvent) => void {
+	return typeof value === "function";
 }
 
 function isAbortSignal(value: object): value is AbortSignal {

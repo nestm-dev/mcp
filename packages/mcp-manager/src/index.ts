@@ -1,5 +1,7 @@
 export {
 	MCP_RUNTIME_CAPACITY_EXCEEDED,
+	MCP_RUNTIME_QUEUE_FULL,
+	MCP_RUNTIME_ADMISSION_TIMEOUT,
 	MCP_RUNTIME_CLEANUP_FAILED,
 	MCP_RUNTIME_CONNECTION_LOST,
 	MCP_RUNTIME_DISCOVERY_LIMIT_EXCEEDED,
@@ -53,6 +55,7 @@ export type {
 	McpRuntimeManagerOptions,
 	McpRuntimeManagerPort,
 	McpRuntimeManagerSnapshot,
+	McpRuntimeAdmissionEvent,
 	McpRuntimeOperationLeaseMode,
 	McpRuntimeOperationOptions,
 	McpRuntimePhase,
