@@ -1114,6 +1114,71 @@ describe("McpModule", () => {
 		);
 	});
 
+	it("composes gateway tools and decorated handlers with independent policies", async () => {
+		const callTool = vi.fn(() => ({ content: [{ type: "text" as const, text: "remote" }] }));
+		const gatewayUpstream = providerBackedGatewayUpstream("data", () => ({
+			getServerCapabilities: () => ({ tools: {}, prompts: {} }),
+			listTools: () => ({ tools: [{ name: "query", inputSchema: { type: "object" as const } }] }),
+			listPrompts: () => {
+				throw new Error("Tools composition must not discover remote prompts");
+			},
+			callTool,
+		}));
+		const nativePolicy = {
+			authorize: vi.fn((operation: { input: { name: string } }) => {
+				expect(operation.input.name).toBe("greet");
+				return allowMcpOperation();
+			}),
+		};
+		const testingModule = await Test.createTestingModule({
+			imports: [
+				McpModule.forRoot({
+					collaborators: {
+						providers: [
+							ALLOW_ALL_GATEWAY_POLICY_PROVIDER,
+							gatewayUpstream.provider,
+							{ provide: "native-policy", useValue: nativePolicy },
+						],
+					},
+					servers: [
+						{
+							name: "artifact",
+							serverInfo: { name: "artifact", version: "1" },
+							handlerAuthorization: "native-policy",
+							gateway: {
+								composition: "tools",
+								upstreams: [gatewayUpstream.definition],
+								policy: ALLOW_ALL_GATEWAY_POLICY,
+							},
+						},
+					],
+				}),
+			],
+			providers: [ToolsProvider],
+		}).compile();
+		application = testingModule.createNestApplication();
+		await application.init();
+		client = new Client({ name: "mixed", version: "1" });
+		await client.connect(
+			new StreamableHTTPClientTransport(new URL("http://test.local/mcp"), {
+				fetch: createMcpServerTestFetch(application.get(McpRuntimeService).server("artifact")),
+			}),
+		);
+		const tools = await client.listTools();
+		expect(tools.tools.map((tool) => tool.name)).toContain("greet");
+		const remoteName = tools.tools.find((tool) => tool.name !== "greet")!.name;
+		expect((await client.callTool({ name: "greet", arguments: { name: "Ada" } })).content).toEqual([
+			{ type: "text", text: "Hello Ada" },
+		]);
+		expect((await client.callTool({ name: remoteName, arguments: {} })).content).toEqual([
+			{ type: "text", text: "remote" },
+		]);
+		expect(
+			nativePolicy.authorize.mock.calls.every(([operation]) => operation.input.name === "greet"),
+		).toBe(true);
+		expect(callTool).toHaveBeenCalledOnce();
+	});
+
 	it("rejects decorated handlers on a dedicated gateway server during bootstrap", async () => {
 		const gatewayUpstream = providerBackedGatewayUpstream("empty", () => ({
 			listTools: () => ({ tools: [] }),

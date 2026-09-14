@@ -754,3 +754,12 @@ error messages, stacks, and credentials.
 For HTTP bearer authentication and protected-resource metadata, construct `McpResourceServer` from
 `@nestm/mcp-server/auth` around the mounted runtime. OAuth authentication establishes identity;
 `handlerAuthorization` still decides whether that identity may invoke a specific capability.
+
+### Native tools with a gateway
+
+Set `gateway.composition: "tools"` on a server to expose its decorated or dynamic
+local handlers alongside gateway tools on the same authenticated transport. The
+gateway installs only tools and retains its own authorization policy; local
+handlers keep `handlerAuthorization`. Local prompts and resources remain local.
+Gateway tool names must be distinct from local names: duplicate SDK registrations
+fail instead of shadowing either tool. The default gateway mode remains dedicated.

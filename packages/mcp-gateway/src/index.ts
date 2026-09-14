@@ -58,6 +58,7 @@ export type {
 	McpGatewayOperationOutputForKind,
 	McpGatewayOperationOutputMap,
 	McpGatewayOptions,
+	McpGatewayServerFeatureOptions,
 	McpGatewayPassthroughMiddleware,
 	McpGatewayPolicy,
 	McpGatewayPolicyInput,

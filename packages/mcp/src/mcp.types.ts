@@ -160,6 +160,8 @@ export interface McpNestGatewayOptions extends Omit<
 	| "resourceUriCodec"
 	| "upstreams"
 > {
+	/** Compose gateway tools with local handlers on one server. Other gateway capabilities stay private. */
+	readonly composition?: "tools";
 	readonly upstreams: readonly McpNestGatewayUpstreamDefinition[];
 	readonly policy: McpProviderToken<McpGatewayPolicy>;
 	readonly nameCodec?: McpProviderToken<McpGatewayNameCodecProvider>;
