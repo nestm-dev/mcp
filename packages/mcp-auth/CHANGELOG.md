@@ -1,5 +1,12 @@
 # @nestm/mcp-auth
 
+## 0.1.0-alpha.28
+
+### Patch Changes
+
+- @nestm/mcp-core@0.1.0-alpha.28
+  - @nestm/mcp-server@0.1.0-alpha.28
+
 ## 0.1.0-alpha.27
 
 ### Patch Changes
