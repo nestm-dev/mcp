@@ -1,5 +1,18 @@
 # @nestm/mcp
 
+## 0.1.0-alpha.28
+
+### Patch Changes
+
+- 2f1ddb8: Support explicit tools-only gateway composition with local MCP handlers on one authenticated server. Gateway and native tool policies remain independent, SDK registrations reject exact name collisions, and local prompts/resources retain their handlers.
+- Updated dependencies [2f1ddb8]
+  - @nestm/mcp-gateway@0.1.0-alpha.28
+  - @nestm/mcp-auth@0.1.0-alpha.28
+  - @nestm/mcp-client@0.1.0-alpha.28
+  - @nestm/mcp-core@0.1.0-alpha.28
+  - @nestm/mcp-manager@0.1.0-alpha.28
+  - @nestm/mcp-server@0.1.0-alpha.28
+
 ## 0.1.0-alpha.27
 
 ### Patch Changes
