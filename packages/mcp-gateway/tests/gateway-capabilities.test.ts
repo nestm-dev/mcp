@@ -1,5 +1,5 @@
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
-import type { Prompt, Resource } from "@modelcontextprotocol/server";
+import { fromJsonSchema, type Prompt, type Resource } from "@modelcontextprotocol/server";
 import { allowMcpOperation, denyMcpOperation } from "@nestm/mcp-core";
 import { McpServerRuntime } from "@nestm/mcp-server";
 import { describe, expect, it, vi } from "vitest";
@@ -372,6 +372,65 @@ describe("gateway prompt and resource projection", () => {
 			message: expect.stringContaining("resources discovery-item limit"),
 		});
 	});
+
+	it.each([false, true])(
+		"composes local resources and rejects duplicate tool names: %s",
+		async (duplicate) => {
+			const gateway = new McpGateway({
+				upstreams: [
+					{
+						name: "primary",
+						client: new McpGatewayTestClient([{ name: "query", inputSchema: { type: "object" } }], {
+							query: () => ({ content: [] }),
+						}),
+					},
+				],
+				policy: allowAllMcpGatewayPolicy(),
+			});
+			const [remote] = await gateway.listProjectedTools();
+			const runtime = new McpServerRuntime({
+				name: "mixed",
+				serverInfo: { name: "mixed", version: "1" },
+				features: [
+					gateway.asServerFeature({ toolsOnly: true }),
+					(server) => {
+						server.registerTool(
+							duplicate ? remote!.projectedName : "local",
+							{ inputSchema: fromJsonSchema({ type: "object" }) },
+							async () => ({ content: [] }),
+						);
+						server.registerResource("guide", "guide://local", {}, async () => ({
+							contents: [{ uri: "guide://local", text: "guide" }],
+						}));
+					},
+				],
+			});
+			try {
+				if (duplicate) {
+					await expect(runtime.createServer({ era: "modern" })).rejects.toThrow(
+						/already registered/,
+					);
+					return;
+				}
+				const server = await runtime.createServer({ era: "modern" });
+				const client = new Client({ name: "mixed", version: "1" });
+				const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+				await server.connect(serverTransport);
+				await client.connect(clientTransport);
+				try {
+					expect((await client.listTools()).tools).toHaveLength(2);
+					expect((await client.readResource({ uri: "guide://local" })).contents[0]).toMatchObject({
+						text: "guide",
+					});
+				} finally {
+					await client.close();
+				}
+			} finally {
+				await runtime.close();
+				await gateway.close();
+			}
+		},
+	);
 
 	it("rejects mixed ownership of notification capabilities for projected namespaces", async () => {
 		const gateway = new McpGateway({

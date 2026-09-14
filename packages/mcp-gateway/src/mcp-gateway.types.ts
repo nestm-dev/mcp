@@ -510,6 +510,12 @@ export type McpGatewayPassthroughMiddleware = McpPassthroughMiddleware<
 >;
 export type McpGatewayLifecycleObserver = McpLifecycleObserver<McpGatewayOperationContext>;
 
+/** Select which gateway capabilities are installed into a server. */
+export interface McpGatewayServerFeatureOptions {
+	/** Install tools before local SDK registrations; reject duplicate tool names. */
+	readonly toolsOnly?: boolean;
+}
+
 export interface McpGatewayOptions {
 	readonly upstreams: readonly McpGatewayUpstream[];
 	/**

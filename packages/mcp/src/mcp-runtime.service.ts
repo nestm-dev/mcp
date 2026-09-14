@@ -105,7 +105,9 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 			}
 			this.handlerRegistry.configureRuntimes(
 				definitions.map(({ name }) => name),
-				definitions.flatMap(({ name, gateway }) => (gateway === undefined ? [] : [name])),
+				definitions.flatMap(({ name, gateway }) =>
+					gateway === undefined || gateway.composition === "tools" ? [] : [name],
+				),
 				definitions.flatMap(({ name, catalogExposure }) =>
 					catalogExposure === undefined ? [] : [name],
 				),
@@ -269,6 +271,7 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 							);
 				if (
 					gateway !== undefined &&
+					gateway.composition !== "tools" &&
 					(this.handlerRegistry.hasHandlersFor(definition.name) || contributors.length > 0)
 				) {
 					throw new McpModuleError(
@@ -292,13 +295,17 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 				});
 				const features: McpServerFeature[] = [];
 				// Discovery may be disabled while live registry APIs remain enabled.
-				if (gateway === undefined) features.push(discovered);
+				// Install projected tools first so the SDK owns the shared tools handlers.
+				if (gateway?.composition === "tools") {
+					features.push(this.#createGatewayFeature(definition.name, gateway));
+				}
+				if (gateway === undefined || gateway.composition === "tools") features.push(discovered);
 				if (contributors.length > 0) {
 					features.push(async (server, context) => {
 						for (const contributor of contributors) await contributor.contribute(server, context);
 					});
 				}
-				if (gateway !== undefined) {
+				if (gateway !== undefined && gateway.composition !== "tools") {
 					features.push(this.#createGatewayFeature(definition.name, gateway));
 				}
 				this.servers.register({
@@ -479,6 +486,7 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 	#createGatewayFeature(serverName: string, options: McpNestGatewayOptions) {
 		const {
 			authorizationContextResolver: authorizationContextResolverToken,
+			composition,
 			discoveryCache: discoveryCacheToken,
 			lifecycleObserver: lifecycleObserverToken,
 			middleware: middlewareTokens,
@@ -640,7 +648,7 @@ export class McpRuntimeService implements OnApplicationBootstrap, OnModuleDestro
 				: { onObserverError: observerErrorReporter.report.bind(observerErrorReporter) }),
 		});
 		this.#gateways.set(serverName, gateway);
-		return gateway.asServerFeature();
+		return gateway.asServerFeature({ toolsOnly: composition === "tools" });
 	}
 
 	#resolveOptionalProvider<Value>(

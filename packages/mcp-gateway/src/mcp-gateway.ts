@@ -58,6 +58,7 @@ import type {
 	McpGatewayOperationInput,
 	McpGatewayOperationOutput,
 	McpGatewayOptions,
+	McpGatewayServerFeatureOptions,
 	McpGatewayPolicy,
 	McpGatewayPolicyInput,
 	McpGatewayProjectedPrompt,
@@ -242,10 +243,12 @@ export class McpGateway implements AsyncDisposable {
 			this.#lifecycle.track(() => this.#install(server, context));
 	}
 
-	/** Dedicated-server feature; conflicting local MCP capability handlers fail at build time. */
-	asServerFeature(): McpServerFeature {
+	/** Install first; toolsOnly permits later local SDK capabilities with exact name collision checks. */
+	asServerFeature(options: McpGatewayServerFeatureOptions = {}): McpServerFeature {
 		this.#lifecycle.assertOpen();
-		return this.#feature;
+		return options.toolsOnly === true
+			? (server, context) => this.#lifecycle.track(() => this.#install(server, context, true))
+			: this.#feature;
 	}
 
 	/** Credential-free, deterministic view of the current upstream membership. */
@@ -924,15 +927,16 @@ export class McpGateway implements AsyncDisposable {
 	async #install(
 		server: Parameters<McpServerFeature>[0],
 		buildContext: McpServerBuildContext,
+		toolsOnly = false,
 	): Promise<void> {
 		const context = contextFromBuild(buildContext);
 		const upstreams = this.#upstreams;
 		const [projectedTools, projectedPrompts, projectedResources, projectedResourceTemplates] =
 			await Promise.all([
 				this.#listProjectedTools(context, upstreams),
-				this.#listProjectedPrompts(context, upstreams),
-				this.#listProjectedResources(context, upstreams),
-				this.#listProjectedResourceTemplates(context, upstreams),
+				toolsOnly ? [] : this.#listProjectedPrompts(context, upstreams),
+				toolsOnly ? [] : this.#listProjectedResources(context, upstreams),
+				toolsOnly ? [] : this.#listProjectedResourceTemplates(context, upstreams),
 			]);
 		const resolved = await this.#resolveContext(context);
 		const clients = new Map(
@@ -943,12 +947,13 @@ export class McpGateway implements AsyncDisposable {
 			),
 		);
 		const promptsSupported =
-			this.#dynamicUpstreams || [...clients.values()].some(hasPromptCapability);
+			!toolsOnly && (this.#dynamicUpstreams || [...clients.values()].some(hasPromptCapability));
 		const resourcesSupported =
-			this.#dynamicUpstreams ||
-			[...clients.values()].some(
-				(client) => hasResourceCapability(client) || hasResourceTemplateCapability(client),
-			);
+			!toolsOnly &&
+			(this.#dynamicUpstreams ||
+				[...clients.values()].some(
+					(client) => hasResourceCapability(client) || hasResourceTemplateCapability(client),
+				));
 		const completionSupported =
 			!this.#dynamicUpstreams &&
 			(projectedPrompts.some(
