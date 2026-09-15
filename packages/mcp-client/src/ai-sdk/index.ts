@@ -28,6 +28,9 @@ export function createAiSdkMcpTools(
 			return [
 				name,
 				tool({
+					// MCP optional fields may be mutually exclusive or distinguish absence from null.
+					// Provider strict normalization must not change that source contract.
+					strict: false,
 					...(description === undefined ? {} : { description }),
 					inputSchema: jsonSchema<Record<string, unknown>>(inputSchema),
 					execute: async (input, options) => {
