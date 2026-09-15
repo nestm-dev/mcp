@@ -844,6 +844,11 @@ Use manager refresh for the SDK's execution catalog filtering and schema-cache p
 
 `@nestm/mcp-client/ai-sdk` exports `createAiSdkMcpTools(descriptors, invoke)`.
 Install AI SDK 7 only when using this subpath. The core client does not import AI.
+
+The adapter sets `strict: false` so providers preserve the MCP schema's optional fields.
+Some tools distinguish omitted fields from empty arrays or null and reject combinations such as
+detail fields with aggregate measures. The adapter forwards inputs unchanged to the protected
+delegate, which remains responsible for execution authorization and input validation.
 The host selects and sanitizes descriptors, owns names and exact source bindings,
 and authorizes every call in `invoke(name, input, signal)`. The adapter rejects
 empty or duplicate names, snapshots schemas, and propagates cancellation before
