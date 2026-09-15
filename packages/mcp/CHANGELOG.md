@@ -1,5 +1,17 @@
 # @nestm/mcp
 
+## 0.1.0-alpha.29
+
+### Patch Changes
+
+- Updated dependencies [8c36d74]
+  - @nestm/mcp-client@0.1.0-alpha.29
+  - @nestm/mcp-auth@0.1.0-alpha.29
+  - @nestm/mcp-core@0.1.0-alpha.29
+  - @nestm/mcp-gateway@0.1.0-alpha.29
+  - @nestm/mcp-manager@0.1.0-alpha.29
+  - @nestm/mcp-server@0.1.0-alpha.29
+
 ## 0.1.0-alpha.28
 
 ### Patch Changes
