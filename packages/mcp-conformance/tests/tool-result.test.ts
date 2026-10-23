@@ -45,6 +45,51 @@ describe("MCP tool-result projection", () => {
 		expect(last.truncated).toBe(true);
 	});
 
+	it("preserves fitted Unicode and lone-surrogate code units with exact UTF-8 budgets", () => {
+		for (const text of ["", "ascii", "é雪😀", "\ud800x\udfff", '\n"\\']) {
+			const bytes = Buffer.byteLength(text, "utf8");
+			const projected = projectMcpToolResult(
+				{ content: [{ type: "text", text }], structuredContent: { text } },
+				{ maxTextBytesPerBlock: Math.max(1, bytes), maxTextBytesTotal: Math.max(1, bytes) },
+			);
+			expect(projected.content).toEqual([{ kind: "text", text, truncated: false }]);
+			expect(projected.structuredContent).toEqual({ text });
+			expect(projected.truncated).toBe(false);
+		}
+	});
+
+	it("retains complete code points when a short UTF-16 value exceeds its byte budget", () => {
+		for (const [text, budget, retained] of [
+			["雪雪", 5, "雪"],
+			["😀x", 3, ""],
+			["éé", 3, "é"],
+			["\ud800x", 3, "\ud800"],
+		] as const) {
+			const projected = projectMcpToolResult(
+				{ content: [{ type: "text", text }] },
+				{ maxTextBytesPerBlock: budget },
+			);
+			expect(projected.content).toEqual([{ kind: "text", text: retained, truncated: true }]);
+		}
+	});
+
+	it("rejects oversized serialized Unicode without changing structured bounds", () => {
+		const structuredContent = { text: "雪😀\ud800\n" };
+		const bytes = Buffer.byteLength(JSON.stringify(structuredContent), "utf8");
+		const exact = projectMcpToolResult(
+			{ content: [], structuredContent },
+			{ maxStructuredSerializedBytes: bytes },
+		);
+		const below = projectMcpToolResult(
+			{ content: [], structuredContent },
+			{ maxStructuredSerializedBytes: bytes - 1 },
+		);
+		expect(exact.structuredContent).toEqual(structuredContent);
+		expect(exact.truncated).toBe(false);
+		expect(below.structuredContent).toBeUndefined();
+		expect(below.truncated).toBe(true);
+	});
+
 	it("summarizes non-text blocks without carrying data, URIs, or future fields", () => {
 		const projected = projectMcpToolResult({
 			content: [

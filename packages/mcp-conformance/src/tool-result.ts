@@ -213,9 +213,7 @@ function projectStructuredContent(
 	};
 	const value = projectStructuredValue(read.value, state, 0);
 	const serialized = JSON.stringify(value) ?? "null";
-	if (
-		utf8Bytes(serialized, limits.maxStructuredSerializedBytes) > limits.maxStructuredSerializedBytes
-	) {
+	if (exceedsUtf8ByteLimit(serialized, limits.maxStructuredSerializedBytes)) {
 		return Object.freeze({ present: false, truncated: true, value: undefined });
 	}
 	return Object.freeze({ present: true, truncated: state.truncated, value });
@@ -461,6 +459,17 @@ interface BoundedText {
  * a surrogate pair, or scanning the unretained suffix.
  */
 function boundUtf8(value: string, maximumBytes: number): BoundedText {
+	// UTF-8 uses at least one byte per UTF-16 code unit. Only scan the complete
+	// input when that scan is bounded by the caller's output budget.
+	if (value.length <= maximumBytes) {
+		const bytes = Buffer.byteLength(value, "utf8");
+		if (bytes <= maximumBytes) {
+			// A UTF-16 round trip detaches sliced-string backing storage and preserves
+			// lone surrogates, which a UTF-8 round trip would replace.
+			const copied = Buffer.from(value, "utf16le").toString("utf16le");
+			return Object.freeze({ bytes, truncated: false, value: copied });
+		}
+	}
 	let bytes = 0;
 	let chunk = "";
 	const chunks: string[] = [];
@@ -488,13 +497,9 @@ function copiedCodePoint(character: string): string {
 	return String.fromCodePoint(character.codePointAt(0) ?? 0xfffd);
 }
 
-function utf8Bytes(value: string, stopAfter = Number.POSITIVE_INFINITY): number {
-	let bytes = 0;
-	for (const character of value) {
-		bytes += utf8CodePointBytes(character);
-		if (bytes > stopAfter) break;
-	}
-	return bytes;
+function exceedsUtf8ByteLimit(value: string, maximumBytes: number): boolean {
+	// Reject oversized UTF-16 lengths without scanning an unretained suffix.
+	return value.length > maximumBytes || Buffer.byteLength(value, "utf8") > maximumBytes;
 }
 
 function utf8CodePointBytes(character: string): number {
