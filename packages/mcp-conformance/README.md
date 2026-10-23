@@ -176,6 +176,9 @@ one as 64 lowercase hexadecimal characters, so a digest column with a fixed-widt
 bounded text; image, audio, embedded-resource, resource-link, unknown, and future blocks become
 descriptor-only summaries. Their data, URIs, and other fields are never copied. Structured content
 is rebuilt as frozen null-prototype JSON under depth, node, string, and serialized-byte limits.
+Fitted strings use bounded native byte counting and detached UTF-16 copies, preserving lone
+surrogates without retaining source-string backing storage. Oversized strings scan only their
+bounded retained prefix.
 Every omitted, malformed, hostile, or truncated value in MCP's enumerable string-key JSON surface
 sets the result's `truncated` flag. Symbol and non-enumerable state is outside that wire surface and
 is ignored without explicit enumeration. Emitted data and per-value string scans are bounded, but
